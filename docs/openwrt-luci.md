@@ -926,6 +926,16 @@ install or repair /etc/init.d/localclash-mcp through service_ensure
 read back localclash version/status
 ```
 
+Default manifest URL:
+
+```text
+https://github.com/qoli/localClash/releases/latest/download/localclash-release-manifest.json
+```
+
+The helper may override this URL through `LOCALCLASH_RELEASE_MANIFEST` for test
+or alternate release channels. The manifest must include `linux` assets for the
+supported router architectures and sha256 values for every binary.
+
 The bootstrap helper installs the core binary and then calls the helper's
 service-management function to install or repair the procd service wrapper. This
 keeps service-file generation in the LuCI helper function layer instead of the

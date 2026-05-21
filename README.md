@@ -27,6 +27,16 @@ openwrt/luci-app-localclash/
 ```
 
 It currently contains the package metadata, LuCI view entrypoint, rpcd ACL, and
-a narrow rpcd helper. The helper can report bootstrap/service status and bridge
-installed-core calls to the product JSON CLI. The `bootstrap_core` downloader is
-still a placeholder until the localClash release manifest exists.
+a narrow rpcd helper. The helper can report bootstrap/service status, download
+the localClash core from the release manifest, verify sha256, install it to
+`/usr/local/bin/localclash`, and bridge installed-core calls to the product JSON
+CLI.
+
+By default `bootstrap_core` reads:
+
+```text
+https://github.com/qoli/localClash/releases/latest/download/localclash-release-manifest.json
+```
+
+Override it with `LOCALCLASH_RELEASE_MANIFEST` for testing or alternate release
+channels.

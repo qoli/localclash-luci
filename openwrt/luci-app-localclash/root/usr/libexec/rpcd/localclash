@@ -4,6 +4,7 @@ CORE="${LOCALCLASH_CORE:-/usr/local/bin/localclash}"
 SERVICE="/etc/init.d/localclash-mcp"
 LOG="/tmp/localclash-helper.log"
 MCP_ADDR="${LOCALCLASH_MCP_ADDR:-0.0.0.0:8765}"
+MANIFEST_URL="${LOCALCLASH_RELEASE_MANIFEST:-https://github.com/qoli/localClash/releases/latest/download/localclash-release-manifest.json}"
 
 json_escape() {
 	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
@@ -21,6 +22,28 @@ fail() {
 
 log_line() {
 	printf '%s %s\n' "$(date -Iseconds 2>/dev/null || date)" "$*" >> "$LOG"
+}
+
+fetch_url() {
+	url="$1"
+	output="$2"
+	if command -v uclient-fetch >/dev/null 2>&1; then
+		uclient-fetch -q -O "$output" "$url"
+	elif command -v wget >/dev/null 2>&1; then
+		wget -q -O "$output" "$url"
+	elif command -v curl >/dev/null 2>&1; then
+		curl -fsSL "$url" -o "$output"
+	else
+		return 1
+	fi
+}
+
+router_arch() {
+	case "$(uname -m)" in
+		aarch64|arm64) echo "arm64" ;;
+		x86_64|amd64) echo "amd64" ;;
+		*) return 1 ;;
+	esac
 }
 
 core_installed() {
@@ -119,7 +142,57 @@ apply_state() {
 }
 
 bootstrap_core() {
-	fail "bootstrap_core_not_configured" "localClash release manifest download is not configured in this helper skeleton yet."
+	if ! command -v jsonfilter >/dev/null 2>&1; then
+		fail "jsonfilter_missing" "jsonfilter is required to parse the localClash release manifest."
+		return 1
+	fi
+	arch="$(router_arch)" || {
+		fail "unsupported_arch" "This router architecture is not supported by the localClash bootstrap helper."
+		return 1
+	}
+	tmpdir="$(mktemp -d /tmp/localclash-bootstrap.XXXXXX)" || {
+		fail "tmpdir_failed" "Could not create a temporary bootstrap directory."
+		return 1
+	}
+	manifest="$tmpdir/manifest.json"
+	binary="$tmpdir/localclash"
+	if ! fetch_url "$MANIFEST_URL" "$manifest"; then
+		rm -rf "$tmpdir"
+		fail "manifest_download_failed" "Could not download localClash release manifest."
+		return 1
+	fi
+	asset_url="$(jsonfilter -i "$manifest" -e "@.assets[@.arch=\"$arch\"].url" 2>/dev/null)"
+	asset_sha="$(jsonfilter -i "$manifest" -e "@.assets[@.arch=\"$arch\"].sha256" 2>/dev/null)"
+	asset_version="$(jsonfilter -i "$manifest" -e "@.version" 2>/dev/null)"
+	if [ -z "$asset_url" ] || [ -z "$asset_sha" ]; then
+		rm -rf "$tmpdir"
+		fail "manifest_asset_missing" "Release manifest does not contain a matching linux binary for this router."
+		return 1
+	fi
+	if ! fetch_url "$asset_url" "$binary"; then
+		rm -rf "$tmpdir"
+		fail "core_download_failed" "Could not download localClash core binary."
+		return 1
+	fi
+	actual_sha="$(sha256sum "$binary" | cut -d ' ' -f 1)"
+	if [ "$actual_sha" != "$asset_sha" ]; then
+		rm -rf "$tmpdir"
+		fail "checksum_mismatch" "Downloaded localClash core failed sha256 verification."
+		return 1
+	fi
+	chmod 755 "$binary"
+	mkdir -p "$(dirname "$CORE")"
+	tmp_core="$CORE.tmp.$$"
+	if ! cp "$binary" "$tmp_core" || ! chmod 755 "$tmp_core" || ! mv "$tmp_core" "$CORE"; then
+		rm -f "$tmp_core"
+		rm -rf "$tmpdir"
+		fail "core_install_failed" "Could not install localClash core binary."
+		return 1
+	fi
+	rm -rf "$tmpdir"
+	service_ensure >/dev/null
+	log_line "installed localClash core $asset_version for $arch"
+	ok "\"changed\":true,\"summary\":\"localClash core installed.\",\"core\":{\"installed\":true,\"path\":\"$CORE\",\"version\":\"$(json_escape "$asset_version")\",\"arch\":\"$arch\"}"
 }
 
 bootstrap_logs() {
