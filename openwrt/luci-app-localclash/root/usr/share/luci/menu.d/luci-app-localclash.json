@@ -1,0 +1,13 @@
+{
+  "admin/services/localclash": {
+    "title": "localClash",
+    "order": 60,
+    "action": {
+      "type": "view",
+      "path": "localclash/index"
+    },
+    "depends": {
+      "acl": [ "luci-app-localclash" ]
+    }
+  }
+}

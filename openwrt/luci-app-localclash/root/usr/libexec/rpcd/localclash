@@ -1,0 +1,177 @@
+#!/bin/sh
+
+CORE="${LOCALCLASH_CORE:-/usr/local/bin/localclash}"
+SERVICE="/etc/init.d/localclash-mcp"
+LOG="/tmp/localclash-helper.log"
+MCP_ADDR="${LOCALCLASH_MCP_ADDR:-0.0.0.0:8765}"
+
+json_escape() {
+	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+ok() {
+	printf '{"ok":true,%s}\n' "$1"
+}
+
+fail() {
+	code="$(json_escape "$1")"
+	message="$(json_escape "$2")"
+	printf '{"ok":false,"code":"%s","message":"%s","details":{},"next_actions":[]}\n' "$code" "$message"
+}
+
+log_line() {
+	printf '%s %s\n' "$(date -Iseconds 2>/dev/null || date)" "$*" >> "$LOG"
+}
+
+core_installed() {
+	[ -x "$CORE" ]
+}
+
+call_core() {
+	if ! core_installed; then
+		fail "bootstrap_core_missing" "localClash core is not installed."
+		return 1
+	fi
+	"$CORE" "$@"
+}
+
+service_body() {
+	installed=false
+	enabled=false
+	running=false
+	pid=0
+	if [ -x "$SERVICE" ]; then
+		installed=true
+		"$SERVICE" enabled >/dev/null 2>&1 && enabled=true
+		if "$SERVICE" running >/dev/null 2>&1; then
+			running=true
+		fi
+	fi
+	printf '"service":{"name":"localclash-mcp","installed":%s,"enabled":%s,"running":%s,"pid":%s},"mcp":{"endpoint":"http://%s/mcp","health_endpoint":"http://%s/health","healthy":false,"last_error":""}' "$installed" "$enabled" "$running" "$pid" "$MCP_ADDR" "$MCP_ADDR"
+}
+
+service_status() {
+	ok "$(service_body)"
+}
+
+service_ensure() {
+	mkdir -p "$(dirname "$SERVICE")"
+	cat > "$SERVICE" <<EOF
+#!/bin/sh /etc/rc.common
+
+START=95
+STOP=10
+USE_PROCD=1
+
+CORE="$CORE"
+MCP_ADDR="$MCP_ADDR"
+
+start_service() {
+	if [ ! -x "\$CORE" ]; then
+		echo "localClash core missing: \$CORE" >&2
+		return 1
+	fi
+	procd_open_instance
+	procd_set_param command "\$CORE" mcp serve --addr "\$MCP_ADDR" --path /mcp
+	procd_set_param respawn
+	procd_close_instance
+}
+EOF
+	chmod 755 "$SERVICE"
+	log_line "service ensured at $SERVICE"
+	ok '"changed":true,"summary":"MCP service wrapper ensured."'
+}
+
+status() {
+	core_json='{"ok":false,"code":"bootstrap_core_missing","message":"localClash core is not installed.","details":{},"next_actions":["Install localClash core."]}'
+	if core_installed; then
+		core_json="$("$CORE" status --json 2>/dev/null)" || core_json='{"ok":false,"code":"core_status_failed","message":"localClash core status failed.","details":{},"next_actions":[]}'
+	fi
+	printf '{"ok":true,"core":{"installed":%s,"path":"%s"},"mcp_service":{%s},"status":%s}\n' "$(core_installed && echo true || echo false)" "$CORE" "$(service_body)" "$core_json"
+}
+
+component_update() {
+	payload="$(cat)"
+	component="$(jsonfilter -s "$payload" -e '@.component' 2>/dev/null)"
+	case "$component" in
+		localclash) bootstrap_core ;;
+		mihomo|dashboard) call_core component update "$component" --json ;;
+		*) fail "invalid_component" "component must be localclash, mihomo, or dashboard." ;;
+	esac
+}
+
+input_to_core_file() {
+	payload="$(cat)"
+	tmp="/tmp/localclash-input-$$.json"
+	printf '%s' "$payload" > "$tmp"
+	call_core "$@" --input "$tmp" --json
+	rc=$?
+	rm -f "$tmp"
+	return "$rc"
+}
+
+subscription_set() {
+	input_to_core_file subscription set
+}
+
+apply_state() {
+	input_to_core_file apply
+}
+
+bootstrap_core() {
+	fail "bootstrap_core_not_configured" "localClash release manifest download is not configured in this helper skeleton yet."
+}
+
+bootstrap_logs() {
+	if [ -f "$LOG" ]; then
+		tail -n 80 "$LOG" | sed 's/"/\\"/g' | awk 'BEGIN{printf "{\"ok\":true,\"logs\":["} {printf "%s\"%s\"", sep, $0; sep=","} END{print "]}" }'
+	else
+		printf '{"ok":true,"logs":[]}\n'
+	fi
+}
+
+case "$1" in
+	list)
+		cat <<'JSON'
+{
+  "status": {},
+  "subscription_set": { "urls": [] },
+  "subscription_refresh": {},
+  "component_update": { "component": "localclash" },
+  "apply": {},
+  "runtime_start": {},
+  "runtime_restart": {},
+  "runtime_stop": {},
+  "takeover_status": {},
+  "takeover_apply": {},
+  "takeover_stop": {},
+  "reset": {},
+  "service_start": {},
+  "service_stop": {},
+  "service_status": {},
+  "service_ensure": {},
+  "bootstrap_core": {},
+  "bootstrap_logs": {}
+}
+JSON
+		;;
+	status) status ;;
+	subscription_set) subscription_set ;;
+	subscription_refresh) call_core subscription refresh --json ;;
+	component_update) component_update ;;
+	apply) apply_state ;;
+	runtime_start) call_core runtime start --json ;;
+	runtime_restart) call_core runtime restart --json ;;
+	runtime_stop) call_core runtime stop --json ;;
+	takeover_status) call_core takeover status --json ;;
+	takeover_apply) call_core takeover apply --json ;;
+	takeover_stop) call_core takeover stop --json ;;
+	reset) call_core reset --json ;;
+	service_status) service_status ;;
+	service_ensure) service_ensure ;;
+	service_start) service_ensure >/dev/null && "$SERVICE" start >/dev/null 2>&1 && service_status || fail "service_start_failed" "Could not start localclash-mcp service." ;;
+	service_stop) [ -x "$SERVICE" ] && "$SERVICE" stop >/dev/null 2>&1; service_status ;;
+	bootstrap_core) bootstrap_core ;;
+	bootstrap_logs) bootstrap_logs ;;
+	*) fail "unknown_method" "Unknown localClash rpcd method." ;;
+esac

@@ -1,0 +1,1 @@
+Please connect to localClash MCP at http://192.168.6.1:8765/mcp, first call tools_list and environment_inspect, then use the reported safety_level before making any runtime or router takeover changes.

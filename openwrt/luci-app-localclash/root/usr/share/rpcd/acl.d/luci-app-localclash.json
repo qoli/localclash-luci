@@ -1,0 +1,30 @@
+{
+  "luci-app-localclash": {
+    "description": "Grant LuCI access to localClash rpcd helper methods",
+    "read": {
+      "ubus": {
+        "localclash": [ "status", "service_status", "bootstrap_logs", "takeover_status" ]
+      }
+    },
+    "write": {
+      "ubus": {
+        "localclash": [
+          "subscription_set",
+          "subscription_refresh",
+          "component_update",
+          "apply",
+          "runtime_start",
+          "runtime_restart",
+          "runtime_stop",
+          "takeover_apply",
+          "takeover_stop",
+          "reset",
+          "service_start",
+          "service_stop",
+          "service_ensure",
+          "bootstrap_core"
+        ]
+      }
+    }
+  }
+}
