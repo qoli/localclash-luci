@@ -395,6 +395,9 @@ function runtimeRunning(status) {
 }
 
 function takeoverState(takeover) {
+	if (takeover && takeover.pending === true)
+		return _('檢查中…');
+
 	var state = stringState(takeover);
 
 	if (takeover && typeof takeover === 'object') {
@@ -422,6 +425,32 @@ function takeoverState(takeover) {
 		return _('Inactive');
 
 	return state || '-';
+}
+
+function takeoverStatusCell(takeover, id) {
+	return E('td', { 'id': id }, [ takeoverState(takeover) ]);
+}
+
+function refreshTakeoverStatus() {
+	return callTakeoverStatus().then(function(takeover) {
+		var text = takeoverState(takeover);
+		var cell = document.getElementById('localclash-overview-takeover-status');
+		var hero = document.getElementById('localclash-overview-takeover-hero');
+
+		if (cell)
+			cell.textContent = text;
+		if (hero)
+			hero.textContent = text;
+	}).catch(function(err) {
+		var text = err.message || String(err);
+		var cell = document.getElementById('localclash-overview-takeover-status');
+		var hero = document.getElementById('localclash-overview-takeover-hero');
+
+		if (cell)
+			cell.textContent = text;
+		if (hero)
+			hero.textContent = text;
+	});
 }
 
 function classify(data, takeover) {
@@ -533,7 +562,10 @@ function diagnosticTable(data, takeover) {
 			row('Dashboard', core.installed ? (componentInstalled(status, [ 'dashboard', 'ui' ]) ? _('Installed') : _('Missing')) : _('Missing')),
 			row(_('Subscription'), subscriptionConfigured(status) ? _('Configured') : _('Missing')),
 			row(_('Mihomo runtime running'), runtime.running !== undefined ? runtime.running : runtimeRunning(status)),
-			row(_('Network Takeover'), takeoverState(takeover)),
+			E('tr', {}, [
+				E('th', { 'scope': 'row' }, [ _('Network Takeover') ]),
+				takeoverStatusCell(takeover, 'localclash-overview-takeover-status')
+			]),
 			row(_('MCP service installed'), service.installed),
 			row(_('MCP service running'), service.running),
 			row(_('MCP endpoint'), mcp.endpoint)
@@ -577,9 +609,6 @@ return view.extend({
 	load: function() {
 		return Promise.all([
 			callStatus(),
-			callTakeoverStatus().catch(function(err) {
-				return { ok: false, code: 'takeover_status_failed', message: err.message || String(err) };
-			}),
 			callMcpHelp().catch(function(err) {
 				return { ok: false, text: '', message: err.message || String(err) };
 			})
@@ -588,9 +617,14 @@ return view.extend({
 
 	render: function(results) {
 		var data = results[0] || {};
-		var takeover = results[1] || {};
-		var help = results[2] || {};
+		var takeover = { pending: true };
+		var help = results[1] || {};
 		var state = classify(data, takeover);
+		var message = state.id === 'running'
+			? [ _('localClash runtime 正在運行。Network Takeover：'), E('span', { 'id': 'localclash-overview-takeover-hero' }, [ takeoverState(takeover) ]) ]
+			: [ state.message ];
+
+		window.setTimeout(refreshTakeoverStatus, 0);
 
 		return E('div', { 'class': 'cbi-map localclash-view localclash-overview' }, [
 			E('style', {}, [ [
@@ -617,7 +651,7 @@ return view.extend({
 			].join('\n') ]),
 			E('h2', {}, [ _('localClash') ]),
 			section(state.title, E('div', { 'class': 'localclash-hero' }, [
-				E('p', {}, [ state.message ]),
+				E('p', {}, message),
 				primaryActions(state)
 			]), 'localclash-next-step'),
 			section(_('狀態'), diagnosticTable(data, takeover), 'localclash-diagnostics'),

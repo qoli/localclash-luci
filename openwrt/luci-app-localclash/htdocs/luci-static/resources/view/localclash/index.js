@@ -112,6 +112,9 @@ function row(label, value) {
 }
 
 function takeoverSummary(takeover) {
+	if (takeover && takeover.pending === true)
+		return _('檢查中…');
+
 	var status = takeover && takeover.status ? takeover.status : takeover;
 
 	if (takeover && takeover.ok === false)
@@ -135,6 +138,20 @@ function takeoverSummary(takeover) {
 	}
 
 	return statusText(takeover);
+}
+
+function refreshTakeoverStatus() {
+	return callTakeoverStatus().then(function(takeover) {
+		var cell = document.getElementById('localclash-advanced-takeover-status');
+
+		if (cell)
+			cell.textContent = takeoverSummary(takeover);
+	}).catch(function(err) {
+		var cell = document.getElementById('localclash-advanced-takeover-status');
+
+		if (cell)
+			cell.textContent = err.message || String(err);
+	});
 }
 
 function section(title, body) {
@@ -205,22 +222,18 @@ function actionRow(buttons) {
 
 return view.extend({
 	load: function() {
-		return Promise.all([
-			callStatus(),
-			callTakeoverStatus().catch(function(err) {
-				return { ok: false, code: 'takeover_status_failed', message: err.message || String(err) };
-			})
-		]);
+		return callStatus();
 	},
 
-	render: function(results) {
-		var data = results[0] || {};
-		var takeover = results[1] || {};
+	render: function(data) {
+		var takeover = { pending: true };
 		var core = data.core || {};
 		var baseAssets = data.base_assets || {};
 		var service = (data.mcp_service && data.mcp_service.service) || {};
 		var mcp = (data.mcp_service && data.mcp_service.mcp) || {};
 		var runtime = (data.status && data.status.runtime) || {};
+
+		window.setTimeout(refreshTakeoverStatus, 0);
 
 		return E('div', { 'class': 'cbi-map localclash-view' }, [
 			E('style', {}, [ [
@@ -240,18 +253,21 @@ return view.extend({
 			].join('\n') ]),
 			E('h2', {}, [ _('localClash') ]),
 			section(_('Status'), E('table', { 'class': 'table localclash-status-table' }, [
-				E('tbody', {}, [
-					row(_('localClash core'), core.installed ? _('Installed') : _('Missing')),
-					row(_('Core path'), core.path),
-					row(_('Base assets'), baseAssets.installed ? _('Installed') : _('Missing')),
-					row(_('Base assets path'), baseAssets.path),
-					row(_('MCP service installed'), service.installed),
-					row(_('MCP service running'), service.running),
-					row(_('MCP endpoint'), mcp.endpoint),
-					row(_('Mihomo runtime running'), runtime.running),
-					row(_('Takeover'), takeoverSummary(takeover))
-				])
-			])),
+					E('tbody', {}, [
+						row(_('localClash core'), core.installed ? _('Installed') : _('Missing')),
+						row(_('Core path'), core.path),
+						row(_('Base assets'), baseAssets.installed ? _('Installed') : _('Missing')),
+						row(_('Base assets path'), baseAssets.path),
+						row(_('MCP service installed'), service.installed),
+						row(_('MCP service running'), service.running),
+						row(_('MCP endpoint'), mcp.endpoint),
+						row(_('Mihomo runtime running'), runtime.running),
+						E('tr', {}, [
+							E('th', { 'scope': 'row' }, [ _('Takeover') ]),
+							E('td', { 'id': 'localclash-advanced-takeover-status' }, [ takeoverSummary(takeover) ])
+						])
+					])
+				])),
 			section(_('Bootstrap'), E('div', {}, [
 				E('p', {}, [ _('Install or update the localClash core binary and base assets from the GitHub release manifest, then ensure the MCP service wrapper exists.') ]),
 				actionRow([
