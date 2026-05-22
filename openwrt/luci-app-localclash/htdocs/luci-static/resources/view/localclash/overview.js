@@ -218,7 +218,10 @@ function liveTaskButton(label, handler, extraClass) {
 				modal.resultOutput.textContent = JSON.stringify(finalResult, null, 2);
 			}).catch(function(err) {
 				window.clearInterval(timer);
-				return updateLogs().then(function() {
+				if (!timer)
+					modal.logOutput.textContent = _('任務未啟動。');
+
+				return (timer ? updateLogs() : Promise.resolve()).then(function() {
 					modal.statusLine.textContent = formatText(_('任務失敗：%s'), err.message || String(err));
 					modal.resultOutput.textContent = JSON.stringify({ ok: false, message: err.message || String(err) }, null, 2);
 				});
@@ -588,9 +591,9 @@ return view.extend({
 				'.localclash-view .localclash-status-table th{width:auto;white-space:nowrap;padding-right:2rem}',
 				'.localclash-view .localclash-status-table td{width:auto;word-break:break-word}',
 				'.localclash-view .localclash-copybox{box-sizing:border-box;width:calc(100% - 2rem);min-height:5.5rem;margin:1rem;padding:1rem;font-family:monospace;line-height:1.45;resize:vertical}',
-				'.localclash-result{max-width:80vw;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word}',
+				'.localclash-result{box-sizing:border-box;width:100%;min-width:0;max-width:100%;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word}',
 				'.localclash-task-status{margin:.25rem 0 1rem 0;line-height:1.45}',
-				'.localclash-task-log{box-sizing:border-box;min-width:min(76vw,60rem);max-width:80vw;max-height:48vh;overflow:auto;margin:0 0 1rem 0;padding:1rem;background:#111827;color:#d1d5db;border-radius:6px;white-space:pre-wrap;word-break:break-word}',
+				'.localclash-task-log{box-sizing:border-box;width:100%;min-width:0;max-width:100%;max-height:48vh;overflow:auto;margin:0 0 1rem 0;padding:1rem;background:#111827;color:#d1d5db;border-radius:6px;white-space:pre-wrap;word-break:break-word}',
 				'.localclash-task-result:empty{display:none}',
 				'@media (max-width: 700px){.localclash-view .localclash-button{width:100%;min-width:0}.localclash-view .localclash-status-table{display:table;width:100%}.localclash-task-log{min-width:0;max-width:100%;max-height:42vh;font-size:12px}.localclash-result{max-width:100%}}'
 			].join('\n') ]),

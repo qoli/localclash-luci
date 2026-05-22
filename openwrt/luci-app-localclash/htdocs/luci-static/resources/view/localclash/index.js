@@ -225,7 +225,7 @@ return view.extend({
 				'.localclash-view .localclash-status-table{display:inline-table;max-width:100%}',
 				'.localclash-view .localclash-status-table th{width:auto;white-space:nowrap;padding-right:2rem}',
 				'.localclash-view .localclash-status-table td{width:auto;word-break:break-word}',
-				'.localclash-result{max-width:80vw;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word}',
+				'.localclash-result{box-sizing:border-box;width:100%;min-width:0;max-width:100%;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word}',
 				'@media (max-width: 700px){.localclash-view .localclash-button{width:100%;min-width:0}.localclash-view .localclash-status-table{display:table;width:100%}}'
 			].join('\n') ]),
 			E('h2', {}, [ _('localClash') ]),
