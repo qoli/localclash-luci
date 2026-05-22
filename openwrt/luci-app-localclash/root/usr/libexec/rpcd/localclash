@@ -203,7 +203,12 @@ bootstrap_logs() {
 	fi
 }
 
-case "$1" in
+method="${1:-}"
+if [ "$method" = "call" ]; then
+	method="${2:-}"
+fi
+
+case "$method" in
 	list)
 		cat <<'JSON'
 {
