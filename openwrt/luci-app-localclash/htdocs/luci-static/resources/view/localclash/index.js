@@ -111,6 +111,32 @@ function row(label, value) {
 	]);
 }
 
+function takeoverSummary(takeover) {
+	var status = takeover && takeover.status ? takeover.status : takeover;
+
+	if (takeover && takeover.ok === false)
+		return takeover.code || takeover.message || _('Unavailable');
+
+	if (status && typeof status === 'object') {
+		if (status.effective === true)
+			return _('Active');
+		if (status.effective === false)
+			return _('Inactive');
+		if (status.active === true || status.running === true || status.enabled === true)
+			return _('Active');
+		if (status.active === false || status.running === false || status.enabled === false)
+			return _('Inactive');
+		if (status.profile_mode || status.runtime_running !== undefined)
+			return [
+				status.effective ? _('Active') : _('Inactive'),
+				status.profile_mode ? 'profile=' + status.profile_mode : null,
+				status.runtime_running !== undefined ? 'runtime=' + status.runtime_running : null
+			].filter(Boolean).join(', ');
+	}
+
+	return statusText(takeover);
+}
+
 function section(title, body) {
 	return E('div', { 'class': 'cbi-section localclash-section' }, [
 		E('h3', {}, [ title ]),
@@ -128,7 +154,7 @@ function showResult(title, result) {
 					ui.hideModal();
 					window.location.reload();
 				}
-			}, [ _('Close') ])
+			}, [ _('關閉') ])
 		])
 	]);
 }
@@ -142,9 +168,23 @@ function commandButton(label, handler, extraClass) {
 		'class': 'btn cbi-button localclash-button ' + (extraClass || ''),
 		'click': function(ev) {
 			ev.preventDefault();
-			return Promise.resolve(handler()).then(function(result) {
+			var button = ev.currentTarget;
+			if (button.disabled)
+				return null;
+
+			button.disabled = true;
+			button.setAttribute('aria-busy', 'true');
+			button.classList.add('localclash-busy');
+			button.textContent = _('執行中…');
+
+			return Promise.resolve().then(handler).then(function(result) {
 				showResult(label, result);
-			}).catch(showError);
+			}).catch(showError).finally(function() {
+				button.disabled = false;
+				button.removeAttribute('aria-busy');
+				button.classList.remove('localclash-busy');
+				button.textContent = label;
+			});
 		}
 	}, [ label ]);
 }
@@ -167,6 +207,7 @@ return view.extend({
 		var data = results[0] || {};
 		var takeover = results[1] || {};
 		var core = data.core || {};
+		var baseAssets = data.base_assets || {};
 		var service = (data.mcp_service && data.mcp_service.service) || {};
 		var mcp = (data.mcp_service && data.mcp_service.mcp) || {};
 		var runtime = (data.status && data.status.runtime) || {};
@@ -178,6 +219,7 @@ return view.extend({
 				'.localclash-view .localclash-button{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;float:none;margin:0;min-width:8.5rem;min-height:2.75rem;padding:.7rem 1.05rem;line-height:1.2;text-align:center;white-space:normal}',
 				'.localclash-view .localclash-button:focus{outline:2px solid rgba(73,115,255,.35);outline-offset:2px}',
 				'.localclash-view .localclash-button:active{transform:translateY(1px)}',
+				'.localclash-view .localclash-button.localclash-busy{cursor:wait;opacity:.72}',
 				'.localclash-view .localclash-danger{border-color:#c44;background:#d94b4b;color:#fff}',
 				'.localclash-view + .cbi-page-actions{display:none!important}',
 				'.localclash-view .localclash-status-table{display:inline-table;max-width:100%}',
@@ -191,15 +233,17 @@ return view.extend({
 				E('tbody', {}, [
 					row(_('localClash core'), core.installed ? _('Installed') : _('Missing')),
 					row(_('Core path'), core.path),
+					row(_('Base assets'), baseAssets.installed ? _('Installed') : _('Missing')),
+					row(_('Base assets path'), baseAssets.path),
 					row(_('MCP service installed'), service.installed),
 					row(_('MCP service running'), service.running),
 					row(_('MCP endpoint'), mcp.endpoint),
 					row(_('Mihomo runtime running'), runtime.running),
-					row(_('Takeover'), takeover.ok === false ? (takeover.code || _('Unavailable')) : JSON.stringify(takeover))
+					row(_('Takeover'), takeoverSummary(takeover))
 				])
 			])),
 			section(_('Bootstrap'), E('div', {}, [
-				E('p', {}, [ _('Install or update the localClash core binary from the GitHub release manifest, then ensure the MCP service wrapper exists.') ]),
+				E('p', {}, [ _('Install or update the localClash core binary and base assets from the GitHub release manifest, then ensure the MCP service wrapper exists.') ]),
 				actionRow([
 					commandButton(_('Install / Update Core'), callBootstrapCore, 'cbi-button-action'),
 					commandButton(_('Ensure MCP Service'), callServiceEnsure),

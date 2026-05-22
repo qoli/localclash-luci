@@ -1,11 +1,21 @@
 #!/bin/sh
 
 CORE="${LOCALCLASH_CORE:-/usr/local/bin/localclash}"
+STATE_DIR="${LOCALCLASH_STATE_DIR:-/root/localclash}"
 SERVICE="/etc/init.d/localclash-mcp"
 LOG="/tmp/localclash-helper.log"
+LOCK_DIR="/tmp/localclash-helper.lock"
+TASK_STATUS="/tmp/localclash-task-status.json"
+TASK_RESULT="/tmp/localclash-task-result.json"
+TASK_INPUT="/tmp/localclash-task-input.json"
+MIRROR_CACHE_DIR="/tmp/localclash-mirror-cache"
 MCP_ADDR="${LOCALCLASH_MCP_ADDR:-0.0.0.0:8765}"
 MCP_HELP="/usr/share/localclash/mcp-help.txt"
 MANIFEST_URL="${LOCALCLASH_RELEASE_MANIFEST:-https://github.com/qoli/localClash/releases/latest/download/localclash-release-manifest.json}"
+GITHUB_MIRROR="${LOCALCLASH_GITHUB_MIRROR:-auto}"
+GITHUB_RELEASE_MIRRORS="${LOCALCLASH_GITHUB_RELEASE_MIRRORS:-https://gh.llkk.cc/https://github.com https://gh-proxy.com/https://github.com https://v1.ax/https://github.com https://ghp.xptvhelper.link/https://github.com}"
+GITHUB_RAW_MIRRORS="${LOCALCLASH_GITHUB_RAW_MIRRORS:-https://v1.ax/https://raw.githubusercontent.com https://ghp.xptvhelper.link/https://raw.githubusercontent.com https://fastly.jsdelivr.net/gh}"
+FETCH_TIMEOUT="${LOCALCLASH_FETCH_TIMEOUT:-20}"
 
 json_escape() {
 	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
@@ -25,18 +35,345 @@ log_line() {
 	printf '%s %s\n' "$(date -Iseconds 2>/dev/null || date)" "$*" >> "$LOG"
 }
 
-fetch_url() {
+with_lock() {
+	waited=0
+	while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+		if [ "$waited" -ge 120 ]; then
+			log_line "lock timeout waiting for $*"
+			fail "task_locked" "Another localClash task is still running. Please wait and try again."
+			return 1
+		fi
+		waited=$((waited + 1))
+		sleep 1
+	done
+	trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT INT TERM
+	"$@"
+	rc=$?
+	rmdir "$LOCK_DIR" 2>/dev/null || true
+	trap - EXIT INT TERM
+	return "$rc"
+}
+
+run_with_heartbeat() {
+	local label output pid elapsed rc
+	label="$1"
+	output="$2"
+	shift 2
+	elapsed=0
+	( "$@" > "$output" ) &
+	pid="$!"
+	while kill -0 "$pid" 2>/dev/null; do
+		sleep 5
+		if kill -0 "$pid" 2>/dev/null; then
+			elapsed=$((elapsed + 5))
+			log_line "$label: still running (${elapsed}s)"
+		fi
+	done
+	wait "$pid"
+	rc="$?"
+	return "$rc"
+}
+
+fetch_single_url() {
+	local url output
 	url="$1"
 	output="$2"
 	if command -v uclient-fetch >/dev/null 2>&1; then
-		uclient-fetch -q -O "$output" "$url"
+		fetch_with_watchdog "$url" uclient-fetch -T "$FETCH_TIMEOUT" -q -O "$output" "$url"
 	elif command -v wget >/dev/null 2>&1; then
-		wget -q -O "$output" "$url"
+		fetch_with_watchdog "$url" wget -T "$FETCH_TIMEOUT" -q -O "$output" "$url"
 	elif command -v curl >/dev/null 2>&1; then
-		curl -fsSL "$url" -o "$output"
+		fetch_with_watchdog "$url" curl --max-time "$FETCH_TIMEOUT" -fsSL "$url" -o "$output"
 	else
 		return 1
 	fi
+}
+
+fetch_with_watchdog() {
+	local label pid watchdog elapsed rc
+	label="$1"
+	shift
+	"$@" &
+	pid="$!"
+	(
+		elapsed=0
+		while kill -0 "$pid" 2>/dev/null; do
+			sleep 5
+			if kill -0 "$pid" 2>/dev/null; then
+				elapsed=$((elapsed + 5))
+				log_line "download: waiting for $label (${elapsed}s)"
+				if [ "$elapsed" -ge "$FETCH_TIMEOUT" ]; then
+					kill "$pid" 2>/dev/null || exit 0
+					sleep 2
+					kill -9 "$pid" 2>/dev/null || true
+					exit 0
+				fi
+			fi
+		done
+	) &
+	watchdog="$!"
+	wait "$pid"
+	rc="$?"
+	kill "$watchdog" 2>/dev/null || true
+	return "$rc"
+}
+
+probe_url_for_mirror() {
+	local kind mirror
+	kind="$1"
+	mirror="$2"
+	case "$kind:$mirror" in
+		release:*)
+			printf '%s/qoli/syncnext-api/main/pass.txt\n' "$(printf '%s' "$mirror" | sed 's#https://github.com#https://raw.githubusercontent.com#')"
+			;;
+		raw:https://fastly.jsdelivr.net/gh)
+			printf 'https://fastly.jsdelivr.net/gh/qoli/syncnext-api@main/pass.txt\n'
+			;;
+		raw:*)
+			printf '%s/qoli/syncnext-api/main/pass.txt\n' "$mirror"
+			;;
+	esac
+}
+
+mirror_probe_ok() {
+	local kind mirror probe tmp body
+	kind="$1"
+	mirror="$2"
+	probe="$(probe_url_for_mirror "$kind" "$mirror")"
+	tmp="/tmp/localclash-mirror-probe.$$"
+	rm -f "$tmp"
+	log_line "download: probing $kind mirror $mirror"
+	if ! fetch_single_url "$probe" "$tmp"; then
+		rm -f "$tmp"
+		return 1
+	fi
+	body="$(tr -d '\r\n' < "$tmp" 2>/dev/null)"
+	rm -f "$tmp"
+	[ "$body" = "pass" ]
+}
+
+select_github_mirror() {
+	local kind mirrors mirror cache
+	kind="$1"
+	mirrors="$2"
+	mkdir -p "$MIRROR_CACHE_DIR"
+	cache="$MIRROR_CACHE_DIR/$kind"
+
+	if [ -f "$cache" ]; then
+		mirror="$(cat "$cache")"
+		if [ -n "$mirror" ]; then
+			printf '%s\n' "$mirror"
+			return 0
+		fi
+	fi
+
+	for mirror in $mirrors; do
+		if mirror_probe_ok "$kind" "$mirror"; then
+			printf '%s\n' "$mirror" > "$cache"
+			log_line "download: selected $kind mirror $mirror"
+			printf '%s\n' "$mirror"
+			return 0
+		fi
+	done
+
+	rm -f "$cache"
+	return 1
+}
+
+cache_github_mirror() {
+	local kind mirror cache current
+	kind="$1"
+	mirror="$2"
+	[ -n "$mirror" ] || return 0
+	mkdir -p "$MIRROR_CACHE_DIR"
+	cache="$MIRROR_CACHE_DIR/$kind"
+	current="$(cat "$cache" 2>/dev/null || true)"
+	if [ "$current" != "$mirror" ]; then
+		printf '%s\n' "$mirror" > "$cache"
+		log_line "download: confirmed $kind mirror $mirror"
+	fi
+}
+
+invalidate_github_mirror() {
+	local kind mirror cache current
+	kind="$1"
+	mirror="$2"
+	[ -n "$mirror" ] || return 0
+	cache="$MIRROR_CACHE_DIR/$kind"
+	current="$(cat "$cache" 2>/dev/null || true)"
+	if [ "$current" = "$mirror" ]; then
+		rm -f "$cache"
+		log_line "download: discarded $kind mirror $mirror"
+	fi
+}
+
+github_url_kind() {
+	case "$1" in
+		https://github.com/*) printf 'release\n' ;;
+		https://raw.githubusercontent.com/*) printf 'raw\n' ;;
+	esac
+}
+
+candidate_mirror_for_kind() {
+	local kind candidate mirrors mirror
+	kind="$1"
+	candidate="$2"
+	case "$kind" in
+		release) mirrors="$GITHUB_RELEASE_MIRRORS" ;;
+		raw) mirrors="$GITHUB_RAW_MIRRORS" ;;
+		*) return 1 ;;
+	esac
+	for mirror in $mirrors; do
+		case "$candidate" in
+			"$mirror"/*)
+				printf '%s\n' "$mirror"
+				return 0
+				;;
+		esac
+	done
+	return 1
+}
+
+note_github_candidate_success() {
+	local url candidate kind mirror
+	url="$1"
+	candidate="$2"
+	kind="$(github_url_kind "$url")"
+	[ -n "$kind" ] || return 0
+	mirror="$(candidate_mirror_for_kind "$kind" "$candidate" || true)"
+	cache_github_mirror "$kind" "$mirror"
+}
+
+note_github_candidate_failure() {
+	local url candidate kind mirror
+	url="$1"
+	candidate="$2"
+	kind="$(github_url_kind "$url")"
+	[ -n "$kind" ] || return 0
+	mirror="$(candidate_mirror_for_kind "$kind" "$candidate" || true)"
+	invalidate_github_mirror "$kind" "$mirror"
+}
+
+raw_github_to_jsdelivr() {
+	local rest owner repo branch path
+	rest="${1#https://raw.githubusercontent.com/}"
+	owner="${rest%%/*}"
+	rest="${rest#*/}"
+	repo="${rest%%/*}"
+	rest="${rest#*/}"
+	branch="${rest%%/*}"
+	path="${rest#*/}"
+	if [ -n "$owner" ] && [ -n "$repo" ] && [ -n "$branch" ] && [ -n "$path" ]; then
+		printf 'https://fastly.jsdelivr.net/gh/%s/%s@%s/%s\n' "$owner" "$repo" "$branch" "$path"
+	fi
+}
+
+github_download_candidates() {
+	local url mirror selected
+	url="$1"
+	if [ "$GITHUB_MIRROR" = "0" ] || [ "$GITHUB_MIRROR" = "off" ] || [ "$GITHUB_MIRROR" = "false" ]; then
+		printf '%s\n' "$url"
+		return 0
+	fi
+
+	case "$url" in
+		https://github.com/*)
+			selected="$(select_github_mirror release "$GITHUB_RELEASE_MIRRORS" 2>/dev/null || true)"
+			if [ -n "$selected" ]; then
+				printf '%s%s\n' "$selected" "${url#https://github.com}"
+			fi
+			for mirror in $GITHUB_RELEASE_MIRRORS; do
+				[ "$mirror" = "$selected" ] || printf '%s%s\n' "$mirror" "${url#https://github.com}"
+			done
+			;;
+		https://raw.githubusercontent.com/*)
+			selected="$(select_github_mirror raw "$GITHUB_RAW_MIRRORS" 2>/dev/null || true)"
+			if [ -n "$selected" ]; then
+				case "$selected" in
+					https://fastly.jsdelivr.net/gh) raw_github_to_jsdelivr "$url" ;;
+					*) printf '%s%s\n' "$selected" "${url#https://raw.githubusercontent.com}" ;;
+				esac
+			fi
+			for mirror in $GITHUB_RAW_MIRRORS; do
+				[ "$mirror" = "$selected" ] && continue
+				case "$mirror" in
+					https://fastly.jsdelivr.net/gh) raw_github_to_jsdelivr "$url" ;;
+					*) printf '%s%s\n' "$mirror" "${url#https://raw.githubusercontent.com}" ;;
+				esac
+			done
+			;;
+	esac
+
+	printf '%s\n' "$url"
+}
+
+fetch_url() {
+	local url output tmp candidate
+	url="$1"
+	output="$2"
+	tmp="$output.download.$$"
+	rm -f "$tmp"
+	for candidate in $(github_download_candidates "$url"); do
+		log_line "download: trying $candidate"
+		if fetch_single_url "$candidate" "$tmp"; then
+			mv "$tmp" "$output"
+			note_github_candidate_success "$url" "$candidate"
+			return 0
+		fi
+		note_github_candidate_failure "$url" "$candidate"
+		rm -f "$tmp"
+	done
+	return 1
+}
+
+fetch_manifest() {
+	local url output tmp candidate
+	url="$1"
+	output="$2"
+	tmp="$output.download.$$"
+	rm -f "$tmp"
+	for candidate in $(github_download_candidates "$url"); do
+		log_line "download: trying $candidate"
+		if fetch_single_url "$candidate" "$tmp"; then
+			if jsonfilter -i "$tmp" -e '@.version' >/dev/null 2>&1; then
+				mv "$tmp" "$output"
+				note_github_candidate_success "$url" "$candidate"
+				return 0
+			fi
+			log_line "download: invalid release manifest from $candidate"
+			note_github_candidate_failure "$url" "$candidate"
+		else
+			note_github_candidate_failure "$url" "$candidate"
+		fi
+		rm -f "$tmp"
+	done
+	return 1
+}
+
+fetch_url_verified() {
+	local url output expected_sha tmp candidate actual_sha
+	url="$1"
+	output="$2"
+	expected_sha="$3"
+	tmp="$output.download.$$"
+	rm -f "$tmp"
+	for candidate in $(github_download_candidates "$url"); do
+		log_line "download: trying $candidate"
+		if fetch_single_url "$candidate" "$tmp"; then
+			actual_sha="$(sha256sum "$tmp" | cut -d ' ' -f 1)"
+			if [ "$actual_sha" = "$expected_sha" ]; then
+				mv "$tmp" "$output"
+				note_github_candidate_success "$url" "$candidate"
+				return 0
+			fi
+			log_line "download: checksum mismatch from $candidate"
+			note_github_candidate_failure "$url" "$candidate"
+		else
+			note_github_candidate_failure "$url" "$candidate"
+		fi
+		rm -f "$tmp"
+	done
+	return 1
 }
 
 router_arch() {
@@ -56,10 +393,83 @@ call_core() {
 		fail "bootstrap_core_missing" "localClash core is not installed."
 		return 1
 	fi
-	"$CORE" "$@"
+	mkdir -p "$STATE_DIR"
+	(cd "$STATE_DIR" && "$CORE" "$@") 2>>"$LOG"
+}
+
+runtime_pid_file() {
+	printf '%s/.runtime/mihomo/mihomo.pid\n' "$STATE_DIR"
+}
+
+clear_zombie_runtime_pid() {
+	local pid_file pid
+	pid_file="$(runtime_pid_file)"
+	[ -f "$pid_file" ] || return 0
+	pid="$(cat "$pid_file" 2>/dev/null)"
+	[ -n "$pid" ] || return 0
+	if ps w 2>/dev/null | awk -v pid="$pid" '$1 == pid && $4 ~ /^Z/ { found = 1 } END { exit found ? 0 : 1 }'; then
+		rm -f "$pid_file"
+		log_line "runtime: cleared stale zombie pid file for pid $pid"
+	fi
+}
+
+runtime_stop() {
+	local tmp rc
+	tmp="/tmp/localclash-runtime-stop.$$"
+	call_core runtime stop --json > "$tmp"
+	rc=$?
+	clear_zombie_runtime_pid
+	cat "$tmp"
+	rm -f "$tmp"
+	return "$rc"
+}
+
+base_assets_installed() {
+	[ -f "$STATE_DIR/policies/loyalsoldier.yaml" ] || return 1
+	[ -f "$STATE_DIR/policy-templates/localclash-default.yaml" ] || return 1
+	[ -f "$STATE_DIR/.runtime/mihomo/Country.mmdb" ] || return 1
+	[ -f "$STATE_DIR/.runtime/mihomo/geoip.dat" ] || return 1
+	[ -f "$STATE_DIR/.runtime/mihomo/geosite.dat" ] || return 1
+	[ -f "$STATE_DIR/.runtime/mihomo/ASN.mmdb" ] || return 1
+	for source in "$STATE_DIR"/rule-sources/*.yaml; do
+		[ -e "$source" ] && return 0
+	done
+	return 1
+}
+
+mihomo_core_installed() {
+	local arch
+	arch="$(router_arch 2>/dev/null)" || return 1
+	[ -x "$STATE_DIR/bin/linux-$arch/mihomo-smart" ] || [ -x "$STATE_DIR/bin/linux-$arch/mihomo-meta" ]
+}
+
+dashboard_installed() {
+	for asset in "$STATE_DIR"/.runtime/mihomo/ui/*; do
+		[ -e "$asset" ] && return 0
+	done
+	return 1
+}
+
+subscription_configured() {
+	[ -f "$STATE_DIR/localclash-subscriptions.yaml" ] || return 1
+	[ -f "$STATE_DIR/subscription.yaml" ] || return 1
+	for source in "$STATE_DIR"/.runtime/subscriptions/*.yaml; do
+		[ -e "$source" ] && return 0
+	done
+	return 1
+}
+
+runtime_running() {
+	local pid_file pid
+	pid_file="$(runtime_pid_file)"
+	[ -f "$pid_file" ] || return 1
+	pid="$(cat "$pid_file" 2>/dev/null)"
+	[ -n "$pid" ] || return 1
+	ps w 2>/dev/null | awk -v pid="$pid" '$1 == pid && $4 !~ /^Z/ { found = 1 } END { exit found ? 0 : 1 }'
 }
 
 service_body() {
+	local installed enabled running pid endpoint health_endpoint
 	installed=false
 	enabled=false
 	running=false
@@ -77,6 +487,7 @@ service_body() {
 }
 
 mcp_host() {
+	local host lan_ip
 	host="${MCP_ADDR%:*}"
 	if [ "$host" != "0.0.0.0" ] && [ "$host" != "::" ] && [ -n "$host" ]; then
 		printf '%s\n' "$host"
@@ -128,6 +539,7 @@ STOP=10
 USE_PROCD=1
 
 CORE="$CORE"
+WORKDIR="$STATE_DIR"
 MCP_ADDR="$MCP_ADDR"
 
 start_service() {
@@ -135,8 +547,9 @@ start_service() {
 		echo "localClash core missing: \$CORE" >&2
 		return 1
 	fi
+	mkdir -p "\$WORKDIR"
 	procd_open_instance
-	procd_set_param command "\$CORE" mcp serve --addr "\$MCP_ADDR" --path /mcp
+	procd_set_param command /bin/sh -c 'cd "$1" && exec "$2" mcp serve --addr "$3" --path /mcp' localclash-mcp "\$WORKDIR" "\$CORE" "\$MCP_ADDR"
 	procd_set_param respawn
 	procd_close_instance
 }
@@ -147,14 +560,20 @@ EOF
 }
 
 status() {
-	core_json='{"ok":false,"code":"bootstrap_core_missing","message":"localClash core is not installed.","details":{},"next_actions":["Install localClash core."]}'
-	if core_installed; then
-		core_json="$("$CORE" status --json 2>/dev/null)" || core_json='{"ok":false,"code":"core_status_failed","message":"localClash core status failed.","details":{},"next_actions":[]}'
-	fi
-	printf '{"ok":true,"core":{"installed":%s,"path":"%s"},"mcp_service":{%s},"status":%s}\n' "$(core_installed && echo true || echo false)" "$CORE" "$(service_body)" "$core_json"
+	local core_ok assets_ok mihomo_ok dashboard_ok subscription_ok runtime_ok summary
+	clear_zombie_runtime_pid
+	core_ok="$(core_installed && echo true || echo false)"
+	assets_ok="$(base_assets_installed && echo true || echo false)"
+	mihomo_ok="$(mihomo_core_installed && echo true || echo false)"
+	dashboard_ok="$(dashboard_installed && echo true || echo false)"
+	subscription_ok="$(subscription_configured && echo true || echo false)"
+	runtime_ok="$(runtime_running && echo true || echo false)"
+	summary='"components":{"mihomo":{"installed":'"$mihomo_ok"'},"dashboard":{"installed":'"$dashboard_ok"'}},"subscription":{"configured":'"$subscription_ok"'},"runtime":{"running":'"$runtime_ok"'}'
+	printf '{"ok":true,"core":{"installed":%s,"path":"%s"},"base_assets":{"installed":%s,"path":"%s"},"mcp_service":{%s},"status":{"ok":true,"changed":false,"summary":"localClash LuCI status summary.",%s,"status":{%s}}}\n' "$core_ok" "$CORE" "$assets_ok" "$STATE_DIR" "$(service_body)" "$summary" "$summary"
 }
 
 component_update() {
+	local payload component
 	payload="$(cat)"
 	component="$(jsonfilter -s "$payload" -e '@.component' 2>/dev/null)"
 	case "$component" in
@@ -165,17 +584,124 @@ component_update() {
 }
 
 input_to_core_file() {
+	local payload tmp rc
 	payload="$(cat)"
+	payload="$(strip_ubus_rpc_session "$payload")"
 	tmp="/tmp/localclash-input-$$.json"
-	printf '%s' "$payload" > "$tmp"
+	write_versioned_payload "$payload" > "$tmp"
 	call_core "$@" --input "$tmp" --json
 	rc=$?
 	rm -f "$tmp"
 	return "$rc"
 }
 
+strip_ubus_rpc_session() {
+	printf '%s' "$1" | sed \
+		-e 's/"ubus_rpc_session"[[:space:]]*:[[:space:]]*"[^"]*"[[:space:]]*,[[:space:]]*//' \
+		-e 's/,[[:space:]]*"ubus_rpc_session"[[:space:]]*:[[:space:]]*"[^"]*"//' \
+		-e 's/{[[:space:]]*"ubus_rpc_session"[[:space:]]*:[[:space:]]*"[^"]*"[[:space:]]*}/{}/'
+}
+
+write_versioned_payload() {
+	local payload body
+	payload="$1"
+	if printf '%s' "$payload" | jsonfilter -e '@.version' >/dev/null 2>&1; then
+		printf '%s' "$payload"
+		return 0
+	fi
+
+	body="$(printf '%s' "$payload" | sed 's/^[[:space:]]*{//; s/}[[:space:]]*$//')"
+	if [ -n "$body" ]; then
+		printf '{"version":1,%s}' "$body"
+	else
+		printf '{"version":1}'
+	fi
+}
+
 subscription_set() {
 	input_to_core_file subscription set
+}
+
+subscription_setup_file() {
+	local input tmpdir
+	input="$1"
+	tmpdir="$(mktemp -d /tmp/localclash-subscription.XXXXXX)" || {
+		fail "tmpdir_failed" "Could not create a temporary subscription directory."
+		return 1
+	}
+
+	log_line "subscription_setup: saving subscription sources"
+	if ! call_core subscription set --input "$input" --json > "$tmpdir/set.json"; then
+		cat "$tmpdir/set.json"
+		rm -rf "$tmpdir"
+		return 1
+	fi
+
+	log_line "subscription_setup: refreshing subscription"
+	if ! run_with_heartbeat "subscription_setup: refreshing subscription" "$tmpdir/refresh.json" call_core subscription refresh --json; then
+		cat "$tmpdir/refresh.json"
+		rm -rf "$tmpdir"
+		return 1
+	fi
+
+	log_line "subscription_setup: rendering Mihomo configuration"
+	if ! run_with_heartbeat "subscription_setup: rendering Mihomo configuration" "$tmpdir/render.json" call_core config render --json; then
+		cat "$tmpdir/render.json"
+		rm -rf "$tmpdir"
+		return 1
+	fi
+
+	rm -rf "$tmpdir"
+	log_line "subscription_setup: completed"
+	ok '"changed":true,"summary":"Subscription saved, refreshed, and configuration rendered.","next_actions":["Start runtime when ready."]'
+}
+
+subscription_setup() {
+	local payload input tmpdir rc
+	payload="$(strip_ubus_rpc_session "$(cat)")"
+	tmpdir="$(mktemp -d /tmp/localclash-subscription-input.XXXXXX)" || {
+		fail "tmpdir_failed" "Could not create a temporary subscription input directory."
+		return 1
+	}
+	input="$tmpdir/subscription.json"
+	write_versioned_payload "$payload" > "$input"
+	subscription_setup_file "$input"
+	rc=$?
+	rm -rf "$tmpdir"
+	return "$rc"
+}
+
+start_subscription_setup() {
+	local payload result rc
+	if [ -d "$LOCK_DIR" ]; then
+		printf '{"ok":true,"started":false,"running":true,"summary":"Another localClash task is already running."}\n'
+		return 0
+	fi
+	payload="$(strip_ubus_rpc_session "$(cat)")"
+	rm -f "$TASK_STATUS" "$TASK_RESULT" "$TASK_INPUT"
+	: > "$LOG"
+	write_versioned_payload "$payload" > "$TASK_INPUT"
+	printf '{"ok":true,"running":true,"done":false,"summary":"Subscription setup task is running."}\n' > "$TASK_STATUS"
+	log_line "subscription_setup: queued background task"
+	(
+		result="$("$0" call subscription_setup_run 2>>"$LOG")"
+		rc=$?
+		if [ -z "$result" ]; then
+			result='{"ok":false,"code":"empty_task_result","message":"Subscription setup task produced no JSON result.","details":{},"next_actions":[]}'
+		fi
+		printf '%s\n' "$result" > "$TASK_RESULT"
+		printf '{"ok":true,"running":false,"done":true,"exit_code":%s,"result":%s}\n' "$rc" "$result" > "$TASK_STATUS"
+		rm -f "$TASK_INPUT"
+	) >/dev/null 2>&1 &
+	ok '"started":true,"running":true,"summary":"Subscription setup task started."'
+}
+
+subscription_setup_run() {
+	if [ ! -f "$TASK_INPUT" ]; then
+		fail "task_input_missing" "Subscription setup task input is missing."
+		return 1
+	fi
+	subscription_setup_file "$TASK_INPUT"
 }
 
 apply_state() {
@@ -183,11 +709,15 @@ apply_state() {
 }
 
 bootstrap_core() {
+	local arch tmpdir manifest binary asset_url asset_sha asset_version tmp_core
+	log_line "bootstrap_core: start"
 	if ! command -v jsonfilter >/dev/null 2>&1; then
+		log_line "bootstrap_core: jsonfilter missing"
 		fail "jsonfilter_missing" "jsonfilter is required to parse the localClash release manifest."
 		return 1
 	fi
 	arch="$(router_arch)" || {
+		log_line "bootstrap_core: unsupported architecture $(uname -m)"
 		fail "unsupported_arch" "This router architecture is not supported by the localClash bootstrap helper."
 		return 1
 	}
@@ -197,8 +727,10 @@ bootstrap_core() {
 	}
 	manifest="$tmpdir/manifest.json"
 	binary="$tmpdir/localclash"
-	if ! fetch_url "$MANIFEST_URL" "$manifest"; then
+	log_line "bootstrap_core: downloading release manifest"
+	if ! fetch_manifest "$MANIFEST_URL" "$manifest"; then
 		rm -rf "$tmpdir"
+		log_line "bootstrap_core: manifest download failed"
 		fail "manifest_download_failed" "Could not download localClash release manifest."
 		return 1
 	fi
@@ -207,33 +739,105 @@ bootstrap_core() {
 	asset_version="$(jsonfilter -i "$manifest" -e "@.version" 2>/dev/null)"
 	if [ -z "$asset_url" ] || [ -z "$asset_sha" ]; then
 		rm -rf "$tmpdir"
+		log_line "bootstrap_core: release manifest has no asset for $arch"
 		fail "manifest_asset_missing" "Release manifest does not contain a matching linux binary for this router."
 		return 1
 	fi
-	if ! fetch_url "$asset_url" "$binary"; then
+	log_line "bootstrap_core: downloading localClash core $asset_version for $arch"
+	if ! fetch_url_verified "$asset_url" "$binary" "$asset_sha"; then
 		rm -rf "$tmpdir"
+		log_line "bootstrap_core: core download failed"
 		fail "core_download_failed" "Could not download localClash core binary."
 		return 1
 	fi
-	actual_sha="$(sha256sum "$binary" | cut -d ' ' -f 1)"
-	if [ "$actual_sha" != "$asset_sha" ]; then
-		rm -rf "$tmpdir"
-		fail "checksum_mismatch" "Downloaded localClash core failed sha256 verification."
-		return 1
-	fi
+	log_line "bootstrap_core: verified sha256"
 	chmod 755 "$binary"
 	mkdir -p "$(dirname "$CORE")"
 	tmp_core="$CORE.tmp.$$"
+	log_line "bootstrap_core: installing localClash core"
 	if ! cp "$binary" "$tmp_core" || ! chmod 755 "$tmp_core" || ! mv "$tmp_core" "$CORE"; then
 		rm -f "$tmp_core"
 		rm -rf "$tmpdir"
+		log_line "bootstrap_core: core install failed"
 		fail "core_install_failed" "Could not install localClash core binary."
+		return 1
+	fi
+	if ! install_base_assets "$manifest" "$tmpdir"; then
+		rm -rf "$tmpdir"
 		return 1
 	fi
 	rm -rf "$tmpdir"
 	service_ensure >/dev/null
 	log_line "installed localClash core $asset_version for $arch"
 	ok "\"changed\":true,\"summary\":\"localClash core installed.\",\"core\":{\"installed\":true,\"path\":\"$CORE\",\"version\":\"$(json_escape "$asset_version")\",\"arch\":\"$arch\"}"
+}
+
+install_base_assets() {
+	local manifest tmpdir assets_url assets_sha archive source
+	manifest="$1"
+	tmpdir="$2"
+	assets_url="$(jsonfilter -i "$manifest" -e '@.base_assets.url' 2>/dev/null)"
+	assets_sha="$(jsonfilter -i "$manifest" -e '@.base_assets.sha256' 2>/dev/null)"
+	archive="$tmpdir/localclash-base-assets.tar.gz"
+	if [ -z "$assets_url" ] || [ -z "$assets_sha" ]; then
+		log_line "bootstrap_assets: release manifest has no base assets"
+		fail "manifest_base_assets_missing" "Release manifest does not contain localClash base assets."
+		return 1
+	fi
+	if ! command -v tar >/dev/null 2>&1; then
+		log_line "bootstrap_assets: tar missing"
+		fail "tar_missing" "tar is required to install localClash base assets."
+		return 1
+	fi
+	log_line "bootstrap_assets: downloading base assets"
+	if ! fetch_url_verified "$assets_url" "$archive" "$assets_sha"; then
+		log_line "bootstrap_assets: download failed"
+		fail "base_assets_download_failed" "Could not download localClash base assets."
+		return 1
+	fi
+	log_line "bootstrap_assets: verified sha256"
+	mkdir -p "$STATE_DIR"
+	log_line "bootstrap_assets: installing base assets to $STATE_DIR"
+	if ! tar -xzf "$archive" -C "$STATE_DIR"; then
+		log_line "bootstrap_assets: install failed"
+		fail "base_assets_install_failed" "Could not install localClash base assets."
+		return 1
+	fi
+	if ! base_assets_installed; then
+		log_line "bootstrap_assets: required files missing after install"
+		fail "base_assets_incomplete" "Installed localClash base assets are incomplete."
+		return 1
+	fi
+	log_line "bootstrap_assets: installed"
+	return 0
+}
+
+bootstrap_assets() {
+	local tmpdir manifest
+	log_line "bootstrap_assets: start"
+	if ! command -v jsonfilter >/dev/null 2>&1; then
+		log_line "bootstrap_assets: jsonfilter missing"
+		fail "jsonfilter_missing" "jsonfilter is required to parse the localClash release manifest."
+		return 1
+	fi
+	tmpdir="$(mktemp -d /tmp/localclash-assets.XXXXXX)" || {
+		fail "tmpdir_failed" "Could not create a temporary assets directory."
+		return 1
+	}
+	manifest="$tmpdir/manifest.json"
+	log_line "bootstrap_assets: downloading release manifest"
+	if ! fetch_manifest "$MANIFEST_URL" "$manifest"; then
+		rm -rf "$tmpdir"
+		log_line "bootstrap_assets: manifest download failed"
+		fail "manifest_download_failed" "Could not download localClash release manifest."
+		return 1
+	fi
+	if ! install_base_assets "$manifest" "$tmpdir"; then
+		rm -rf "$tmpdir"
+		return 1
+	fi
+	rm -rf "$tmpdir"
+	ok "\"changed\":true,\"summary\":\"localClash base assets installed.\",\"base_assets\":{\"installed\":true,\"path\":\"$(json_escape "$STATE_DIR")\"}"
 }
 
 bootstrap_logs() {
@@ -244,62 +848,170 @@ bootstrap_logs() {
 	fi
 }
 
-bootstrap_default() {
+bootstrap_task_status() {
+	if [ -f "$TASK_STATUS" ]; then
+		cat "$TASK_STATUS"
+	else
+		printf '{"ok":true,"running":false,"done":false,"result":null}\n'
+	fi
+}
+
+task_status() {
+	bootstrap_task_status
+}
+
+start_bootstrap_default() {
+	local result rc
+	if [ -d "$LOCK_DIR" ]; then
+		printf '{"ok":true,"started":false,"running":true,"summary":"Another localClash task is already running."}\n'
+		return 0
+	fi
+	rm -f "$TASK_STATUS" "$TASK_RESULT"
+	: > "$LOG"
+	printf '{"ok":true,"running":true,"done":false,"summary":"Bootstrap task is running."}\n' > "$TASK_STATUS"
+	log_line "bootstrap_default: queued background task"
+	(
+		result="$("$0" call bootstrap_default_run 2>>"$LOG")"
+		rc=$?
+		if [ -z "$result" ]; then
+			result='{"ok":false,"code":"empty_task_result","message":"Bootstrap task produced no JSON result.","details":{},"next_actions":[]}'
+		fi
+		printf '%s\n' "$result" > "$TASK_RESULT"
+		printf '{"ok":true,"running":false,"done":true,"exit_code":%s,"result":%s}\n' "$rc" "$result" > "$TASK_STATUS"
+	) >/dev/null 2>&1 &
+	ok '"started":true,"running":true,"summary":"Bootstrap task started."'
+}
+
+bootstrap_default_run() {
+	local tmpdir mihomo_attempt
+	log_line "bootstrap_default: start default router setup"
 	tmpdir="$(mktemp -d /tmp/localclash-default.XXXXXX)" || {
+		log_line "bootstrap_default: temp directory creation failed"
 		fail "tmpdir_failed" "Could not create a temporary default setup directory."
 		return 1
 	}
 
 	if ! core_installed; then
+		log_line "bootstrap_default: localClash core missing, bootstrapping"
 		if ! bootstrap_core > "$tmpdir/core.json"; then
 			cat "$tmpdir/core.json"
 			rm -rf "$tmpdir"
 			return 1
 		fi
 	else
+		log_line "bootstrap_default: localClash core already installed"
 		printf '{"ok":true,"changed":false,"summary":"localClash core already installed."}\n' > "$tmpdir/core.json"
 	fi
 
-	if ! call_core component update mihomo --json > "$tmpdir/mihomo.json"; then
-		cat "$tmpdir/mihomo.json"
-		rm -rf "$tmpdir"
-		return 1
+	if ! base_assets_installed; then
+		log_line "bootstrap_default: base assets missing, bootstrapping"
+		if ! bootstrap_assets > "$tmpdir/assets.json"; then
+			cat "$tmpdir/assets.json"
+			rm -rf "$tmpdir"
+			return 1
+		fi
+	else
+		log_line "bootstrap_default: base assets already installed"
 	fi
 
-	if ! call_core component update dashboard --json > "$tmpdir/dashboard.json"; then
+	log_line "bootstrap_default: updating Mihomo core"
+	mihomo_attempt=1
+	while ! run_with_heartbeat "bootstrap_default: updating Mihomo core" "$tmpdir/mihomo.json" call_core component update mihomo --json; do
+		if [ "$mihomo_attempt" -ge 3 ]; then
+			log_line "bootstrap_default: Mihomo core update failed after $mihomo_attempt attempts"
+			cat "$tmpdir/mihomo.json"
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		mihomo_attempt=$((mihomo_attempt + 1))
+		log_line "bootstrap_default: Mihomo core update failed, retrying attempt $mihomo_attempt"
+		sleep 2
+	done
+
+	log_line "bootstrap_default: updating Dashboard assets"
+	if ! run_with_heartbeat "bootstrap_default: updating Dashboard assets" "$tmpdir/dashboard.json" call_core component update dashboard --json; then
+		log_line "bootstrap_default: Dashboard update failed"
 		cat "$tmpdir/dashboard.json"
 		rm -rf "$tmpdir"
 		return 1
 	fi
 
-	cat > "$tmpdir/apply.json" <<'JSON'
+	cat > "$tmpdir/template.json" <<'JSON'
 {
-  "components": {
-    "mihomo": "installed_or_latest",
-    "dashboard": "installed_or_latest"
-  },
-  "config": {
-    "template": "localclash-default",
-    "runtime_profile": "router",
-    "core": "smart",
-    "allow_overwrite_modified": false
-  },
-  "runtime": {
-    "service": "leave",
-    "router_takeover": "leave"
-  }
+  "version": 1,
+  "template": "localclash-default",
+  "runtime_profile": "router",
+  "core": "smart",
+  "allow_overwrite_modified": false
 }
 JSON
 
-	if ! call_core apply --input "$tmpdir/apply.json" --json > "$tmpdir/apply-result.json"; then
-		cat "$tmpdir/apply-result.json"
+	log_line "bootstrap_default: applying default router/smart profile"
+	if ! call_core config apply-template --input "$tmpdir/template.json" --json > "$tmpdir/template-result.json"; then
+		log_line "bootstrap_default: default profile apply failed"
+		cat "$tmpdir/template-result.json"
 		rm -rf "$tmpdir"
 		return 1
 	fi
 
 	service_ensure >/dev/null
 	rm -rf "$tmpdir"
+	log_line "bootstrap_default: completed default router setup"
 	ok '"changed":true,"summary":"Default router setup applied.","profile":{"runtime_profile":"router","core":"smart","template":"localclash-default"}'
+}
+
+start_runtime_takeover() {
+	local result rc
+	if [ -d "$LOCK_DIR" ]; then
+		printf '{"ok":true,"started":false,"running":true,"summary":"Another localClash task is already running."}\n'
+		return 0
+	fi
+	rm -f "$TASK_STATUS" "$TASK_RESULT"
+	: > "$LOG"
+	printf '{"ok":true,"running":true,"done":false,"summary":"Runtime start and Network Takeover task is running."}\n' > "$TASK_STATUS"
+	log_line "runtime_start_takeover: queued background task"
+	(
+		result="$("$0" call runtime_start_takeover_run 2>>"$LOG")"
+		rc=$?
+		if [ -z "$result" ]; then
+			result='{"ok":false,"code":"empty_task_result","message":"Runtime start and Network Takeover task produced no JSON result.","details":{},"next_actions":[]}'
+		fi
+		printf '%s\n' "$result" > "$TASK_RESULT"
+		printf '{"ok":true,"running":false,"done":true,"exit_code":%s,"result":%s}\n' "$rc" "$result" > "$TASK_STATUS"
+	) >/dev/null 2>&1 &
+	ok '"started":true,"running":true,"summary":"Runtime start and Network Takeover task started."'
+}
+
+runtime_start_takeover_run() {
+	local tmpdir
+	log_line "runtime_start_takeover: start"
+	tmpdir="$(mktemp -d /tmp/localclash-runtime.XXXXXX)" || {
+		log_line "runtime_start_takeover: temp directory creation failed"
+		fail "tmpdir_failed" "Could not create a temporary runtime task directory."
+		return 1
+	}
+
+	log_line "runtime_start_takeover: starting runtime"
+	if ! run_with_heartbeat "runtime_start_takeover: starting runtime" "$tmpdir/runtime.json" call_core runtime start --json; then
+		log_line "runtime_start_takeover: runtime start failed"
+		cat "$tmpdir/runtime.json"
+		rm -rf "$tmpdir"
+		return 1
+	fi
+
+	log_line "runtime_start_takeover: applying Network Takeover"
+	if ! run_with_heartbeat "runtime_start_takeover: applying Network Takeover" "$tmpdir/takeover.json" call_core takeover apply --json; then
+		log_line "runtime_start_takeover: Network Takeover apply failed"
+		log_line "runtime_start_takeover: stopping runtime after takeover failure"
+		runtime_stop > "$tmpdir/runtime-stop.json" 2>/dev/null || log_line "runtime_start_takeover: runtime stop after failure also failed"
+		cat "$tmpdir/takeover.json"
+		rm -rf "$tmpdir"
+		return 1
+	fi
+
+	log_line "runtime_start_takeover: completed"
+	printf '{"ok":true,"changed":true,"summary":"Runtime started and Network Takeover applied.","runtime":%s,"takeover":%s}\n' "$(cat "$tmpdir/runtime.json")" "$(cat "$tmpdir/takeover.json")"
+	rm -rf "$tmpdir"
 }
 
 method="${1:-}"
@@ -313,10 +1025,13 @@ case "$method" in
 {
   "status": {},
   "subscription_set": { "urls": [] },
+  "subscription_setup": { "urls": [] },
+  "subscription_setup_async": { "urls": [] },
   "subscription_refresh": {},
   "component_update": { "component": "localclash" },
   "apply": {},
   "runtime_start": {},
+  "runtime_start_takeover": {},
   "runtime_restart": {},
   "runtime_stop": {},
   "takeover_status": {},
@@ -328,7 +1043,10 @@ case "$method" in
   "service_status": {},
   "service_ensure": {},
   "bootstrap_core": {},
+  "bootstrap_assets": {},
   "bootstrap_default": {},
+  "task_status": {},
+  "bootstrap_task_status": {},
   "mcp_help": {},
   "bootstrap_logs": {}
 }
@@ -336,12 +1054,17 @@ JSON
 		;;
 	status) status ;;
 	subscription_set) subscription_set ;;
-	subscription_refresh) call_core subscription refresh --json ;;
-	component_update) component_update ;;
-	apply) apply_state ;;
+	subscription_setup) with_lock subscription_setup ;;
+	subscription_setup_async) start_subscription_setup ;;
+	subscription_setup_run) with_lock subscription_setup_run ;;
+	subscription_refresh) with_lock call_core subscription refresh --json ;;
+	component_update) with_lock component_update ;;
+	apply) with_lock apply_state ;;
 	runtime_start) call_core runtime start --json ;;
+	runtime_start_takeover) start_runtime_takeover ;;
+	runtime_start_takeover_run) with_lock runtime_start_takeover_run ;;
 	runtime_restart) call_core runtime restart --json ;;
-	runtime_stop) call_core runtime stop --json ;;
+	runtime_stop) runtime_stop ;;
 	takeover_status) call_core takeover status --json ;;
 	takeover_apply) call_core takeover apply --json ;;
 	takeover_stop) call_core takeover stop --json ;;
@@ -350,9 +1073,15 @@ JSON
 	service_ensure) service_ensure ;;
 	service_start) service_ensure >/dev/null && "$SERVICE" start >/dev/null 2>&1 && service_status || fail "service_start_failed" "Could not start localclash-mcp service." ;;
 	service_stop) [ -x "$SERVICE" ] && "$SERVICE" stop >/dev/null 2>&1; service_status ;;
-	bootstrap_core) bootstrap_core ;;
-	bootstrap_default) bootstrap_default ;;
+	bootstrap_core) with_lock bootstrap_core ;;
+	bootstrap_assets) with_lock bootstrap_assets ;;
+	bootstrap_default) start_bootstrap_default ;;
+	bootstrap_default_run) with_lock bootstrap_default_run ;;
+	task_status) task_status ;;
+	bootstrap_task_status) bootstrap_task_status ;;
 	mcp_help) mcp_help ;;
 	bootstrap_logs) bootstrap_logs ;;
 	*) fail "unknown_method" "Unknown localClash rpcd method." ;;
 esac
+
+exit 0

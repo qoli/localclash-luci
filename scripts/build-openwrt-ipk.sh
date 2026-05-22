@@ -32,6 +32,17 @@ Priority: optional
 Description: LuCI support for localClash.
 EOF
 
+cat > "${build_dir}/pkg/CONTROL/postinst" <<'EOF'
+#!/bin/sh
+rm -f /tmp/luci-indexcache.*.json 2>/dev/null || true
+rm -rf /tmp/luci-modulecache /tmp/luci-templatecache 2>/dev/null || true
+if [ -x /etc/init.d/rpcd ]; then
+	/etc/init.d/rpcd restart >/dev/null 2>&1 || true
+fi
+exit 0
+EOF
+chmod 755 "${build_dir}/pkg/CONTROL/postinst"
+
 docker run --rm \
 	--platform linux/amd64 \
 	-v "${repo_root}:/work" \
