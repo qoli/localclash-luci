@@ -145,6 +145,8 @@ function section(title, body) {
 }
 
 function showResult(title, result) {
+	var shouldAutoClose = result && result.ok === true;
+
 	ui.showModal(title, [
 		E('pre', { 'class': 'localclash-result' }, [ JSON.stringify(result, null, 2) ]),
 		E('div', { 'class': 'right' }, [
@@ -158,6 +160,12 @@ function showResult(title, result) {
 			}, [ _('關閉') ])
 		])
 	]);
+
+	if (shouldAutoClose)
+		window.setTimeout(function() {
+			ui.hideModal();
+			window.location.reload();
+		}, 900);
 }
 
 function showError(err) {

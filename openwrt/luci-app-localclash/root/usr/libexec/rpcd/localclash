@@ -622,6 +622,34 @@ subscription_set() {
 	input_to_core_file subscription set
 }
 
+subscription_get() {
+	local config urls count line url
+	config="$STATE_DIR/localclash-subscriptions.yaml"
+	urls=""
+	count=0
+
+	if [ ! -f "$config" ]; then
+		ok '"configured":false,"urls":[],"count":0'
+		return 0
+	fi
+
+	while IFS= read -r line; do
+		url="$(printf '%s\n' "$line" | sed -n 's/^[[:space:]]*url:[[:space:]]*//p')"
+		[ -n "$url" ] || continue
+		case "$url" in
+			\"*\") url="${url#\"}"; url="${url%\"}" ;;
+			\'*\') url="${url#\'}"; url="${url%\'}" ;;
+		esac
+		if [ "$count" -gt 0 ]; then
+			urls="$urls,"
+		fi
+		urls="$urls\"$(json_escape "$url")\""
+		count=$((count + 1))
+	done < "$config"
+
+	ok '"configured":true,"urls":['"$urls"'],"count":'"$count"
+}
+
 subscription_setup_file() {
 	local input tmpdir
 	input="$1"
@@ -1023,8 +1051,9 @@ case "$method" in
 	list)
 		cat <<'JSON'
 {
-  "status": {},
-  "subscription_set": { "urls": [] },
+	  "status": {},
+	  "subscription_get": {},
+	  "subscription_set": { "urls": [] },
   "subscription_setup": { "urls": [] },
   "subscription_setup_async": { "urls": [] },
   "subscription_refresh": {},
@@ -1053,6 +1082,7 @@ case "$method" in
 JSON
 		;;
 	status) status ;;
+	subscription_get) subscription_get ;;
 	subscription_set) subscription_set ;;
 	subscription_setup) with_lock subscription_setup ;;
 	subscription_setup_async) start_subscription_setup ;;

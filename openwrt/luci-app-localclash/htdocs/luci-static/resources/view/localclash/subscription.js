@@ -10,6 +10,12 @@ var callSubscriptionSet = rpc.declare({
 	expect: { '': {} }
 });
 
+var callSubscriptionGet = rpc.declare({
+	object: 'localclash',
+	method: 'subscription_get',
+	expect: { '': {} }
+});
+
 var callSubscriptionSetup = rpc.declare({
 	object: 'localclash',
 	method: 'subscription_setup',
@@ -50,6 +56,7 @@ var callBootstrapLogs = rpc.declare({
 
 function showResult(title, result) {
 	var shouldReload = !(result && result.ok === false);
+	var shouldAutoClose = result && result.ok === true;
 
 	ui.showModal(title, [
 		E('pre', { 'class': 'localclash-result' }, [ JSON.stringify(result, null, 2) ]),
@@ -65,6 +72,13 @@ function showResult(title, result) {
 			}, [ _('關閉') ])
 		])
 	]);
+
+	if (shouldAutoClose)
+		window.setTimeout(function() {
+			ui.hideModal();
+			if (shouldReload)
+				window.location.reload();
+		}, 900);
 }
 
 function showError(err) {
@@ -186,6 +200,11 @@ function liveTaskButton(label, handler, extraClass) {
 					modal.closeButton.setAttribute('data-reload', 'true');
 				}
 				modal.resultOutput.textContent = JSON.stringify(finalResult, null, 2);
+				if (finalResult && finalResult.ok === true)
+					window.setTimeout(function() {
+						ui.hideModal();
+						window.location.reload();
+					}, 900);
 			}).catch(function(err) {
 				window.clearInterval(timer);
 				if (!timer)
@@ -255,7 +274,15 @@ function requireSubscriptionUrls() {
 }
 
 return view.extend({
-	render: function() {
+	load: function() {
+		return callSubscriptionGet().catch(function() {
+			return { ok: false, urls: [] };
+		});
+	},
+
+	render: function(subscription) {
+		var savedUrls = subscription && Array.isArray(subscription.urls) ? subscription.urls.join('\n') : '';
+
 		return E('div', { 'class': 'cbi-map localclash-view' }, [
 			E('style', {}, [ [
 				'.localclash-view .localclash-section{clear:both;margin-top:1.5rem;padding-bottom:.25rem}',
@@ -275,11 +302,11 @@ return view.extend({
 			E('h2', {}, [ _('localClash') ]),
 			E('div', { 'class': 'cbi-section localclash-section' }, [
 				E('h3', {}, [ _('訂閱') ]),
-				E('textarea', {
-					'id': 'localclash-subscription-urls',
-					'class': 'cbi-input-textarea localclash-textarea',
-					'placeholder': _('每行一條訂閱 URL')
-				}),
+					E('textarea', {
+						'id': 'localclash-subscription-urls',
+						'class': 'cbi-input-textarea localclash-textarea',
+						'placeholder': _('每行一條訂閱 URL')
+					}, [ savedUrls ]),
 				actionRow([
 					liveTaskButton(_('保存並套用訂閱'), function() {
 						return callSubscriptionSetupAsync(requireSubscriptionUrls());

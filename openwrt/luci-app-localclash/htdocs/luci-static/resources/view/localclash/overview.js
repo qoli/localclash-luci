@@ -88,6 +88,8 @@ function section(title, body, extraClass) {
 }
 
 function showResult(title, result) {
+	var shouldAutoClose = result && result.ok === true;
+
 	ui.showModal(title, [
 		E('pre', { 'class': 'localclash-result' }, [ JSON.stringify(result, null, 2) ]),
 		E('div', { 'class': 'right' }, [
@@ -101,6 +103,12 @@ function showResult(title, result) {
 			}, [ _('關閉') ])
 		])
 	]);
+
+	if (shouldAutoClose)
+		window.setTimeout(function() {
+			ui.hideModal();
+			window.location.reload();
+		}, 900);
 }
 
 function showError(err) {
@@ -219,6 +227,11 @@ function liveTaskButton(label, handler, extraClass) {
 				else
 					modal.statusLine.textContent = _('任務完成。');
 				modal.resultOutput.textContent = JSON.stringify(finalResult, null, 2);
+				if (finalResult && finalResult.ok === true)
+					window.setTimeout(function() {
+						ui.hideModal();
+						window.location.reload();
+					}, 900);
 			}).catch(function(err) {
 				window.clearInterval(timer);
 				if (!timer)
