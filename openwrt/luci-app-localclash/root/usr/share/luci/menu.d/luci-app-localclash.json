@@ -10,7 +10,7 @@
     }
   },
   "admin/services/localclash/overview": {
-    "title": "Overview",
+    "title": "概览",
     "order": 10,
     "action": {
       "type": "view",
@@ -18,7 +18,7 @@
     }
   },
   "admin/services/localclash/subscription": {
-    "title": "Subscription",
+    "title": "订阅",
     "order": 20,
     "action": {
       "type": "view",

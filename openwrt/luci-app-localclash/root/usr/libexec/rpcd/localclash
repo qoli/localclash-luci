@@ -39,8 +39,8 @@ with_lock() {
 	waited=0
 	while ! mkdir "$LOCK_DIR" 2>/dev/null; do
 		if [ "$waited" -ge 120 ]; then
-			log_line "lock timeout waiting for $*"
-			fail "task_locked" "Another localClash task is still running. Please wait and try again."
+			log_line "等待任务锁超时：$*"
+			fail "task_locked" "另一个 localClash 任务仍在运行，请稍后再试。"
 			return 1
 		fi
 		waited=$((waited + 1))
@@ -66,7 +66,7 @@ run_with_heartbeat() {
 		sleep 5
 		if kill -0 "$pid" 2>/dev/null; then
 			elapsed=$((elapsed + 5))
-			log_line "$label: still running (${elapsed}s)"
+			log_line "$label：仍在执行（${elapsed}s）"
 		fi
 	done
 	wait "$pid"
@@ -101,7 +101,7 @@ fetch_with_watchdog() {
 			sleep 5
 			if kill -0 "$pid" 2>/dev/null; then
 				elapsed=$((elapsed + 5))
-				log_line "download: waiting for $label (${elapsed}s)"
+				log_line "下载：等待 $label（${elapsed}s）"
 				if [ "$elapsed" -ge "$FETCH_TIMEOUT" ]; then
 					kill "$pid" 2>/dev/null || exit 0
 					sleep 2
@@ -142,7 +142,7 @@ mirror_probe_ok() {
 	probe="$(probe_url_for_mirror "$kind" "$mirror")"
 	tmp="/tmp/localclash-mirror-probe.$$"
 	rm -f "$tmp"
-	log_line "download: probing $kind mirror $mirror"
+	log_line "下载：探测 $kind 镜像 $mirror"
 	if ! fetch_single_url "$probe" "$tmp"; then
 		rm -f "$tmp"
 		return 1
@@ -170,7 +170,7 @@ select_github_mirror() {
 	for mirror in $mirrors; do
 		if mirror_probe_ok "$kind" "$mirror"; then
 			printf '%s\n' "$mirror" > "$cache"
-			log_line "download: selected $kind mirror $mirror"
+			log_line "下载：已选择 $kind 镜像 $mirror"
 			printf '%s\n' "$mirror"
 			return 0
 		fi
@@ -190,7 +190,7 @@ cache_github_mirror() {
 	current="$(cat "$cache" 2>/dev/null || true)"
 	if [ "$current" != "$mirror" ]; then
 		printf '%s\n' "$mirror" > "$cache"
-		log_line "download: confirmed $kind mirror $mirror"
+		log_line "下载：已确认 $kind 镜像 $mirror"
 	fi
 }
 
@@ -203,7 +203,7 @@ invalidate_github_mirror() {
 	current="$(cat "$cache" 2>/dev/null || true)"
 	if [ "$current" = "$mirror" ]; then
 		rm -f "$cache"
-		log_line "download: discarded $kind mirror $mirror"
+		log_line "下载：已丢弃 $kind 镜像 $mirror"
 	fi
 }
 
@@ -314,7 +314,7 @@ fetch_url() {
 	tmp="$output.download.$$"
 	rm -f "$tmp"
 	for candidate in $(github_download_candidates "$url"); do
-		log_line "download: trying $candidate"
+		log_line "下载：尝试 $candidate"
 		if fetch_single_url "$candidate" "$tmp"; then
 			mv "$tmp" "$output"
 			note_github_candidate_success "$url" "$candidate"
@@ -333,14 +333,14 @@ fetch_manifest() {
 	tmp="$output.download.$$"
 	rm -f "$tmp"
 	for candidate in $(github_download_candidates "$url"); do
-		log_line "download: trying $candidate"
+		log_line "下载：尝试 $candidate"
 		if fetch_single_url "$candidate" "$tmp"; then
 			if jsonfilter -i "$tmp" -e '@.version' >/dev/null 2>&1; then
 				mv "$tmp" "$output"
 				note_github_candidate_success "$url" "$candidate"
 				return 0
 			fi
-			log_line "download: invalid release manifest from $candidate"
+			log_line "下载：$candidate 返回的 Release 清单无效"
 			note_github_candidate_failure "$url" "$candidate"
 		else
 			note_github_candidate_failure "$url" "$candidate"
@@ -358,7 +358,7 @@ fetch_url_verified() {
 	tmp="$output.download.$$"
 	rm -f "$tmp"
 	for candidate in $(github_download_candidates "$url"); do
-		log_line "download: trying $candidate"
+		log_line "下载：尝试 $candidate"
 		if fetch_single_url "$candidate" "$tmp"; then
 			actual_sha="$(sha256sum "$tmp" | cut -d ' ' -f 1)"
 			if [ "$actual_sha" = "$expected_sha" ]; then
@@ -366,7 +366,7 @@ fetch_url_verified() {
 				note_github_candidate_success "$url" "$candidate"
 				return 0
 			fi
-			log_line "download: checksum mismatch from $candidate"
+			log_line "下载：$candidate 校验和不匹配"
 			note_github_candidate_failure "$url" "$candidate"
 		else
 			note_github_candidate_failure "$url" "$candidate"
@@ -390,7 +390,7 @@ core_installed() {
 
 call_core() {
 	if ! core_installed; then
-		fail "bootstrap_core_missing" "localClash core is not installed."
+		fail "bootstrap_core_missing" "localClash 核心尚未安装。"
 		return 1
 	fi
 	mkdir -p "$STATE_DIR"
@@ -409,7 +409,7 @@ clear_zombie_runtime_pid() {
 	[ -n "$pid" ] || return 0
 	if ps w 2>/dev/null | awk -v pid="$pid" '$1 == pid && $4 ~ /^Z/ { found = 1 } END { exit found ? 0 : 1 }'; then
 		rm -f "$pid_file"
-		log_line "runtime: cleared stale zombie pid file for pid $pid"
+		log_line "runtime：已清理僵尸进程 PID 文件，pid=$pid"
 	fi
 }
 
@@ -524,7 +524,7 @@ mcp_help() {
 	if [ -f "$MCP_HELP" ]; then
 		text="$(sed "s#http://192\\.168\\.6\\.1:8765/mcp#$endpoint#g" "$MCP_HELP")"
 	else
-		text="Please connect to localClash MCP at $endpoint, first call tools_list and environment_inspect, then use the reported safety_level before making any runtime or router takeover changes."
+		text="请连接 localClash MCP：$endpoint。请先调用 tools_list 和 environment_inspect，再根据返回的 safety_level 决定是否执行 runtime 或路由器网络接管变更。"
 	fi
 	ok "\"text\":\"$(json_escape "$text")\",\"endpoint\":\"$(json_escape "$endpoint")\""
 }
@@ -544,7 +544,7 @@ MCP_ADDR="$MCP_ADDR"
 
 start_service() {
 	if [ ! -x "\$CORE" ]; then
-		echo "localClash core missing: \$CORE" >&2
+		echo "localClash 核心缺失：\$CORE" >&2
 		return 1
 	fi
 	mkdir -p "\$WORKDIR"
@@ -555,8 +555,8 @@ start_service() {
 }
 EOF
 	chmod 755 "$SERVICE"
-	log_line "service ensured at $SERVICE"
-	ok '"changed":true,"summary":"MCP service wrapper ensured."'
+	log_line "服务脚本已确保存在：$SERVICE"
+	ok '"changed":true,"summary":"MCP 服务脚本已确保存在。"'
 }
 
 status() {
@@ -569,7 +569,7 @@ status() {
 	subscription_ok="$(subscription_configured && echo true || echo false)"
 	runtime_ok="$(runtime_running && echo true || echo false)"
 	summary='"components":{"mihomo":{"installed":'"$mihomo_ok"'},"dashboard":{"installed":'"$dashboard_ok"'}},"subscription":{"configured":'"$subscription_ok"'},"runtime":{"running":'"$runtime_ok"'}'
-	printf '{"ok":true,"core":{"installed":%s,"path":"%s"},"base_assets":{"installed":%s,"path":"%s"},"mcp_service":{%s},"status":{"ok":true,"changed":false,"summary":"localClash LuCI status summary.",%s,"status":{%s}}}\n' "$core_ok" "$CORE" "$assets_ok" "$STATE_DIR" "$(service_body)" "$summary" "$summary"
+	printf '{"ok":true,"core":{"installed":%s,"path":"%s"},"base_assets":{"installed":%s,"path":"%s"},"mcp_service":{%s},"status":{"ok":true,"changed":false,"summary":"localClash LuCI 状态摘要。",%s,"status":{%s}}}\n' "$core_ok" "$CORE" "$assets_ok" "$STATE_DIR" "$(service_body)" "$summary" "$summary"
 }
 
 component_update() {
@@ -579,7 +579,7 @@ component_update() {
 	case "$component" in
 		localclash) bootstrap_core ;;
 		mihomo|dashboard) call_core component update "$component" --json ;;
-		*) fail "invalid_component" "component must be localclash, mihomo, or dashboard." ;;
+		*) fail "invalid_component" "component 必须是 localclash、mihomo 或 dashboard。" ;;
 	esac
 }
 
@@ -654,41 +654,41 @@ subscription_setup_file() {
 	local input tmpdir
 	input="$1"
 	tmpdir="$(mktemp -d /tmp/localclash-subscription.XXXXXX)" || {
-		fail "tmpdir_failed" "Could not create a temporary subscription directory."
+		fail "tmpdir_failed" "无法创建临时订阅目录。"
 		return 1
 	}
 
-	log_line "subscription_setup: saving subscription sources"
+	log_line "订阅设置：正在保存订阅源"
 	if ! call_core subscription set --input "$input" --json > "$tmpdir/set.json"; then
 		cat "$tmpdir/set.json"
 		rm -rf "$tmpdir"
 		return 1
 	fi
 
-	log_line "subscription_setup: refreshing subscription"
-	if ! run_with_heartbeat "subscription_setup: refreshing subscription" "$tmpdir/refresh.json" call_core subscription refresh --json; then
+	log_line "订阅设置：正在刷新订阅"
+	if ! run_with_heartbeat "订阅设置：正在刷新订阅" "$tmpdir/refresh.json" call_core subscription refresh --json; then
 		cat "$tmpdir/refresh.json"
 		rm -rf "$tmpdir"
 		return 1
 	fi
 
-	log_line "subscription_setup: rendering Mihomo configuration"
-	if ! run_with_heartbeat "subscription_setup: rendering Mihomo configuration" "$tmpdir/render.json" call_core config render --json; then
+	log_line "订阅设置：正在生成 Mihomo 配置"
+	if ! run_with_heartbeat "订阅设置：正在生成 Mihomo 配置" "$tmpdir/render.json" call_core config render --json; then
 		cat "$tmpdir/render.json"
 		rm -rf "$tmpdir"
 		return 1
 	fi
 
 	rm -rf "$tmpdir"
-	log_line "subscription_setup: completed"
-	ok '"changed":true,"summary":"Subscription saved, refreshed, and configuration rendered.","next_actions":["Start runtime when ready."]'
+	log_line "订阅设置：已完成"
+	ok '"changed":true,"summary":"订阅已保存、刷新，并已生成配置。","next_actions":["准备好后启动运行时。"]'
 }
 
 subscription_setup() {
 	local payload input tmpdir rc
 	payload="$(strip_ubus_rpc_session "$(cat)")"
 	tmpdir="$(mktemp -d /tmp/localclash-subscription-input.XXXXXX)" || {
-		fail "tmpdir_failed" "Could not create a temporary subscription input directory."
+		fail "tmpdir_failed" "无法创建临时订阅输入目录。"
 		return 1
 	}
 	input="$tmpdir/subscription.json"
@@ -702,31 +702,31 @@ subscription_setup() {
 start_subscription_setup() {
 	local payload result rc
 	if [ -d "$LOCK_DIR" ]; then
-		printf '{"ok":true,"started":false,"running":true,"summary":"Another localClash task is already running."}\n'
+		printf '{"ok":true,"started":false,"running":true,"summary":"另一个 localClash 任务正在运行。"}\n'
 		return 0
 	fi
 	payload="$(strip_ubus_rpc_session "$(cat)")"
 	rm -f "$TASK_STATUS" "$TASK_RESULT" "$TASK_INPUT"
 	: > "$LOG"
 	write_versioned_payload "$payload" > "$TASK_INPUT"
-	printf '{"ok":true,"running":true,"done":false,"summary":"Subscription setup task is running."}\n' > "$TASK_STATUS"
-	log_line "subscription_setup: queued background task"
+	printf '{"ok":true,"running":true,"done":false,"summary":"订阅设置任务正在运行。"}\n' > "$TASK_STATUS"
+	log_line "订阅设置：已加入后台任务队列"
 	(
 		result="$("$0" call subscription_setup_run 2>>"$LOG")"
 		rc=$?
 		if [ -z "$result" ]; then
-			result='{"ok":false,"code":"empty_task_result","message":"Subscription setup task produced no JSON result.","details":{},"next_actions":[]}'
+			result='{"ok":false,"code":"empty_task_result","message":"订阅设置任务没有产生 JSON 结果。","details":{},"next_actions":[]}'
 		fi
 		printf '%s\n' "$result" > "$TASK_RESULT"
 		printf '{"ok":true,"running":false,"done":true,"exit_code":%s,"result":%s}\n' "$rc" "$result" > "$TASK_STATUS"
 		rm -f "$TASK_INPUT"
 	) >/dev/null 2>&1 &
-	ok '"started":true,"running":true,"summary":"Subscription setup task started."'
+	ok '"started":true,"running":true,"summary":"订阅设置任务已启动。"'
 }
 
 subscription_setup_run() {
 	if [ ! -f "$TASK_INPUT" ]; then
-		fail "task_input_missing" "Subscription setup task input is missing."
+		fail "task_input_missing" "订阅设置任务输入缺失。"
 		return 1
 	fi
 	subscription_setup_file "$TASK_INPUT"
@@ -738,28 +738,28 @@ apply_state() {
 
 bootstrap_core() {
 	local arch tmpdir manifest binary asset_url asset_sha asset_version tmp_core
-	log_line "bootstrap_core: start"
+	log_line "核心初始化：开始"
 	if ! command -v jsonfilter >/dev/null 2>&1; then
-		log_line "bootstrap_core: jsonfilter missing"
-		fail "jsonfilter_missing" "jsonfilter is required to parse the localClash release manifest."
+		log_line "核心初始化：缺少 jsonfilter"
+		fail "jsonfilter_missing" "需要 jsonfilter 解析 localClash Release 清单。"
 		return 1
 	fi
 	arch="$(router_arch)" || {
-		log_line "bootstrap_core: unsupported architecture $(uname -m)"
-		fail "unsupported_arch" "This router architecture is not supported by the localClash bootstrap helper."
+		log_line "核心初始化：不支持的架构 $(uname -m)"
+		fail "unsupported_arch" "localClash 初始化助手不支持此路由器架构。"
 		return 1
 	}
 	tmpdir="$(mktemp -d /tmp/localclash-bootstrap.XXXXXX)" || {
-		fail "tmpdir_failed" "Could not create a temporary bootstrap directory."
+		fail "tmpdir_failed" "无法创建临时初始化目录。"
 		return 1
 	}
 	manifest="$tmpdir/manifest.json"
 	binary="$tmpdir/localclash"
-	log_line "bootstrap_core: downloading release manifest"
+	log_line "核心初始化：正在下载 Release 清单"
 	if ! fetch_manifest "$MANIFEST_URL" "$manifest"; then
 		rm -rf "$tmpdir"
-		log_line "bootstrap_core: manifest download failed"
-		fail "manifest_download_failed" "Could not download localClash release manifest."
+		log_line "核心初始化：Release 清单下载失败"
+		fail "manifest_download_failed" "无法下载 localClash Release 清单。"
 		return 1
 	fi
 	asset_url="$(jsonfilter -i "$manifest" -e "@.assets[@.arch=\"$arch\"].url" 2>/dev/null)"
@@ -767,27 +767,27 @@ bootstrap_core() {
 	asset_version="$(jsonfilter -i "$manifest" -e "@.version" 2>/dev/null)"
 	if [ -z "$asset_url" ] || [ -z "$asset_sha" ]; then
 		rm -rf "$tmpdir"
-		log_line "bootstrap_core: release manifest has no asset for $arch"
-		fail "manifest_asset_missing" "Release manifest does not contain a matching linux binary for this router."
+		log_line "核心初始化：Release 清单中没有 $arch 可用文件"
+		fail "manifest_asset_missing" "Release 清单中没有匹配此路由器的 Linux 二进制文件。"
 		return 1
 	fi
-	log_line "bootstrap_core: downloading localClash core $asset_version for $arch"
+	log_line "核心初始化：正在下载 localClash 核心 $asset_version（$arch）"
 	if ! fetch_url_verified "$asset_url" "$binary" "$asset_sha"; then
 		rm -rf "$tmpdir"
-		log_line "bootstrap_core: core download failed"
-		fail "core_download_failed" "Could not download localClash core binary."
+		log_line "核心初始化：核心下载失败"
+		fail "core_download_failed" "无法下载 localClash 核心二进制文件。"
 		return 1
 	fi
-	log_line "bootstrap_core: verified sha256"
+	log_line "核心初始化：sha256 校验通过"
 	chmod 755 "$binary"
 	mkdir -p "$(dirname "$CORE")"
 	tmp_core="$CORE.tmp.$$"
-	log_line "bootstrap_core: installing localClash core"
+	log_line "核心初始化：正在安装 localClash 核心"
 	if ! cp "$binary" "$tmp_core" || ! chmod 755 "$tmp_core" || ! mv "$tmp_core" "$CORE"; then
 		rm -f "$tmp_core"
 		rm -rf "$tmpdir"
-		log_line "bootstrap_core: core install failed"
-		fail "core_install_failed" "Could not install localClash core binary."
+		log_line "核心初始化：核心安装失败"
+		fail "core_install_failed" "无法安装 localClash 核心二进制文件。"
 		return 1
 	fi
 	if ! install_base_assets "$manifest" "$tmpdir"; then
@@ -796,8 +796,8 @@ bootstrap_core() {
 	fi
 	rm -rf "$tmpdir"
 	service_ensure >/dev/null
-	log_line "installed localClash core $asset_version for $arch"
-	ok "\"changed\":true,\"summary\":\"localClash core installed.\",\"core\":{\"installed\":true,\"path\":\"$CORE\",\"version\":\"$(json_escape "$asset_version")\",\"arch\":\"$arch\"}"
+	log_line "已安装 localClash 核心 $asset_version（$arch）"
+	ok "\"changed\":true,\"summary\":\"localClash 核心已安装。\",\"core\":{\"installed\":true,\"path\":\"$CORE\",\"version\":\"$(json_escape "$asset_version")\",\"arch\":\"$arch\"}"
 }
 
 install_base_assets() {
@@ -808,56 +808,56 @@ install_base_assets() {
 	assets_sha="$(jsonfilter -i "$manifest" -e '@.base_assets.sha256' 2>/dev/null)"
 	archive="$tmpdir/localclash-base-assets.tar.gz"
 	if [ -z "$assets_url" ] || [ -z "$assets_sha" ]; then
-		log_line "bootstrap_assets: release manifest has no base assets"
-		fail "manifest_base_assets_missing" "Release manifest does not contain localClash base assets."
+		log_line "基础文件初始化：Release 清单中没有基础文件"
+		fail "manifest_base_assets_missing" "Release 清单中没有 localClash 基础文件。"
 		return 1
 	fi
 	if ! command -v tar >/dev/null 2>&1; then
-		log_line "bootstrap_assets: tar missing"
-		fail "tar_missing" "tar is required to install localClash base assets."
+		log_line "基础文件初始化：缺少 tar"
+		fail "tar_missing" "需要 tar 安装 localClash 基础文件。"
 		return 1
 	fi
-	log_line "bootstrap_assets: downloading base assets"
+	log_line "基础文件初始化：正在下载基础文件"
 	if ! fetch_url_verified "$assets_url" "$archive" "$assets_sha"; then
-		log_line "bootstrap_assets: download failed"
-		fail "base_assets_download_failed" "Could not download localClash base assets."
+		log_line "基础文件初始化：下载失败"
+		fail "base_assets_download_failed" "无法下载 localClash 基础文件。"
 		return 1
 	fi
-	log_line "bootstrap_assets: verified sha256"
+	log_line "基础文件初始化：sha256 校验通过"
 	mkdir -p "$STATE_DIR"
-	log_line "bootstrap_assets: installing base assets to $STATE_DIR"
+	log_line "基础文件初始化：正在安装基础文件到 $STATE_DIR"
 	if ! tar -xzf "$archive" -C "$STATE_DIR"; then
-		log_line "bootstrap_assets: install failed"
-		fail "base_assets_install_failed" "Could not install localClash base assets."
+		log_line "基础文件初始化：安装失败"
+		fail "base_assets_install_failed" "无法安装 localClash 基础文件。"
 		return 1
 	fi
 	if ! base_assets_installed; then
-		log_line "bootstrap_assets: required files missing after install"
-		fail "base_assets_incomplete" "Installed localClash base assets are incomplete."
+		log_line "基础文件初始化：安装后仍缺少必要文件"
+		fail "base_assets_incomplete" "已安装的 localClash 基础文件不完整。"
 		return 1
 	fi
-	log_line "bootstrap_assets: installed"
+	log_line "基础文件初始化：已安装"
 	return 0
 }
 
 bootstrap_assets() {
 	local tmpdir manifest
-	log_line "bootstrap_assets: start"
+	log_line "基础文件初始化：开始"
 	if ! command -v jsonfilter >/dev/null 2>&1; then
-		log_line "bootstrap_assets: jsonfilter missing"
-		fail "jsonfilter_missing" "jsonfilter is required to parse the localClash release manifest."
+		log_line "基础文件初始化：缺少 jsonfilter"
+		fail "jsonfilter_missing" "需要 jsonfilter 解析 localClash Release 清单。"
 		return 1
 	fi
 	tmpdir="$(mktemp -d /tmp/localclash-assets.XXXXXX)" || {
-		fail "tmpdir_failed" "Could not create a temporary assets directory."
+		fail "tmpdir_failed" "无法创建临时基础文件目录。"
 		return 1
 	}
 	manifest="$tmpdir/manifest.json"
-	log_line "bootstrap_assets: downloading release manifest"
+	log_line "基础文件初始化：正在下载 Release 清单"
 	if ! fetch_manifest "$MANIFEST_URL" "$manifest"; then
 		rm -rf "$tmpdir"
-		log_line "bootstrap_assets: manifest download failed"
-		fail "manifest_download_failed" "Could not download localClash release manifest."
+		log_line "基础文件初始化：Release 清单下载失败"
+		fail "manifest_download_failed" "无法下载 localClash Release 清单。"
 		return 1
 	fi
 	if ! install_base_assets "$manifest" "$tmpdir"; then
@@ -865,7 +865,7 @@ bootstrap_assets() {
 		return 1
 	fi
 	rm -rf "$tmpdir"
-	ok "\"changed\":true,\"summary\":\"localClash base assets installed.\",\"base_assets\":{\"installed\":true,\"path\":\"$(json_escape "$STATE_DIR")\"}"
+	ok "\"changed\":true,\"summary\":\"localClash 基础文件已安装。\",\"base_assets\":{\"installed\":true,\"path\":\"$(json_escape "$STATE_DIR")\"}"
 }
 
 bootstrap_logs() {
@@ -891,74 +891,74 @@ task_status() {
 start_bootstrap_default() {
 	local result rc
 	if [ -d "$LOCK_DIR" ]; then
-		printf '{"ok":true,"started":false,"running":true,"summary":"Another localClash task is already running."}\n'
+		printf '{"ok":true,"started":false,"running":true,"summary":"另一个 localClash 任务正在运行。"}\n'
 		return 0
 	fi
 	rm -f "$TASK_STATUS" "$TASK_RESULT"
 	: > "$LOG"
-	printf '{"ok":true,"running":true,"done":false,"summary":"Bootstrap task is running."}\n' > "$TASK_STATUS"
-	log_line "bootstrap_default: queued background task"
+	printf '{"ok":true,"running":true,"done":false,"summary":"初始化任务正在运行。"}\n' > "$TASK_STATUS"
+	log_line "默认初始化：已加入后台任务队列"
 	(
 		result="$("$0" call bootstrap_default_run 2>>"$LOG")"
 		rc=$?
 		if [ -z "$result" ]; then
-			result='{"ok":false,"code":"empty_task_result","message":"Bootstrap task produced no JSON result.","details":{},"next_actions":[]}'
+			result='{"ok":false,"code":"empty_task_result","message":"初始化任务没有产生 JSON 结果。","details":{},"next_actions":[]}'
 		fi
 		printf '%s\n' "$result" > "$TASK_RESULT"
 		printf '{"ok":true,"running":false,"done":true,"exit_code":%s,"result":%s}\n' "$rc" "$result" > "$TASK_STATUS"
 	) >/dev/null 2>&1 &
-	ok '"started":true,"running":true,"summary":"Bootstrap task started."'
+	ok '"started":true,"running":true,"summary":"初始化任务已启动。"'
 }
 
 bootstrap_default_run() {
 	local tmpdir mihomo_attempt
-	log_line "bootstrap_default: start default router setup"
+	log_line "默认初始化：开始路由器默认设置"
 	tmpdir="$(mktemp -d /tmp/localclash-default.XXXXXX)" || {
-		log_line "bootstrap_default: temp directory creation failed"
-		fail "tmpdir_failed" "Could not create a temporary default setup directory."
+		log_line "默认初始化：临时目录创建失败"
+		fail "tmpdir_failed" "无法创建临时默认设置目录。"
 		return 1
 	}
 
 	if ! core_installed; then
-		log_line "bootstrap_default: localClash core missing, bootstrapping"
+		log_line "默认初始化：localClash 核心缺失，开始初始化"
 		if ! bootstrap_core > "$tmpdir/core.json"; then
 			cat "$tmpdir/core.json"
 			rm -rf "$tmpdir"
 			return 1
 		fi
 	else
-		log_line "bootstrap_default: localClash core already installed"
-		printf '{"ok":true,"changed":false,"summary":"localClash core already installed."}\n' > "$tmpdir/core.json"
+		log_line "默认初始化：localClash 核心已安装"
+		printf '{"ok":true,"changed":false,"summary":"localClash 核心已安装。"}\n' > "$tmpdir/core.json"
 	fi
 
 	if ! base_assets_installed; then
-		log_line "bootstrap_default: base assets missing, bootstrapping"
+		log_line "默认初始化：基础文件缺失，开始初始化"
 		if ! bootstrap_assets > "$tmpdir/assets.json"; then
 			cat "$tmpdir/assets.json"
 			rm -rf "$tmpdir"
 			return 1
 		fi
 	else
-		log_line "bootstrap_default: base assets already installed"
+		log_line "默认初始化：基础文件已安装"
 	fi
 
-	log_line "bootstrap_default: updating Mihomo core"
+	log_line "默认初始化：正在更新 Mihomo 核心"
 	mihomo_attempt=1
-	while ! run_with_heartbeat "bootstrap_default: updating Mihomo core" "$tmpdir/mihomo.json" call_core component update mihomo --json; do
+	while ! run_with_heartbeat "默认初始化：正在更新 Mihomo 核心" "$tmpdir/mihomo.json" call_core component update mihomo --json; do
 		if [ "$mihomo_attempt" -ge 3 ]; then
-			log_line "bootstrap_default: Mihomo core update failed after $mihomo_attempt attempts"
+			log_line "默认初始化：Mihomo 核心更新失败，已尝试 $mihomo_attempt 次"
 			cat "$tmpdir/mihomo.json"
 			rm -rf "$tmpdir"
 			return 1
 		fi
 		mihomo_attempt=$((mihomo_attempt + 1))
-		log_line "bootstrap_default: Mihomo core update failed, retrying attempt $mihomo_attempt"
+		log_line "默认初始化：Mihomo 核心更新失败，正在进行第 $mihomo_attempt 次重试"
 		sleep 2
 	done
 
-	log_line "bootstrap_default: updating Dashboard assets"
-	if ! run_with_heartbeat "bootstrap_default: updating Dashboard assets" "$tmpdir/dashboard.json" call_core component update dashboard --json; then
-		log_line "bootstrap_default: Dashboard update failed"
+	log_line "默认初始化：正在更新 Dashboard 面板文件"
+	if ! run_with_heartbeat "默认初始化：正在更新 Dashboard 面板文件" "$tmpdir/dashboard.json" call_core component update dashboard --json; then
+		log_line "默认初始化：Dashboard 面板更新失败"
 		cat "$tmpdir/dashboard.json"
 		rm -rf "$tmpdir"
 		return 1
@@ -974,9 +974,9 @@ bootstrap_default_run() {
 }
 JSON
 
-	log_line "bootstrap_default: applying default router/smart profile"
+	log_line "默认初始化：正在应用 router/smart 默认配置"
 	if ! call_core config apply-template --input "$tmpdir/template.json" --json > "$tmpdir/template-result.json"; then
-		log_line "bootstrap_default: default profile apply failed"
+		log_line "默认初始化：默认配置应用失败"
 		cat "$tmpdir/template-result.json"
 		rm -rf "$tmpdir"
 		return 1
@@ -984,61 +984,61 @@ JSON
 
 	service_ensure >/dev/null
 	rm -rf "$tmpdir"
-	log_line "bootstrap_default: completed default router setup"
-	ok '"changed":true,"summary":"Default router setup applied.","profile":{"runtime_profile":"router","core":"smart","template":"localclash-default"}'
+	log_line "默认初始化：已完成路由器默认设置"
+	ok '"changed":true,"summary":"已应用路由器默认设置。","profile":{"runtime_profile":"router","core":"smart","template":"localclash-default"}'
 }
 
 start_runtime_takeover() {
 	local result rc
 	if [ -d "$LOCK_DIR" ]; then
-		printf '{"ok":true,"started":false,"running":true,"summary":"Another localClash task is already running."}\n'
+		printf '{"ok":true,"started":false,"running":true,"summary":"另一个 localClash 任务正在运行。"}\n'
 		return 0
 	fi
 	rm -f "$TASK_STATUS" "$TASK_RESULT"
 	: > "$LOG"
-	printf '{"ok":true,"running":true,"done":false,"summary":"Runtime start and Network Takeover task is running."}\n' > "$TASK_STATUS"
-	log_line "runtime_start_takeover: queued background task"
+	printf '{"ok":true,"running":true,"done":false,"summary":"运行时启动和网络接管任务正在运行。"}\n' > "$TASK_STATUS"
+	log_line "运行时接管：已加入后台任务队列"
 	(
 		result="$("$0" call runtime_start_takeover_run 2>>"$LOG")"
 		rc=$?
 		if [ -z "$result" ]; then
-			result='{"ok":false,"code":"empty_task_result","message":"Runtime start and Network Takeover task produced no JSON result.","details":{},"next_actions":[]}'
+			result='{"ok":false,"code":"empty_task_result","message":"运行时启动和网络接管任务没有产生 JSON 结果。","details":{},"next_actions":[]}'
 		fi
 		printf '%s\n' "$result" > "$TASK_RESULT"
 		printf '{"ok":true,"running":false,"done":true,"exit_code":%s,"result":%s}\n' "$rc" "$result" > "$TASK_STATUS"
 	) >/dev/null 2>&1 &
-	ok '"started":true,"running":true,"summary":"Runtime start and Network Takeover task started."'
+	ok '"started":true,"running":true,"summary":"运行时启动和网络接管任务已启动。"'
 }
 
 runtime_start_takeover_run() {
 	local tmpdir
-	log_line "runtime_start_takeover: start"
+	log_line "运行时接管：开始"
 	tmpdir="$(mktemp -d /tmp/localclash-runtime.XXXXXX)" || {
-		log_line "runtime_start_takeover: temp directory creation failed"
-		fail "tmpdir_failed" "Could not create a temporary runtime task directory."
+		log_line "运行时接管：临时目录创建失败"
+		fail "tmpdir_failed" "无法创建临时 runtime 任务目录。"
 		return 1
 	}
 
-	log_line "runtime_start_takeover: starting runtime"
-	if ! run_with_heartbeat "runtime_start_takeover: starting runtime" "$tmpdir/runtime.json" call_core runtime start --json; then
-		log_line "runtime_start_takeover: runtime start failed"
+	log_line "运行时接管：正在启动运行时"
+	if ! run_with_heartbeat "运行时接管：正在启动运行时" "$tmpdir/runtime.json" call_core runtime start --json; then
+		log_line "运行时接管：运行时启动失败"
 		cat "$tmpdir/runtime.json"
 		rm -rf "$tmpdir"
 		return 1
 	fi
 
-	log_line "runtime_start_takeover: applying Network Takeover"
-	if ! run_with_heartbeat "runtime_start_takeover: applying Network Takeover" "$tmpdir/takeover.json" call_core takeover apply --json; then
-		log_line "runtime_start_takeover: Network Takeover apply failed"
-		log_line "runtime_start_takeover: stopping runtime after takeover failure"
-		runtime_stop > "$tmpdir/runtime-stop.json" 2>/dev/null || log_line "runtime_start_takeover: runtime stop after failure also failed"
+	log_line "运行时接管：正在应用网络接管"
+	if ! run_with_heartbeat "运行时接管：正在应用网络接管" "$tmpdir/takeover.json" call_core takeover apply --json; then
+		log_line "运行时接管：网络接管应用失败"
+		log_line "运行时接管：网络接管失败后正在停止运行时"
+		runtime_stop > "$tmpdir/runtime-stop.json" 2>/dev/null || log_line "运行时接管：失败后停止运行时也失败"
 		cat "$tmpdir/takeover.json"
 		rm -rf "$tmpdir"
 		return 1
 	fi
 
-	log_line "runtime_start_takeover: completed"
-	printf '{"ok":true,"changed":true,"summary":"Runtime started and Network Takeover applied.","runtime":%s,"takeover":%s}\n' "$(cat "$tmpdir/runtime.json")" "$(cat "$tmpdir/takeover.json")"
+	log_line "运行时接管：已完成"
+	printf '{"ok":true,"changed":true,"summary":"运行时已启动，网络接管已应用。","runtime":%s,"takeover":%s}\n' "$(cat "$tmpdir/runtime.json")" "$(cat "$tmpdir/takeover.json")"
 	rm -rf "$tmpdir"
 }
 
@@ -1101,7 +1101,7 @@ JSON
 	reset) call_core reset --json ;;
 	service_status) service_status ;;
 	service_ensure) service_ensure ;;
-	service_start) service_ensure >/dev/null && "$SERVICE" start >/dev/null 2>&1 && service_status || fail "service_start_failed" "Could not start localclash-mcp service." ;;
+	service_start) service_ensure >/dev/null && "$SERVICE" start >/dev/null 2>&1 && service_status || fail "service_start_failed" "无法启动 localclash-mcp 服务。" ;;
 	service_stop) [ -x "$SERVICE" ] && "$SERVICE" stop >/dev/null 2>&1; service_status ;;
 	bootstrap_core) with_lock bootstrap_core ;;
 	bootstrap_assets) with_lock bootstrap_assets ;;
@@ -1111,7 +1111,7 @@ JSON
 	bootstrap_task_status) bootstrap_task_status ;;
 	mcp_help) mcp_help ;;
 	bootstrap_logs) bootstrap_logs ;;
-	*) fail "unknown_method" "Unknown localClash rpcd method." ;;
+	*) fail "unknown_method" "未知的 localClash rpcd 方法。" ;;
 esac
 
 exit 0

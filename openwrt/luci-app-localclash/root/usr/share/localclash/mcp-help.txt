@@ -1,1 +1,1 @@
-Please connect to localClash MCP at http://192.168.6.1:8765/mcp, first call tools_list and environment_inspect, then use the reported safety_level before making any runtime or router takeover changes.
+请连接 localClash MCP：http://192.168.6.1:8765/mcp。请先调用 tools_list 和 environment_inspect，再根据返回的 safety_level 决定是否执行运行时或路由器网络接管变更。

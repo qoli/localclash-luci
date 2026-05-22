@@ -69,7 +69,7 @@ function showResult(title, result) {
 					if (shouldReload)
 						window.location.reload();
 				}
-			}, [ _('關閉') ])
+			}, [ _('关闭') ])
 		])
 	]);
 
@@ -87,7 +87,7 @@ function showError(err) {
 
 function formatLogLines(lines) {
 	if (!lines || !lines.length)
-		return _('等待任務輸出…');
+		return _('等待任务输出…');
 
 	return lines.join('\n');
 }
@@ -107,8 +107,8 @@ function formatText(text) {
 }
 
 function showTaskModal(title) {
-	var logOutput = E('pre', { 'class': 'localclash-task-log' }, [ _('等待任務輸出…') ]);
-	var statusLine = E('p', { 'class': 'localclash-task-status' }, [ _('正在啟動任務…') ]);
+	var logOutput = E('pre', { 'class': 'localclash-task-log' }, [ _('等待任务输出…') ]);
+	var statusLine = E('p', { 'class': 'localclash-task-status' }, [ _('正在启动任务…') ]);
 	var resultOutput = E('pre', { 'class': 'localclash-result localclash-task-result' }, []);
 	var closeButton = E('button', {
 		'type': 'button',
@@ -118,7 +118,7 @@ function showTaskModal(title) {
 			if (closeButton.getAttribute('data-reload') === 'true')
 				window.location.reload();
 		}
-	}, [ _('關閉') ]);
+	}, [ _('关闭') ]);
 
 	ui.showModal(title, [
 		statusLine,
@@ -152,18 +152,18 @@ function liveTaskButton(label, handler, extraClass) {
 			button.disabled = true;
 			button.setAttribute('aria-busy', 'true');
 			button.classList.add('localclash-busy');
-			button.textContent = _('查看任務輸出…');
+			button.textContent = _('查看任务输出…');
 			modal = showTaskModal(label);
 
 			function updateLogs() {
 				return callBootstrapLogs().then(function(result) {
 					var elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
 					var lines = (result && result.logs) || [];
-					modal.statusLine.textContent = formatText(_('任務執行中，已等待 %s 秒。'), elapsed);
+					modal.statusLine.textContent = formatText(_('任务执行中，已等待 %s 秒。'), elapsed);
 					modal.logOutput.textContent = formatLogLines(lines);
 					modal.logOutput.scrollTop = modal.logOutput.scrollHeight;
 				}).catch(function(err) {
-					modal.statusLine.textContent = formatText(_('無法讀取任務輸出：%s'), err.message || String(err));
+					modal.statusLine.textContent = formatText(_('无法读取任务输出：%s'), err.message || String(err));
 				});
 			}
 
@@ -194,9 +194,9 @@ function liveTaskButton(label, handler, extraClass) {
 				});
 			}).then(function(finalResult) {
 				if (finalResult && finalResult.ok === false)
-					modal.statusLine.textContent = formatText(_('任務失敗：%s'), finalResult.message || finalResult.code || _('Unknown error'));
+					modal.statusLine.textContent = formatText(_('任务失败：%s'), finalResult.message || finalResult.code || _('未知错误'));
 				else {
-					modal.statusLine.textContent = _('任務完成。');
+					modal.statusLine.textContent = _('任务完成。');
 					modal.closeButton.setAttribute('data-reload', 'true');
 				}
 				modal.resultOutput.textContent = JSON.stringify(finalResult, null, 2);
@@ -208,10 +208,10 @@ function liveTaskButton(label, handler, extraClass) {
 			}).catch(function(err) {
 				window.clearInterval(timer);
 				if (!timer)
-					modal.logOutput.textContent = _('任務未啟動。');
+					modal.logOutput.textContent = _('任务未启动。');
 
 				return (timer ? updateLogs() : Promise.resolve()).then(function() {
-					modal.statusLine.textContent = formatText(_('任務失敗：%s'), err.message || String(err));
+					modal.statusLine.textContent = formatText(_('任务失败：%s'), err.message || String(err));
 					modal.resultOutput.textContent = JSON.stringify({ ok: false, message: err.message || String(err) }, null, 2);
 				});
 			}).finally(function() {
@@ -237,7 +237,7 @@ function commandButton(label, handler, extraClass) {
 			button.disabled = true;
 			button.setAttribute('aria-busy', 'true');
 			button.classList.add('localclash-busy');
-			button.textContent = _('執行中…');
+			button.textContent = _('执行中…');
 
 			return Promise.resolve().then(handler).then(function(result) {
 				showResult(label, result);
@@ -268,7 +268,7 @@ function requireSubscriptionUrls() {
 	var urls = subscriptionUrls();
 
 	if (!urls.length)
-		throw new Error(_('Please enter at least one subscription URL.'));
+		throw new Error(_('请至少输入一个订阅 URL。'));
 
 	return urls;
 }
@@ -301,21 +301,21 @@ return view.extend({
 			].join('\n') ]),
 			E('h2', {}, [ _('localClash') ]),
 			E('div', { 'class': 'cbi-section localclash-section' }, [
-				E('h3', {}, [ _('訂閱') ]),
+				E('h3', {}, [ _('订阅') ]),
 					E('textarea', {
 						'id': 'localclash-subscription-urls',
 						'class': 'cbi-input-textarea localclash-textarea',
-						'placeholder': _('每行一條訂閱 URL')
+						'placeholder': _('每行一条订阅 URL')
 					}, [ savedUrls ]),
 				actionRow([
-					liveTaskButton(_('保存並套用訂閱'), function() {
+					liveTaskButton(_('保存并应用订阅'), function() {
 						return callSubscriptionSetupAsync(requireSubscriptionUrls());
 					}, 'cbi-button-apply'),
-					commandButton(_('保存訂閱'), function() {
+					commandButton(_('保存订阅'), function() {
 						return callSubscriptionSet(requireSubscriptionUrls());
 					}),
-					commandButton(_('刷新訂閱'), callSubscriptionRefresh),
-					commandButton(_('套用配置'), callApply, 'cbi-button-action')
+					commandButton(_('刷新订阅'), callSubscriptionRefresh),
+					commandButton(_('应用配置'), callApply, 'cbi-button-action')
 				])
 			])
 		]);

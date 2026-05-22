@@ -99,7 +99,7 @@ function statusText(value) {
 		return '-';
 
 	if (typeof value === 'boolean')
-		return value ? _('Yes') : _('No');
+		return value ? _('是') : _('否');
 
 	return String(value);
 }
@@ -113,25 +113,25 @@ function row(label, value) {
 
 function takeoverSummary(takeover) {
 	if (takeover && takeover.pending === true)
-		return _('檢查中…');
+		return _('检查中…');
 
 	var status = takeover && takeover.status ? takeover.status : takeover;
 
 	if (takeover && takeover.ok === false)
-		return takeover.code || takeover.message || _('Unavailable');
+		return takeover.code || takeover.message || _('不可用');
 
 	if (status && typeof status === 'object') {
 		if (status.effective === true)
-			return _('Active');
+			return _('已生效');
 		if (status.effective === false)
-			return _('Inactive');
+			return _('未生效');
 		if (status.active === true || status.running === true || status.enabled === true)
-			return _('Active');
+			return _('已生效');
 		if (status.active === false || status.running === false || status.enabled === false)
-			return _('Inactive');
+			return _('未生效');
 		if (status.profile_mode || status.runtime_running !== undefined)
 			return [
-				status.effective ? _('Active') : _('Inactive'),
+				status.effective ? _('已生效') : _('未生效'),
 				status.profile_mode ? 'profile=' + status.profile_mode : null,
 				status.runtime_running !== undefined ? 'runtime=' + status.runtime_running : null
 			].filter(Boolean).join(', ');
@@ -174,7 +174,7 @@ function showResult(title, result) {
 					ui.hideModal();
 					window.location.reload();
 				}
-			}, [ _('關閉') ])
+			}, [ _('关闭') ])
 		])
 	]);
 
@@ -202,7 +202,7 @@ function commandButton(label, handler, extraClass) {
 			button.disabled = true;
 			button.setAttribute('aria-busy', 'true');
 			button.classList.add('localclash-busy');
-			button.textContent = _('執行中…');
+			button.textContent = _('执行中…');
 
 			return Promise.resolve().then(handler).then(function(result) {
 				showResult(label, result);
@@ -252,50 +252,50 @@ return view.extend({
 				'@media (max-width: 700px){.localclash-view .localclash-button{width:100%;min-width:0}.localclash-view .localclash-status-table{display:table;width:100%}}'
 			].join('\n') ]),
 			E('h2', {}, [ _('localClash') ]),
-			section(_('Status'), E('table', { 'class': 'table localclash-status-table' }, [
+			section(_('状态'), E('table', { 'class': 'table localclash-status-table' }, [
 					E('tbody', {}, [
-						row(_('localClash core'), core.installed ? _('Installed') : _('Missing')),
-						row(_('Core path'), core.path),
-						row(_('Base assets'), baseAssets.installed ? _('Installed') : _('Missing')),
-						row(_('Base assets path'), baseAssets.path),
-						row(_('MCP service installed'), service.installed),
-						row(_('MCP service running'), service.running),
-						row(_('MCP endpoint'), mcp.endpoint),
-						row(_('Mihomo runtime running'), runtime.running),
+						row(_('localClash 核心'), core.installed ? _('已安装') : _('缺失')),
+						row(_('核心路径'), core.path),
+						row(_('基础文件'), baseAssets.installed ? _('已安装') : _('缺失')),
+						row(_('基础文件路径'), baseAssets.path),
+						row(_('MCP 服务已安装'), service.installed),
+						row(_('MCP 服务运行中'), service.running),
+						row(_('MCP 端点'), mcp.endpoint),
+						row(_('Mihomo 运行时运行中'), runtime.running),
 						E('tr', {}, [
-							E('th', { 'scope': 'row' }, [ _('Takeover') ]),
+							E('th', { 'scope': 'row' }, [ _('网络接管') ]),
 							E('td', { 'id': 'localclash-advanced-takeover-status' }, [ takeoverSummary(takeover) ])
 						])
 					])
 				])),
-			section(_('Bootstrap'), E('div', {}, [
-				E('p', {}, [ _('Install or update the localClash core binary and base assets from the GitHub release manifest, then ensure the MCP service wrapper exists.') ]),
+			section(_('初始化'), E('div', {}, [
+				E('p', {}, [ _('从 GitHub 发布清单安装或更新 localClash 核心和基础文件，然后确保 MCP 服务脚本存在。') ]),
 				actionRow([
-					commandButton(_('Install / Update Core'), callBootstrapCore, 'cbi-button-action'),
-					commandButton(_('Ensure MCP Service'), callServiceEnsure),
-					commandButton(_('View Logs'), callBootstrapLogs)
+					commandButton(_('安装 / 更新核心'), callBootstrapCore, 'cbi-button-action'),
+					commandButton(_('确保 MCP 服务'), callServiceEnsure),
+					commandButton(_('查看日志'), callBootstrapLogs)
 				])
 			])),
-			section(_('MCP Service'), actionRow([
-				commandButton(_('Start MCP Service'), callServiceStart, 'cbi-button-apply'),
-				commandButton(_('Stop MCP Service'), callServiceStop, 'cbi-button-reset')
+			section(_('MCP 服务'), actionRow([
+				commandButton(_('启动 MCP 服务'), callServiceStart, 'cbi-button-apply'),
+				commandButton(_('停止 MCP 服务'), callServiceStop, 'cbi-button-reset')
 			])),
-			section(_('Runtime'), actionRow([
-				commandButton(_('Start'), callRuntimeStart, 'cbi-button-apply'),
-				commandButton(_('Restart'), callRuntimeRestart),
-				commandButton(_('Stop'), callRuntimeStop, 'cbi-button-reset')
+			section(_('运行时'), actionRow([
+				commandButton(_('启动'), callRuntimeStart, 'cbi-button-apply'),
+				commandButton(_('重启'), callRuntimeRestart),
+				commandButton(_('停止'), callRuntimeStop, 'cbi-button-reset')
 			])),
-			section(_('Components'), actionRow([
-				commandButton(_('Update localClash'), function() { return callComponentUpdate('localclash'); }),
-				commandButton(_('Update Mihomo'), function() { return callComponentUpdate('mihomo'); }),
-				commandButton(_('Update Dashboard'), function() { return callComponentUpdate('dashboard'); })
+			section(_('组件'), actionRow([
+				commandButton(_('更新 localClash'), function() { return callComponentUpdate('localclash'); }),
+				commandButton(_('更新 Mihomo'), function() { return callComponentUpdate('mihomo'); }),
+				commandButton(_('更新 Dashboard'), function() { return callComponentUpdate('dashboard'); })
 			])),
-			section(_('Network Takeover'), actionRow([
-				commandButton(_('Apply Takeover'), callTakeoverApply, 'cbi-button-apply'),
-				commandButton(_('Stop Takeover'), callTakeoverStop, 'cbi-button-reset')
+			section(_('网络接管'), actionRow([
+				commandButton(_('应用接管'), callTakeoverApply, 'cbi-button-apply'),
+				commandButton(_('停止接管'), callTakeoverStop, 'cbi-button-reset')
 			])),
-			section(_('Maintenance'), actionRow([
-				commandButton(_('Reset localClash'), callReset, 'localclash-danger')
+			section(_('维护'), actionRow([
+				commandButton(_('重置 localClash'), callReset, 'localclash-danger')
 			]))
 		]);
 	}

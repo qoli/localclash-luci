@@ -68,7 +68,7 @@ function statusText(value) {
 		return '-';
 
 	if (typeof value === 'boolean')
-		return value ? _('Yes') : _('No');
+		return value ? _('是') : _('否');
 
 	return String(value);
 }
@@ -100,7 +100,7 @@ function showResult(title, result) {
 					ui.hideModal();
 					window.location.reload();
 				}
-			}, [ _('關閉') ])
+			}, [ _('关闭') ])
 		])
 	]);
 
@@ -117,7 +117,7 @@ function showError(err) {
 
 function formatLogLines(lines) {
 	if (!lines || !lines.length)
-		return _('等待任務輸出…');
+		return _('等待任务输出…');
 
 	return lines.join('\n');
 }
@@ -137,8 +137,8 @@ function formatText(text) {
 }
 
 function showTaskModal(title) {
-	var logOutput = E('pre', { 'class': 'localclash-task-log' }, [ _('等待任務輸出…') ]);
-	var statusLine = E('p', { 'class': 'localclash-task-status' }, [ _('正在啟動任務…') ]);
+	var logOutput = E('pre', { 'class': 'localclash-task-log' }, [ _('等待任务输出…') ]);
+	var statusLine = E('p', { 'class': 'localclash-task-status' }, [ _('正在启动任务…') ]);
 	var resultOutput = E('pre', { 'class': 'localclash-result localclash-task-result' }, []);
 	var closeButton = E('button', {
 		'type': 'button',
@@ -147,7 +147,7 @@ function showTaskModal(title) {
 			ui.hideModal();
 			window.location.reload();
 		}
-	}, [ _('關閉') ]);
+	}, [ _('关闭') ]);
 
 	ui.showModal(title, [
 		statusLine,
@@ -181,18 +181,18 @@ function liveTaskButton(label, handler, extraClass) {
 			button.disabled = true;
 			button.setAttribute('aria-busy', 'true');
 			button.classList.add('localclash-busy');
-			button.textContent = _('查看任務輸出…');
+			button.textContent = _('查看任务输出…');
 			modal = showTaskModal(label);
 
 			function updateLogs() {
 				return callBootstrapLogs().then(function(result) {
 					var elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
 					var lines = (result && result.logs) || [];
-					modal.statusLine.textContent = formatText(_('任務執行中，已等待 %s 秒。'), elapsed);
+					modal.statusLine.textContent = formatText(_('任务执行中，已等待 %s 秒。'), elapsed);
 					modal.logOutput.textContent = formatLogLines(lines);
 					modal.logOutput.scrollTop = modal.logOutput.scrollHeight;
 				}).catch(function(err) {
-					modal.statusLine.textContent = formatText(_('無法讀取任務輸出：%s'), err.message || String(err));
+					modal.statusLine.textContent = formatText(_('无法读取任务输出：%s'), err.message || String(err));
 				});
 			}
 
@@ -223,9 +223,9 @@ function liveTaskButton(label, handler, extraClass) {
 				});
 			}).then(function(finalResult) {
 				if (finalResult && finalResult.ok === false)
-					modal.statusLine.textContent = formatText(_('任務失敗：%s'), finalResult.message || finalResult.code || _('Unknown error'));
+					modal.statusLine.textContent = formatText(_('任务失败：%s'), finalResult.message || finalResult.code || _('未知错误'));
 				else
-					modal.statusLine.textContent = _('任務完成。');
+					modal.statusLine.textContent = _('任务完成。');
 				modal.resultOutput.textContent = JSON.stringify(finalResult, null, 2);
 				if (finalResult && finalResult.ok === true)
 					window.setTimeout(function() {
@@ -235,10 +235,10 @@ function liveTaskButton(label, handler, extraClass) {
 			}).catch(function(err) {
 				window.clearInterval(timer);
 				if (!timer)
-					modal.logOutput.textContent = _('任務未啟動。');
+					modal.logOutput.textContent = _('任务未启动。');
 
 				return (timer ? updateLogs() : Promise.resolve()).then(function() {
-					modal.statusLine.textContent = formatText(_('任務失敗：%s'), err.message || String(err));
+					modal.statusLine.textContent = formatText(_('任务失败：%s'), err.message || String(err));
 					modal.resultOutput.textContent = JSON.stringify({ ok: false, message: err.message || String(err) }, null, 2);
 				});
 			}).finally(function() {
@@ -264,7 +264,7 @@ function commandButton(label, handler, extraClass) {
 			button.disabled = true;
 			button.setAttribute('aria-busy', 'true');
 			button.classList.add('localclash-busy');
-			button.textContent = _('執行中…');
+			button.textContent = _('执行中…');
 
 			return Promise.resolve().then(handler).then(function(result) {
 				showResult(label, result);
@@ -396,33 +396,33 @@ function runtimeRunning(status) {
 
 function takeoverState(takeover) {
 	if (takeover && takeover.pending === true)
-		return _('檢查中…');
+		return _('检查中…');
 
 	var state = stringState(takeover);
 
 	if (takeover && typeof takeover === 'object') {
 		if (takeover.status && typeof takeover.status === 'object') {
 			if (takeover.status.effective === true)
-				return _('Active');
+				return _('已生效');
 			if (takeover.status.effective === false)
-				return _('Inactive');
+				return _('未生效');
 		}
 		if (takeover.effective === true)
-			return _('Active');
+			return _('已生效');
 		if (takeover.effective === false)
-			return _('Inactive');
+			return _('未生效');
 		if (takeover.active === true || takeover.running === true || takeover.enabled === true)
-			return _('Active');
+			return _('已生效');
 		if (takeover.active === false || takeover.running === false || takeover.enabled === false)
-			return _('Inactive');
+			return _('未生效');
 		if (takeover.ok === false)
-			return takeover.code || _('Unavailable');
+			return takeover.code || _('不可用');
 	}
 
 	if (/active|enabled|running/.test(state))
-		return _('Active');
+		return _('已生效');
 	if (/inactive|disabled|stopped/.test(state))
-		return _('Inactive');
+		return _('未生效');
 
 	return state || '-';
 }
@@ -460,29 +460,29 @@ function classify(data, takeover) {
 	var missing = [];
 
 	if (!core.installed) {
-		missing = [ 'localClash Core', 'Base Assets', 'Mihomo Core', 'Dashboard' ];
+		missing = [ 'localClash 核心', '基础文件', 'Mihomo 核心', 'Dashboard 面板' ];
 		return {
 			id: 'bootstrap',
 			title: _('初始化未完成'),
-			message: formatText(_('缺少 %s。應用「預設配置（路由器配置 / smart 核心 / default 預設）」後即可完成一條龍初始化。'), missing.join(' / ')),
+			message: formatText(_('缺少 %s。应用「预设配置（路由器配置 / smart 核心 / default 预设）」后即可完成一条龙初始化。'), missing.join(' / ')),
 			missing: missing
 		};
 	}
 
 	if (!baseAssets.installed)
-		missing.push('Base Assets');
+		missing.push('基础文件');
 
 	if (!componentInstalled(status, [ 'mihomo' ]))
-		missing.push('Mihomo Core');
+		missing.push('Mihomo 核心');
 
 	if (!componentInstalled(status, [ 'dashboard', 'ui' ]))
-		missing.push('Dashboard');
+		missing.push('Dashboard 面板');
 
 	if (missing.length > 0) {
 		return {
 			id: 'bootstrap',
 			title: _('初始化未完成'),
-			message: formatText(_('缺少 %s。應用「預設配置（路由器配置 / smart 核心 / default 預設）」後即可完成一條龍初始化。'), missing.join(' / ')),
+			message: formatText(_('缺少 %s。应用「预设配置（路由器配置 / smart 核心 / default 预设）」后即可完成一条龙初始化。'), missing.join(' / ')),
 			missing: missing
 		};
 	}
@@ -490,48 +490,48 @@ function classify(data, takeover) {
 	if (!subscriptionConfigured(status)) {
 		return {
 			id: 'subscription',
-			title: _('等待訂閱'),
-			message: _('localClash 已就緒，但還沒有可用訂閱。')
+			title: _('等待订阅'),
+			message: _('localClash 已就绪，但还没有可用订阅。')
 		};
 	}
 
 	if (!runtimeRunning(status)) {
 		return {
 			id: 'runtime_stopped',
-			title: _('已就緒，尚未啟動'),
-			message: _('訂閱與組件已就緒。路由器環境會默認啟動 runtime 並接管路由器流量。')
+			title: _('已就绪，尚未启动'),
+			message: _('订阅与组件已就绪。路由器环境会默认启动运行时并接管路由器流量。')
 		};
 	}
 
 	return {
 		id: 'running',
-		title: _('運行中'),
-		message: formatText(_('localClash runtime 正在運行。Network Takeover：%s'), takeoverState(takeover))
+		title: _('运行中'),
+		message: formatText(_('localClash 运行时正在运行。网络接管：%s'), takeoverState(takeover))
 	};
 }
 
 function primaryActions(state) {
 	if (state.id === 'bootstrap') {
 		return actionRow([
-			liveTaskButton(_('一鍵初始化'), callBootstrapDefault, 'cbi-button-apply'),
-			commandButton(_('查看日誌'), callBootstrapLogs)
+			liveTaskButton(_('一键初始化'), callBootstrapDefault, 'cbi-button-apply'),
+			commandButton(_('查看日志'), callBootstrapLogs)
 		]);
 	}
 
 	if (state.id === 'subscription') {
 		return actionRow([
-			linkButton(_('填寫訂閱'), L.url('admin/services/localclash/subscription'), 'cbi-button-apply')
+			linkButton(_('填写订阅'), L.url('admin/services/localclash/subscription'), 'cbi-button-apply')
 		]);
 	}
 
 	if (state.id === 'runtime_stopped') {
 		return actionRow([
-			liveTaskButton(_('啟動 runtime 並接管路由器流量'), callRuntimeStartTakeover, 'cbi-button-apply')
+			liveTaskButton(_('启动运行时并接管路由器流量'), callRuntimeStartTakeover, 'cbi-button-apply')
 		]);
 	}
 
 	return actionRow([
-		commandButton(_('停止 runtime'), function() {
+		commandButton(_('停止运行时'), function() {
 			return callTakeoverStop().catch(function(err) {
 				return { ok: false, ignored: true, message: err.message || String(err) };
 			}).then(function(takeover) {
@@ -540,7 +540,7 @@ function primaryActions(state) {
 				});
 			});
 		}, 'cbi-button-reset'),
-		commandButton(_('狀態 runtime'), callStatus)
+		commandButton(_('运行时状态'), callStatus)
 	]);
 }
 
@@ -554,21 +554,21 @@ function diagnosticTable(data, takeover) {
 
 	return E('table', { 'class': 'table localclash-status-table' }, [
 		E('tbody', {}, [
-			row(_('localClash core'), core.installed ? _('Installed') : _('Missing')),
-			row(_('Core path'), core.path),
-			row(_('Base assets'), baseAssets.installed ? _('Installed') : _('Missing')),
-			row(_('Base assets path'), baseAssets.path),
-			row(_('Mihomo core'), core.installed ? (componentInstalled(status, [ 'mihomo' ]) ? _('Installed') : _('Missing')) : _('Missing')),
-			row('Dashboard', core.installed ? (componentInstalled(status, [ 'dashboard', 'ui' ]) ? _('Installed') : _('Missing')) : _('Missing')),
-			row(_('Subscription'), subscriptionConfigured(status) ? _('Configured') : _('Missing')),
-			row(_('Mihomo runtime running'), runtime.running !== undefined ? runtime.running : runtimeRunning(status)),
+			row(_('localClash 核心'), core.installed ? _('已安装') : _('缺失')),
+			row(_('核心路径'), core.path),
+			row(_('基础文件'), baseAssets.installed ? _('已安装') : _('缺失')),
+			row(_('基础文件路径'), baseAssets.path),
+			row(_('Mihomo 核心'), core.installed ? (componentInstalled(status, [ 'mihomo' ]) ? _('已安装') : _('缺失')) : _('缺失')),
+			row(_('Dashboard 面板'), core.installed ? (componentInstalled(status, [ 'dashboard', 'ui' ]) ? _('已安装') : _('缺失')) : _('缺失')),
+			row(_('订阅'), subscriptionConfigured(status) ? _('已配置') : _('缺失')),
+			row(_('Mihomo 运行时运行中'), runtime.running !== undefined ? runtime.running : runtimeRunning(status)),
 			E('tr', {}, [
-				E('th', { 'scope': 'row' }, [ _('Network Takeover') ]),
+				E('th', { 'scope': 'row' }, [ _('网络接管') ]),
 				takeoverStatusCell(takeover, 'localclash-overview-takeover-status')
 			]),
-			row(_('MCP service installed'), service.installed),
-			row(_('MCP service running'), service.running),
-			row(_('MCP endpoint'), mcp.endpoint)
+			row(_('MCP 服务已安装'), service.installed),
+			row(_('MCP 服务运行中'), service.running),
+			row(_('MCP 端点'), mcp.endpoint)
 		])
 	]);
 }
@@ -590,13 +590,13 @@ function mcpGuidance(help) {
 	var text = (help && help.text) || '';
 
 	return section(_('MCP 接入指令'), E('div', {}, [
-		E('p', { 'class': 'localclash-muted' }, [ _('將這段文字複製給 Agent，用於安全接入路由器上的 localClash MCP。') ]),
+		E('p', { 'class': 'localclash-muted' }, [ _('将这段文字复制给 Agent，用于安全接入路由器上的 localClash MCP。') ]),
 		E('textarea', {
 			'class': 'cbi-input-textarea localclash-copybox',
 			'readonly': 'readonly'
 		}, [ text ]),
 		actionRow([
-			commandButton(_('複製 MCP 指令'), function() {
+			commandButton(_('复制 MCP 指令'), function() {
 				return copyText(text).then(function() {
 					return { ok: true, copied: true };
 				});
@@ -621,7 +621,7 @@ return view.extend({
 		var help = results[1] || {};
 		var state = classify(data, takeover);
 		var message = state.id === 'running'
-			? [ _('localClash runtime 正在運行。Network Takeover：'), E('span', { 'id': 'localclash-overview-takeover-hero' }, [ takeoverState(takeover) ]) ]
+			? [ _('localClash 运行时正在运行。网络接管：'), E('span', { 'id': 'localclash-overview-takeover-hero' }, [ takeoverState(takeover) ]) ]
 			: [ state.message ];
 
 		window.setTimeout(refreshTakeoverStatus, 0);
@@ -654,7 +654,7 @@ return view.extend({
 				E('p', {}, message),
 				primaryActions(state)
 			]), 'localclash-next-step'),
-			section(_('狀態'), diagnosticTable(data, takeover), 'localclash-diagnostics'),
+			section(_('状态'), diagnosticTable(data, takeover), 'localclash-diagnostics'),
 			mcpGuidance(help)
 		]);
 	}
