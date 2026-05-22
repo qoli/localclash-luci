@@ -49,14 +49,18 @@ var callBootstrapLogs = rpc.declare({
 });
 
 function showResult(title, result) {
+	var shouldReload = !(result && result.ok === false);
+
 	ui.showModal(title, [
 		E('pre', { 'class': 'localclash-result' }, [ JSON.stringify(result, null, 2) ]),
 		E('div', { 'class': 'right' }, [
 			E('button', {
+				'type': 'button',
 				'class': 'btn',
 				'click': function() {
 					ui.hideModal();
-					window.location.reload();
+					if (shouldReload)
+						window.location.reload();
 				}
 			}, [ _('關閉') ])
 		])
@@ -93,10 +97,12 @@ function showTaskModal(title) {
 	var statusLine = E('p', { 'class': 'localclash-task-status' }, [ _('正在啟動任務…') ]);
 	var resultOutput = E('pre', { 'class': 'localclash-result localclash-task-result' }, []);
 	var closeButton = E('button', {
+		'type': 'button',
 		'class': 'btn',
 		'click': function() {
 			ui.hideModal();
-			window.location.reload();
+			if (closeButton.getAttribute('data-reload') === 'true')
+				window.location.reload();
 		}
 	}, [ _('關閉') ]);
 
@@ -110,12 +116,14 @@ function showTaskModal(title) {
 	return {
 		logOutput: logOutput,
 		statusLine: statusLine,
-		resultOutput: resultOutput
+		resultOutput: resultOutput,
+		closeButton: closeButton
 	};
 }
 
 function liveTaskButton(label, handler, extraClass) {
 	return E('button', {
+		'type': 'button',
 		'class': 'btn cbi-button localclash-button ' + (extraClass || ''),
 		'click': function(ev) {
 			ev.preventDefault();
@@ -173,8 +181,10 @@ function liveTaskButton(label, handler, extraClass) {
 			}).then(function(finalResult) {
 				if (finalResult && finalResult.ok === false)
 					modal.statusLine.textContent = formatText(_('任務失敗：%s'), finalResult.message || finalResult.code || _('Unknown error'));
-				else
+				else {
 					modal.statusLine.textContent = _('任務完成。');
+					modal.closeButton.setAttribute('data-reload', 'true');
+				}
 				modal.resultOutput.textContent = JSON.stringify(finalResult, null, 2);
 			}).catch(function(err) {
 				window.clearInterval(timer);
@@ -197,6 +207,7 @@ function liveTaskButton(label, handler, extraClass) {
 
 function commandButton(label, handler, extraClass) {
 	return E('button', {
+		'type': 'button',
 		'class': 'btn cbi-button localclash-button ' + (extraClass || ''),
 		'click': function(ev) {
 			ev.preventDefault();

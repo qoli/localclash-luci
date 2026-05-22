@@ -149,6 +149,7 @@ function showResult(title, result) {
 		E('pre', { 'class': 'localclash-result' }, [ JSON.stringify(result, null, 2) ]),
 		E('div', { 'class': 'right' }, [
 			E('button', {
+				'type': 'button',
 				'class': 'btn',
 				'click': function() {
 					ui.hideModal();
@@ -165,6 +166,7 @@ function showError(err) {
 
 function commandButton(label, handler, extraClass) {
 	return E('button', {
+		'type': 'button',
 		'class': 'btn cbi-button localclash-button ' + (extraClass || ''),
 		'click': function(ev) {
 			ev.preventDefault();

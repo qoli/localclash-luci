@@ -92,6 +92,7 @@ function showResult(title, result) {
 		E('pre', { 'class': 'localclash-result' }, [ JSON.stringify(result, null, 2) ]),
 		E('div', { 'class': 'right' }, [
 			E('button', {
+				'type': 'button',
 				'class': 'btn',
 				'click': function() {
 					ui.hideModal();
@@ -132,6 +133,7 @@ function showTaskModal(title) {
 	var statusLine = E('p', { 'class': 'localclash-task-status' }, [ _('正在啟動任務…') ]);
 	var resultOutput = E('pre', { 'class': 'localclash-result localclash-task-result' }, []);
 	var closeButton = E('button', {
+		'type': 'button',
 		'class': 'btn',
 		'click': function() {
 			ui.hideModal();
@@ -156,6 +158,7 @@ function showTaskModal(title) {
 
 function liveTaskButton(label, handler, extraClass) {
 	return E('button', {
+		'type': 'button',
 		'class': 'btn cbi-button localclash-button ' + (extraClass || ''),
 		'click': function(ev) {
 			ev.preventDefault();
@@ -237,6 +240,7 @@ function liveTaskButton(label, handler, extraClass) {
 
 function commandButton(label, handler, extraClass) {
 	return E('button', {
+		'type': 'button',
 		'class': 'btn cbi-button localclash-button ' + (extraClass || ''),
 		'click': function(ev) {
 			ev.preventDefault();
@@ -263,6 +267,7 @@ function commandButton(label, handler, extraClass) {
 
 function linkButton(label, href, extraClass) {
 	return E('button', {
+		'type': 'button',
 		'class': 'btn cbi-button localclash-button ' + (extraClass || ''),
 		'click': function(ev) {
 			ev.preventDefault();
