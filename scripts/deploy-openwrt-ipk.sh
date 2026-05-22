@@ -50,7 +50,9 @@ docker run --rm \
 		tar -tzf data.tar.gz | grep -qx './usr/libexec/rpcd/localclash'
 		tar -tzf data.tar.gz | grep -qx './usr/share/luci/menu.d/luci-app-localclash.json'
 		tar -tzf data.tar.gz | grep -qx './usr/share/rpcd/acl.d/luci-app-localclash.json'
+		tar -tzf data.tar.gz | grep -qx './usr/share/localclash/mcp-help.txt'
 		tar -tzf data.tar.gz | grep -qx './www/luci-static/resources/view/localclash/index.js'
+		tar -tzf data.tar.gz | grep -qx './www/luci-static/resources/view/localclash/overview.js'
 		tar -tzf data.tar.gz | grep -qx './www/luci-static/resources/view/localclash/subscription.js'
 	"
 
@@ -82,12 +84,15 @@ opkg status "${PKG_NAME}" | grep -q "^Architecture: all$"
 test -x /usr/libexec/rpcd/localclash
 test -f /usr/share/luci/menu.d/luci-app-localclash.json
 test -f /usr/share/rpcd/acl.d/luci-app-localclash.json
+test -f /usr/share/localclash/mcp-help.txt
 test -f /www/luci-static/resources/view/localclash/index.js
+test -f /www/luci-static/resources/view/localclash/overview.js
 test -f /www/luci-static/resources/view/localclash/subscription.js
 
 jsonfilter -i /usr/share/luci/menu.d/luci-app-localclash.json -e '@["admin/services/localclash"].title' >/dev/null
 jsonfilter -i /usr/share/luci/menu.d/luci-app-localclash.json -e '@["admin/services/localclash/overview"].title' >/dev/null
 jsonfilter -i /usr/share/luci/menu.d/luci-app-localclash.json -e '@["admin/services/localclash/subscription"].title' >/dev/null
+jsonfilter -i /usr/share/luci/menu.d/luci-app-localclash.json -e '@["admin/services/localclash/advanced"].title' >/dev/null
 jsonfilter -i /usr/share/rpcd/acl.d/luci-app-localclash.json -e '@["luci-app-localclash"].description' >/dev/null
 
 if [ -x /etc/init.d/rpcd ]; then
@@ -98,7 +103,9 @@ fi
 if command -v ubus >/dev/null 2>&1; then
 	ubus -S list localclash >/dev/null
 	ubus -S call localclash status >/tmp/localclash-deploy-status.json
+	ubus -S call localclash mcp_help >/tmp/localclash-deploy-mcp-help.json
 	grep -q '"ok":true' /tmp/localclash-deploy-status.json
+	grep -q '"ok":true' /tmp/localclash-deploy-mcp-help.json
 fi
 
 echo "Installed ${PKG_NAME} ${PKG_VERSION}"

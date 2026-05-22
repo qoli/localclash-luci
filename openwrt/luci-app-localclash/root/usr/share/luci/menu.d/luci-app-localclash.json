@@ -14,7 +14,7 @@
     "order": 10,
     "action": {
       "type": "view",
-      "path": "localclash/index"
+      "path": "localclash/overview"
     }
   },
   "admin/services/localclash/subscription": {
@@ -23,6 +23,14 @@
     "action": {
       "type": "view",
       "path": "localclash/subscription"
+    }
+  },
+  "admin/services/localclash/advanced": {
+    "title": "进阶",
+    "order": 30,
+    "action": {
+      "type": "view",
+      "path": "localclash/index"
     }
   }
 }

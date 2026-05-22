@@ -179,6 +179,7 @@ return view.extend({
 				'.localclash-view .localclash-button:focus{outline:2px solid rgba(73,115,255,.35);outline-offset:2px}',
 				'.localclash-view .localclash-button:active{transform:translateY(1px)}',
 				'.localclash-view .localclash-danger{border-color:#c44;background:#d94b4b;color:#fff}',
+				'.localclash-view + .cbi-page-actions{display:none!important}',
 				'.localclash-view .localclash-status-table{display:inline-table;max-width:100%}',
 				'.localclash-view .localclash-status-table th{width:auto;white-space:nowrap;padding-right:2rem}',
 				'.localclash-view .localclash-status-table td{width:auto;word-break:break-word}',

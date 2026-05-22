@@ -3,7 +3,7 @@
     "description": "Grant LuCI access to localClash rpcd helper methods",
     "read": {
       "ubus": {
-        "localclash": [ "status", "service_status", "bootstrap_logs", "takeover_status" ]
+        "localclash": [ "status", "service_status", "bootstrap_logs", "takeover_status", "mcp_help" ]
       }
     },
     "write": {
@@ -22,7 +22,8 @@
           "service_start",
           "service_stop",
           "service_ensure",
-          "bootstrap_core"
+          "bootstrap_core",
+          "bootstrap_default"
         ]
       }
     }

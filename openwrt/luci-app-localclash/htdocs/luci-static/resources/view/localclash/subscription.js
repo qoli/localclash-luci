@@ -76,6 +76,7 @@ return view.extend({
 				'.localclash-view .localclash-button:focus{outline:2px solid rgba(73,115,255,.35);outline-offset:2px}',
 				'.localclash-view .localclash-button:active{transform:translateY(1px)}',
 				'.localclash-view .localclash-textarea{box-sizing:border-box;width:calc(100% - 2rem);min-height:12rem;margin:1rem;padding:1rem;font-family:monospace;line-height:1.45;resize:vertical}',
+				'.localclash-view + .cbi-page-actions{display:none!important}',
 				'.localclash-result{max-width:80vw;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word}',
 				'@media (max-width: 700px){.localclash-view .localclash-button{width:100%;min-width:0}}'
 			].join('\n') ]),

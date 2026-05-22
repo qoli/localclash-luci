@@ -4,6 +4,7 @@ CORE="${LOCALCLASH_CORE:-/usr/local/bin/localclash}"
 SERVICE="/etc/init.d/localclash-mcp"
 LOG="/tmp/localclash-helper.log"
 MCP_ADDR="${LOCALCLASH_MCP_ADDR:-0.0.0.0:8765}"
+MCP_HELP="/usr/share/localclash/mcp-help.txt"
 MANIFEST_URL="${LOCALCLASH_RELEASE_MANIFEST:-https://github.com/qoli/localClash/releases/latest/download/localclash-release-manifest.json}"
 
 json_escape() {
@@ -70,11 +71,51 @@ service_body() {
 			running=true
 		fi
 	fi
-	printf '"service":{"name":"localclash-mcp","installed":%s,"enabled":%s,"running":%s,"pid":%s},"mcp":{"endpoint":"http://%s/mcp","health_endpoint":"http://%s/health","healthy":false,"last_error":""}' "$installed" "$enabled" "$running" "$pid" "$MCP_ADDR" "$MCP_ADDR"
+	endpoint="$(mcp_endpoint)"
+	health_endpoint="${endpoint%/mcp}/health"
+	printf '"service":{"name":"localclash-mcp","installed":%s,"enabled":%s,"running":%s,"pid":%s},"mcp":{"endpoint":"%s","health_endpoint":"%s","healthy":false,"last_error":""}' "$installed" "$enabled" "$running" "$pid" "$(json_escape "$endpoint")" "$(json_escape "$health_endpoint")"
+}
+
+mcp_host() {
+	host="${MCP_ADDR%:*}"
+	if [ "$host" != "0.0.0.0" ] && [ "$host" != "::" ] && [ -n "$host" ]; then
+		printf '%s\n' "$host"
+		return 0
+	fi
+	if command -v uci >/dev/null 2>&1; then
+		lan_ip="$(uci -q get network.lan.ipaddr 2>/dev/null || true)"
+		if [ -n "$lan_ip" ]; then
+			printf '%s\n' "$lan_ip"
+			return 0
+		fi
+	fi
+	if command -v ip >/dev/null 2>&1; then
+		lan_ip="$(ip -4 addr show br-lan 2>/dev/null | sed -n 's/.*inet \([0-9.]*\)\/.*/\1/p' | head -n 1)"
+		if [ -n "$lan_ip" ]; then
+			printf '%s\n' "$lan_ip"
+			return 0
+		fi
+	fi
+	printf '192.168.1.1\n'
+}
+
+mcp_endpoint() {
+	port="${MCP_ADDR##*:}"
+	printf 'http://%s:%s/mcp\n' "$(mcp_host)" "$port"
 }
 
 service_status() {
 	ok "$(service_body)"
+}
+
+mcp_help() {
+	endpoint="$(mcp_endpoint)"
+	if [ -f "$MCP_HELP" ]; then
+		text="$(sed "s#http://192\\.168\\.6\\.1:8765/mcp#$endpoint#g" "$MCP_HELP")"
+	else
+		text="Please connect to localClash MCP at $endpoint, first call tools_list and environment_inspect, then use the reported safety_level before making any runtime or router takeover changes."
+	fi
+	ok "\"text\":\"$(json_escape "$text")\",\"endpoint\":\"$(json_escape "$endpoint")\""
 }
 
 service_ensure() {
@@ -203,6 +244,64 @@ bootstrap_logs() {
 	fi
 }
 
+bootstrap_default() {
+	tmpdir="$(mktemp -d /tmp/localclash-default.XXXXXX)" || {
+		fail "tmpdir_failed" "Could not create a temporary default setup directory."
+		return 1
+	}
+
+	if ! core_installed; then
+		if ! bootstrap_core > "$tmpdir/core.json"; then
+			cat "$tmpdir/core.json"
+			rm -rf "$tmpdir"
+			return 1
+		fi
+	else
+		printf '{"ok":true,"changed":false,"summary":"localClash core already installed."}\n' > "$tmpdir/core.json"
+	fi
+
+	if ! call_core component update mihomo --json > "$tmpdir/mihomo.json"; then
+		cat "$tmpdir/mihomo.json"
+		rm -rf "$tmpdir"
+		return 1
+	fi
+
+	if ! call_core component update dashboard --json > "$tmpdir/dashboard.json"; then
+		cat "$tmpdir/dashboard.json"
+		rm -rf "$tmpdir"
+		return 1
+	fi
+
+	cat > "$tmpdir/apply.json" <<'JSON'
+{
+  "components": {
+    "mihomo": "installed_or_latest",
+    "dashboard": "installed_or_latest"
+  },
+  "config": {
+    "template": "localclash-default",
+    "runtime_profile": "router",
+    "core": "smart",
+    "allow_overwrite_modified": false
+  },
+  "runtime": {
+    "service": "leave",
+    "router_takeover": "leave"
+  }
+}
+JSON
+
+	if ! call_core apply --input "$tmpdir/apply.json" --json > "$tmpdir/apply-result.json"; then
+		cat "$tmpdir/apply-result.json"
+		rm -rf "$tmpdir"
+		return 1
+	fi
+
+	service_ensure >/dev/null
+	rm -rf "$tmpdir"
+	ok '"changed":true,"summary":"Default router setup applied.","profile":{"runtime_profile":"router","core":"smart","template":"localclash-default"}'
+}
+
 method="${1:-}"
 if [ "$method" = "call" ]; then
 	method="${2:-}"
@@ -229,6 +328,8 @@ case "$method" in
   "service_status": {},
   "service_ensure": {},
   "bootstrap_core": {},
+  "bootstrap_default": {},
+  "mcp_help": {},
   "bootstrap_logs": {}
 }
 JSON
@@ -250,6 +351,8 @@ JSON
 	service_start) service_ensure >/dev/null && "$SERVICE" start >/dev/null 2>&1 && service_status || fail "service_start_failed" "Could not start localclash-mcp service." ;;
 	service_stop) [ -x "$SERVICE" ] && "$SERVICE" stop >/dev/null 2>&1; service_status ;;
 	bootstrap_core) bootstrap_core ;;
+	bootstrap_default) bootstrap_default ;;
+	mcp_help) mcp_help ;;
 	bootstrap_logs) bootstrap_logs ;;
 	*) fail "unknown_method" "Unknown localClash rpcd method." ;;
 esac
