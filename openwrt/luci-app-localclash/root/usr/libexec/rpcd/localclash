@@ -1030,6 +1030,12 @@ runtime_start_takeover_run() {
 	log_line "运行时接管：正在应用网络接管"
 	if ! run_with_heartbeat "运行时接管：正在应用网络接管" "$tmpdir/takeover.json" call_core takeover apply --json; then
 		log_line "运行时接管：网络接管应用失败"
+		log_line "运行时接管：正在撤销可能残留的网络接管"
+		if call_core takeover stop --json > "$tmpdir/takeover-stop.json"; then
+			log_line "运行时接管：网络接管撤销完成"
+		else
+			log_line "运行时接管：网络接管撤销也失败"
+		fi
 		log_line "运行时接管：网络接管失败后正在停止运行时"
 		runtime_stop > "$tmpdir/runtime-stop.json" 2>/dev/null || log_line "运行时接管：失败后停止运行时也失败"
 		cat "$tmpdir/takeover.json"
