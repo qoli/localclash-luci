@@ -73,6 +73,14 @@ function statusText(value) {
 	return String(value);
 }
 
+function coreFlavorText(value) {
+	if (value === 'meta')
+		return 'Meta';
+	if (value === 'smart')
+		return 'Smart';
+	return statusText(value);
+}
+
 function row(label, value) {
 	return E('tr', {}, [
 		E('th', { 'scope': 'row' }, [ label ]),
@@ -547,6 +555,7 @@ function primaryActions(state) {
 function diagnosticTable(data, takeover) {
 	var core = data.core || {};
 	var baseAssets = data.base_assets || {};
+	var runtimeProfile = data.runtime_profile || {};
 	var service = (data.mcp_service && data.mcp_service.service) || {};
 	var mcp = (data.mcp_service && data.mcp_service.mcp) || {};
 	var status = productStatus(data);
@@ -559,6 +568,8 @@ function diagnosticTable(data, takeover) {
 			row(_('基础文件'), baseAssets.installed ? _('已安装') : _('缺失')),
 			row(_('基础文件路径'), baseAssets.path),
 			row(_('Mihomo 核心'), core.installed ? (componentInstalled(status, [ 'mihomo' ]) ? _('已安装') : _('缺失')) : _('缺失')),
+			row(_('Mihomo 核心类型'), coreFlavorText(runtimeProfile.core)),
+			row(_('Mihomo 核心路径'), runtimeProfile.core_path),
 			row(_('Dashboard 面板'), core.installed ? (componentInstalled(status, [ 'dashboard', 'ui' ]) ? _('已安装') : _('缺失')) : _('缺失')),
 			row(_('订阅'), subscriptionConfigured(status) ? _('已配置') : _('缺失')),
 			row(_('Mihomo 运行时运行中'), runtime.running !== undefined ? runtime.running : runtimeRunning(status)),

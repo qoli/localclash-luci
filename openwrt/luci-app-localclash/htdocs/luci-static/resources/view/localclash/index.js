@@ -104,6 +104,14 @@ function statusText(value) {
 	return String(value);
 }
 
+function coreFlavorText(value) {
+	if (value === 'meta')
+		return 'Meta';
+	if (value === 'smart')
+		return 'Smart';
+	return statusText(value);
+}
+
 function row(label, value) {
 	return E('tr', {}, [
 		E('th', { 'scope': 'row' }, [ label ]),
@@ -229,6 +237,7 @@ return view.extend({
 		var takeover = { pending: true };
 		var core = data.core || {};
 		var baseAssets = data.base_assets || {};
+		var runtimeProfile = data.runtime_profile || {};
 		var service = (data.mcp_service && data.mcp_service.service) || {};
 		var mcp = (data.mcp_service && data.mcp_service.mcp) || {};
 		var runtime = (data.status && data.status.runtime) || {};
@@ -258,6 +267,8 @@ return view.extend({
 						row(_('核心路径'), core.path),
 						row(_('基础文件'), baseAssets.installed ? _('已安装') : _('缺失')),
 						row(_('基础文件路径'), baseAssets.path),
+						row(_('Mihomo 核心类型'), coreFlavorText(runtimeProfile.core)),
+						row(_('Mihomo 核心路径'), runtimeProfile.core_path),
 						row(_('MCP 服务已安装'), service.installed),
 						row(_('MCP 服务运行中'), service.running),
 						row(_('MCP 端点'), mcp.endpoint),

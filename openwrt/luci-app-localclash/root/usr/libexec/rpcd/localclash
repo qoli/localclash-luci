@@ -644,6 +644,30 @@ service_status() {
 	ok "$(service_body)"
 }
 
+runtime_profile_body() {
+	local profile mode core core_path exists
+	profile="$STATE_DIR/localclash-runtime.yaml"
+	exists=false
+	mode=""
+	core=""
+	core_path=""
+
+	if [ -f "$profile" ]; then
+		exists=true
+		mode="$(awk -F: '$1 == "mode" { gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit }' "$profile" 2>/dev/null)"
+		core="$(awk -F: '$1 == "core" { gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit }' "$profile" 2>/dev/null)"
+		if [ -n "$core" ]; then
+			core_path="$(awk -v target="$core" '
+				/^[^[:space:]]/ { section = $1; sub(":", "", section); in_core = 0 }
+				section == "cores" && $1 == target ":" { in_core = 1; next }
+				section == "cores" && in_core && $1 == "path:" { print $2; exit }
+			' "$profile" 2>/dev/null)"
+		fi
+	fi
+
+	printf '"runtime_profile":{"path":"%s","exists":%s,"mode":"%s","core":"%s","core_path":"%s"}' "$(json_escape "$profile")" "$exists" "$(json_escape "$mode")" "$(json_escape "$core")" "$(json_escape "$core_path")"
+}
+
 mcp_help() {
 	endpoint="$(mcp_endpoint)"
 	if [ -f "$MCP_HELP" ]; then
@@ -709,7 +733,7 @@ service_start() {
 }
 
 status() {
-	local core_ok assets_ok mihomo_ok dashboard_ok subscription_ok runtime_ok summary
+	local core_ok assets_ok mihomo_ok dashboard_ok subscription_ok runtime_ok summary runtime_profile
 	clear_zombie_runtime_pid
 	core_ok="$(core_installed && echo true || echo false)"
 	assets_ok="$(base_assets_installed && echo true || echo false)"
@@ -717,8 +741,9 @@ status() {
 	dashboard_ok="$(dashboard_installed && echo true || echo false)"
 	subscription_ok="$(subscription_configured && echo true || echo false)"
 	runtime_ok="$(runtime_running && echo true || echo false)"
+	runtime_profile="$(runtime_profile_body)"
 	summary='"components":{"mihomo":{"installed":'"$mihomo_ok"'},"dashboard":{"installed":'"$dashboard_ok"'}},"subscription":{"configured":'"$subscription_ok"'},"runtime":{"running":'"$runtime_ok"'}'
-	printf '{"ok":true,"core":{"installed":%s,"path":"%s"},"base_assets":{"installed":%s,"path":"%s"},"mcp_service":{%s},"status":{"ok":true,"changed":false,"summary":"localClash LuCI 状态摘要。",%s,"status":{%s}}}\n' "$core_ok" "$CORE" "$assets_ok" "$STATE_DIR" "$(service_body)" "$summary" "$summary"
+	printf '{"ok":true,"core":{"installed":%s,"path":"%s"},"base_assets":{"installed":%s,"path":"%s"},%s,"mcp_service":{%s},"status":{"ok":true,"changed":false,"summary":"localClash LuCI 状态摘要。",%s,"status":{%s}}}\n' "$core_ok" "$CORE" "$assets_ok" "$STATE_DIR" "$runtime_profile" "$(service_body)" "$summary" "$summary"
 }
 
 component_update() {
