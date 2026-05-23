@@ -684,6 +684,30 @@ EOF
 	ok '"changed":true,"summary":"MCP 服务脚本已确保存在。"'
 }
 
+service_start() {
+	service_ensure >/dev/null
+	if ! core_installed; then
+		fail "bootstrap_core_missing" "localClash 核心尚未安装。"
+		return 1
+	fi
+	"$SERVICE" enable >/dev/null 2>&1 || {
+		fail "service_enable_failed" "无法启用 localclash-mcp 服务。"
+		return 1
+	}
+	if "$SERVICE" running >/dev/null 2>&1; then
+		"$SERVICE" restart >/dev/null 2>&1 || true
+	else
+		"$SERVICE" start >/dev/null 2>&1 || true
+	fi
+	sleep 1
+	if "$SERVICE" running >/dev/null 2>&1; then
+		service_status
+		return 0
+	fi
+	fail "service_start_failed" "无法启动 localclash-mcp 服务。"
+	return 1
+}
+
 status() {
 	local core_ok assets_ok mihomo_ok dashboard_ok subscription_ok runtime_ok summary
 	clear_zombie_runtime_pid
@@ -920,7 +944,12 @@ bootstrap_core() {
 		return 1
 	fi
 	rm -rf "$tmpdir"
-	service_ensure >/dev/null
+	if ! service_start >/dev/null; then
+		rm -rf "$tmpdir"
+		log_line "核心初始化：MCP 服务启动失败"
+		fail "service_start_failed" "localClash 核心已安装，但 MCP 服务无法启动。"
+		return 1
+	fi
 	log_line "已安装 localClash 核心 $asset_version（$arch）"
 	ok "\"changed\":true,\"summary\":\"localClash 核心已安装。\",\"core\":{\"installed\":true,\"path\":\"$CORE\",\"version\":\"$(json_escape "$asset_version")\",\"arch\":\"$arch\"}"
 }
@@ -1107,7 +1136,12 @@ JSON
 		return 1
 	fi
 
-	service_ensure >/dev/null
+	if ! service_start >/dev/null; then
+		rm -rf "$tmpdir"
+		log_line "默认初始化：MCP 服务启动失败"
+		fail "service_start_failed" "默认配置已应用，但 MCP 服务无法启动。"
+		return 1
+	fi
 	rm -rf "$tmpdir"
 	log_line "默认初始化：已完成路由器默认设置"
 	ok '"changed":true,"summary":"已应用路由器默认设置。","profile":{"runtime_profile":"router","core":"meta","template":"localclash-default"}'
@@ -1232,7 +1266,7 @@ JSON
 	reset) call_core reset --json ;;
 	service_status) service_status ;;
 	service_ensure) service_ensure ;;
-	service_start) service_ensure >/dev/null && "$SERVICE" enable >/dev/null 2>&1 && "$SERVICE" start >/dev/null 2>&1 && sleep 1 && "$SERVICE" running >/dev/null 2>&1 && service_status || fail "service_start_failed" "无法启动 localclash-mcp 服务。" ;;
+	service_start) service_start ;;
 	service_stop) [ -x "$SERVICE" ] && "$SERVICE" stop >/dev/null 2>&1 && "$SERVICE" disable >/dev/null 2>&1; service_status ;;
 	bootstrap_core) with_lock bootstrap_core ;;
 	bootstrap_assets) with_lock bootstrap_assets ;;
