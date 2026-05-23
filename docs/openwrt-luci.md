@@ -836,9 +836,9 @@ Method contracts:
 - `takeover_apply`: no input. Calls `localclash takeover apply --json`.
 - `takeover_stop`: no input. Calls `localclash takeover stop --json`.
 - `reset`: no input. Calls `localclash reset --json`.
-- `service_start`: no input. Ensures the procd service wrapper exists, then
-  starts the procd service for MCP.
-- `service_stop`: no input. Stops the procd service for MCP.
+- `service_start`: no input. Ensures the procd service wrapper exists, enables
+  it for boot restore, then starts the procd service for MCP.
+- `service_stop`: no input. Stops and disables the procd service for MCP.
 - `service_status`: no input. Reports procd service status and MCP HTTP health
   when reachable. This is the source of truth for the LuCI MCP service status
   row.
@@ -978,8 +978,8 @@ Service behavior:
 
 - command: `/usr/local/bin/localclash mcp serve`
 - working directory: the localClash state directory used on router deployments
-- default state: installed but not necessarily enabled until the user starts it
-  from LuCI or package policy explicitly decides otherwise
+- default state: installed but not enabled until the user starts it from LuCI or
+  package policy explicitly decides otherwise
 - stdout/stderr: append to a localClash log file under the state directory
 - restart policy: use procd respawn with conservative limits
 

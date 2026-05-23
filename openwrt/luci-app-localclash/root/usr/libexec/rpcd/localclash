@@ -1227,8 +1227,8 @@ JSON
 	reset) call_core reset --json ;;
 	service_status) service_status ;;
 	service_ensure) service_ensure ;;
-	service_start) service_ensure >/dev/null && "$SERVICE" start >/dev/null 2>&1 && sleep 1 && "$SERVICE" running >/dev/null 2>&1 && service_status || fail "service_start_failed" "无法启动 localclash-mcp 服务。" ;;
-	service_stop) [ -x "$SERVICE" ] && "$SERVICE" stop >/dev/null 2>&1; service_status ;;
+	service_start) service_ensure >/dev/null && "$SERVICE" enable >/dev/null 2>&1 && "$SERVICE" start >/dev/null 2>&1 && sleep 1 && "$SERVICE" running >/dev/null 2>&1 && service_status || fail "service_start_failed" "无法启动 localclash-mcp 服务。" ;;
+	service_stop) [ -x "$SERVICE" ] && "$SERVICE" stop >/dev/null 2>&1 && "$SERVICE" disable >/dev/null 2>&1; service_status ;;
 	bootstrap_core) with_lock bootstrap_core ;;
 	bootstrap_assets) with_lock bootstrap_assets ;;
 	bootstrap_default) start_bootstrap_default ;;
