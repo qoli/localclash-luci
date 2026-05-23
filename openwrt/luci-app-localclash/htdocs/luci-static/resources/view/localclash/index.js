@@ -161,8 +161,8 @@ function section(title, body) {
 	]);
 }
 
-function showResult(title, result) {
-	var shouldAutoClose = result && result.ok === true;
+function showResult(title, result, options) {
+	var shouldAutoClose = result && result.ok === true && !(options && options.keepOpen);
 
 	ui.showModal(title, [
 		E('pre', { 'class': 'localclash-result' }, [ JSON.stringify(result, null, 2) ]),
@@ -189,7 +189,7 @@ function showError(err) {
 	ui.addNotification(null, E('p', {}, [ err.message || String(err) ]), 'danger');
 }
 
-function commandButton(label, handler, extraClass) {
+function commandButton(label, handler, extraClass, options) {
 	return E('button', {
 		'type': 'button',
 		'class': 'btn cbi-button localclash-button ' + (extraClass || ''),
@@ -205,7 +205,7 @@ function commandButton(label, handler, extraClass) {
 			button.textContent = _('执行中…');
 
 			return Promise.resolve().then(handler).then(function(result) {
-				showResult(label, result);
+				showResult(label, result, options);
 			}).catch(showError).finally(function() {
 				button.disabled = false;
 				button.removeAttribute('aria-busy');
@@ -273,7 +273,7 @@ return view.extend({
 				actionRow([
 					commandButton(_('安装 / 更新核心'), callBootstrapCore, 'cbi-button-action'),
 					commandButton(_('确保 MCP 服务'), callServiceEnsure),
-					commandButton(_('查看日志'), callBootstrapLogs)
+					commandButton(_('查看日志'), callBootstrapLogs, null, { keepOpen: true })
 				])
 			])),
 			section(_('MCP 服务'), actionRow([

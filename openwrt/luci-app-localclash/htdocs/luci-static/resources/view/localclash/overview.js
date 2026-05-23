@@ -87,8 +87,8 @@ function section(title, body, extraClass) {
 	]);
 }
 
-function showResult(title, result) {
-	var shouldAutoClose = result && result.ok === true;
+function showResult(title, result, options) {
+	var shouldAutoClose = result && result.ok === true && !(options && options.keepOpen);
 
 	ui.showModal(title, [
 		E('pre', { 'class': 'localclash-result' }, [ JSON.stringify(result, null, 2) ]),
@@ -251,7 +251,7 @@ function liveTaskButton(label, handler, extraClass) {
 	}, [ label ]);
 }
 
-function commandButton(label, handler, extraClass) {
+function commandButton(label, handler, extraClass, options) {
 	return E('button', {
 		'type': 'button',
 		'class': 'btn cbi-button localclash-button ' + (extraClass || ''),
@@ -267,7 +267,7 @@ function commandButton(label, handler, extraClass) {
 			button.textContent = _('执行中…');
 
 			return Promise.resolve().then(handler).then(function(result) {
-				showResult(label, result);
+				showResult(label, result, options);
 			}).catch(showError).finally(function() {
 				button.disabled = false;
 				button.removeAttribute('aria-busy');
@@ -514,7 +514,7 @@ function primaryActions(state) {
 	if (state.id === 'bootstrap') {
 		return actionRow([
 			liveTaskButton(_('一键初始化'), callBootstrapDefault, 'cbi-button-apply'),
-			commandButton(_('查看日志'), callBootstrapLogs)
+			commandButton(_('查看日志'), callBootstrapLogs, null, { keepOpen: true })
 		]);
 	}
 
@@ -540,7 +540,7 @@ function primaryActions(state) {
 				});
 			});
 		}, 'cbi-button-reset'),
-		commandButton(_('运行时状态'), callStatus)
+		commandButton(_('运行时状态'), callStatus, null, { keepOpen: true })
 	]);
 }
 
