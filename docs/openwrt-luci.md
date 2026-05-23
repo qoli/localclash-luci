@@ -466,7 +466,7 @@ Schema:
   "version": 1,
   "template": "localclash-default",
   "runtime_profile": "router",
-  "core": "smart",
+  "core": "meta",
   "allow_overwrite_modified": false
 }
 ```
@@ -517,7 +517,7 @@ Schema:
   "config": {
     "template": "localclash-default",
     "runtime_profile": "router",
-    "core": "smart",
+    "core": "meta",
     "allow_overwrite_modified": false
   },
   "runtime": {

@@ -493,6 +493,11 @@ runtime_stop() {
 	return "$rc"
 }
 
+runtime_start() {
+	clear_zombie_runtime_pid
+	call_core runtime start --json
+}
+
 runtime_restart() {
 	local stop_output
 	stop_output="/tmp/localclash-runtime-restart-stop.$$"
@@ -1089,12 +1094,12 @@ bootstrap_default_run() {
   "version": 1,
   "template": "localclash-default",
   "runtime_profile": "router",
-  "core": "smart",
+  "core": "meta",
   "allow_overwrite_modified": false
 }
 JSON
 
-	log_line "默认初始化：正在应用 router/smart 默认配置"
+	log_line "默认初始化：正在应用 router/meta 默认配置"
 	if ! call_core config apply-template --input "$tmpdir/template.json" --json > "$tmpdir/template-result.json"; then
 		log_line "默认初始化：默认配置应用失败"
 		cat "$tmpdir/template-result.json"
@@ -1105,7 +1110,7 @@ JSON
 	service_ensure >/dev/null
 	rm -rf "$tmpdir"
 	log_line "默认初始化：已完成路由器默认设置"
-	ok '"changed":true,"summary":"已应用路由器默认设置。","profile":{"runtime_profile":"router","core":"smart","template":"localclash-default"}'
+	ok '"changed":true,"summary":"已应用路由器默认设置。","profile":{"runtime_profile":"router","core":"meta","template":"localclash-default"}'
 }
 
 start_runtime_takeover() {
@@ -1216,7 +1221,7 @@ JSON
 	subscription_refresh) with_lock call_core subscription refresh --json ;;
 	component_update) with_lock component_update ;;
 	apply) with_lock apply_state ;;
-	runtime_start) call_core runtime start --json ;;
+	runtime_start) runtime_start ;;
 	runtime_start_takeover) start_runtime_takeover ;;
 	runtime_start_takeover_run) with_lock runtime_start_takeover_run ;;
 	runtime_restart) runtime_restart ;;
