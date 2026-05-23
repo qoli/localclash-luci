@@ -469,21 +469,50 @@ runtime_running() {
 }
 
 service_body() {
-	local installed enabled running pid endpoint health_endpoint
+	local installed enabled running pid endpoint health_endpoint health_probe health_body healthy last_error
 	installed=false
 	enabled=false
 	running=false
 	pid=0
+	healthy=false
+	last_error=""
 	if [ -x "$SERVICE" ]; then
 		installed=true
 		"$SERVICE" enabled >/dev/null 2>&1 && enabled=true
 		if "$SERVICE" running >/dev/null 2>&1; then
 			running=true
+			pid="$(ps w 2>/dev/null | awk '/[l]ocalclash mcp serve/ { print $1; exit }')"
+			[ -n "$pid" ] || pid=0
 		fi
 	fi
 	endpoint="$(mcp_endpoint)"
 	health_endpoint="${endpoint%/mcp}/health"
-	printf '"service":{"name":"localclash-mcp","installed":%s,"enabled":%s,"running":%s,"pid":%s},"mcp":{"endpoint":"%s","health_endpoint":"%s","healthy":false,"last_error":""}' "$installed" "$enabled" "$running" "$pid" "$(json_escape "$endpoint")" "$(json_escape "$health_endpoint")"
+	if [ "$running" = true ]; then
+		health_probe="$(mcp_local_health_endpoint)"
+		health_body="$(mcp_health_body "$health_probe" 2>/tmp/localclash-mcp-health.err || true)"
+		if printf '%s' "$health_body" | grep -q '"status":"ok"'; then
+			healthy=true
+		else
+			last_error="$(cat /tmp/localclash-mcp-health.err 2>/dev/null || true)"
+			[ -n "$last_error" ] || last_error="MCP 健康检查未返回 ok。"
+		fi
+		rm -f /tmp/localclash-mcp-health.err
+	fi
+	printf '"service":{"name":"localclash-mcp","installed":%s,"enabled":%s,"running":%s,"pid":%s},"mcp":{"endpoint":"%s","health_endpoint":"%s","healthy":%s,"last_error":"%s"}' "$installed" "$enabled" "$running" "$pid" "$(json_escape "$endpoint")" "$(json_escape "$health_endpoint")" "$healthy" "$(json_escape "$last_error")"
+}
+
+mcp_health_body() {
+	local url
+	url="$1"
+	if command -v uclient-fetch >/dev/null 2>&1; then
+		uclient-fetch -T 2 -q -O - "$url"
+	elif command -v wget >/dev/null 2>&1; then
+		wget -T 2 -q -O - "$url"
+	elif command -v curl >/dev/null 2>&1; then
+		curl --max-time 2 -fsSL "$url"
+	else
+		return 127
+	fi
 }
 
 mcp_host() {
@@ -513,6 +542,16 @@ mcp_host() {
 mcp_endpoint() {
 	port="${MCP_ADDR##*:}"
 	printf 'http://%s:%s/mcp\n' "$(mcp_host)" "$port"
+}
+
+mcp_local_health_endpoint() {
+	local host port
+	host="${MCP_ADDR%:*}"
+	port="${MCP_ADDR##*:}"
+	if [ "$host" = "0.0.0.0" ] || [ "$host" = "::" ] || [ -z "$host" ]; then
+		host="127.0.0.1"
+	fi
+	printf 'http://%s:%s/health\n' "$host" "$port"
 }
 
 service_status() {
@@ -549,7 +588,7 @@ start_service() {
 	fi
 	mkdir -p "\$WORKDIR"
 	procd_open_instance
-	procd_set_param command /bin/sh -c 'cd "$1" && exec "$2" mcp serve --addr "$3" --path /mcp' localclash-mcp "\$WORKDIR" "\$CORE" "\$MCP_ADDR"
+	procd_set_param command /bin/sh -c 'cd "\$1" && exec "\$2" mcp serve --addr "\$3" --path /mcp' localclash-mcp "\$WORKDIR" "\$CORE" "\$MCP_ADDR"
 	procd_set_param respawn
 	procd_close_instance
 }
@@ -1107,7 +1146,7 @@ JSON
 	reset) call_core reset --json ;;
 	service_status) service_status ;;
 	service_ensure) service_ensure ;;
-	service_start) service_ensure >/dev/null && "$SERVICE" start >/dev/null 2>&1 && service_status || fail "service_start_failed" "无法启动 localclash-mcp 服务。" ;;
+	service_start) service_ensure >/dev/null && "$SERVICE" start >/dev/null 2>&1 && sleep 1 && "$SERVICE" running >/dev/null 2>&1 && service_status || fail "service_start_failed" "无法启动 localclash-mcp 服务。" ;;
 	service_stop) [ -x "$SERVICE" ] && "$SERVICE" stop >/dev/null 2>&1; service_status ;;
 	bootstrap_core) with_lock bootstrap_core ;;
 	bootstrap_assets) with_lock bootstrap_assets ;;
