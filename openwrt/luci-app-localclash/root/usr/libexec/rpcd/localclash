@@ -747,14 +747,88 @@ status() {
 }
 
 component_update() {
-	local payload component
+	local payload component tmp rc
 	payload="$(cat)"
 	component="$(jsonfilter -s "$payload" -e '@.component' 2>/dev/null)"
 	case "$component" in
 		localclash) bootstrap_core ;;
-		mihomo|dashboard) call_core component update "$component" --json ;;
+		mihomo|dashboard)
+			tmp="/tmp/localclash-component-$component.$$.json"
+			log_line "组件更新：正在更新 $component"
+			if run_with_heartbeat "组件更新：正在更新 $component" "$tmp" call_core component update "$component" --json; then
+				log_line "组件更新：$component 已完成"
+				cat "$tmp"
+				rm -f "$tmp"
+				return 0
+			fi
+			rc=$?
+			log_line "组件更新：$component 更新失败"
+			cat "$tmp"
+			rm -f "$tmp"
+			return "$rc"
+			;;
 		*) fail "invalid_component" "component 必须是 localclash、mihomo 或 dashboard。" ;;
 	esac
+}
+
+start_bootstrap_core() {
+	local result rc
+	if [ -d "$LOCK_DIR" ]; then
+		printf '{"ok":true,"started":false,"running":true,"summary":"另一个 localClash 任务正在运行。"}\n'
+		return 0
+	fi
+	rm -f "$TASK_STATUS" "$TASK_RESULT" "$TASK_INPUT"
+	: > "$LOG"
+	printf '{"ok":true,"running":true,"done":false,"summary":"localClash 核心更新任务正在运行。"}\n' > "$TASK_STATUS"
+	log_line "核心初始化：已加入后台任务队列"
+	(
+		result="$("$0" call bootstrap_core_run 2>>"$LOG")"
+		rc=$?
+		if [ -z "$result" ]; then
+			result='{"ok":false,"code":"empty_task_result","message":"localClash 核心更新任务没有产生 JSON 结果。","details":{},"next_actions":[]}'
+		fi
+		printf '%s\n' "$result" > "$TASK_RESULT"
+		printf '{"ok":true,"running":false,"done":true,"exit_code":%s,"result":%s}\n' "$rc" "$result" > "$TASK_STATUS"
+	) >/dev/null 2>&1 &
+	ok '"started":true,"running":true,"summary":"localClash 核心更新任务已启动。"'
+}
+
+start_component_update() {
+	local payload component result rc
+	if [ -d "$LOCK_DIR" ]; then
+		printf '{"ok":true,"started":false,"running":true,"summary":"另一个 localClash 任务正在运行。"}\n'
+		return 0
+	fi
+	payload="$(strip_ubus_rpc_session "$(cat)")"
+	component="$(jsonfilter -s "$payload" -e '@.component' 2>/dev/null)"
+	case "$component" in
+		localclash|mihomo|dashboard) ;;
+		*) fail "invalid_component" "component 必须是 localclash、mihomo 或 dashboard。"; return 1 ;;
+	esac
+	rm -f "$TASK_STATUS" "$TASK_RESULT" "$TASK_INPUT"
+	: > "$LOG"
+	printf '%s\n' "$payload" > "$TASK_INPUT"
+	printf '{"ok":true,"running":true,"done":false,"summary":"组件更新任务正在运行。"}\n' > "$TASK_STATUS"
+	log_line "组件更新：$component 已加入后台任务队列"
+	(
+		result="$("$0" call component_update_run 2>>"$LOG")"
+		rc=$?
+		if [ -z "$result" ]; then
+			result='{"ok":false,"code":"empty_task_result","message":"组件更新任务没有产生 JSON 结果。","details":{},"next_actions":[]}'
+		fi
+		printf '%s\n' "$result" > "$TASK_RESULT"
+		printf '{"ok":true,"running":false,"done":true,"exit_code":%s,"result":%s}\n' "$rc" "$result" > "$TASK_STATUS"
+		rm -f "$TASK_INPUT"
+	) >/dev/null 2>&1 &
+	ok '"started":true,"running":true,"summary":"组件更新任务已启动。"'
+}
+
+component_update_run() {
+	if [ ! -f "$TASK_INPUT" ]; then
+		fail "task_input_missing" "组件更新任务输入缺失。"
+		return 1
+	fi
+	with_lock component_update < "$TASK_INPUT"
 }
 
 input_to_core_file() {
@@ -908,6 +982,10 @@ subscription_setup_run() {
 
 apply_state() {
 	input_to_core_file apply
+}
+
+config_render() {
+	call_core config render --json
 }
 
 bootstrap_core() {
@@ -1248,7 +1326,9 @@ case "$method" in
   "subscription_setup_async": { "urls": [] },
   "subscription_refresh": {},
   "component_update": { "component": "localclash" },
+  "component_update_async": { "component": "localclash" },
   "apply": {},
+  "config_render": {},
   "runtime_start": {},
   "runtime_start_takeover": {},
   "runtime_restart": {},
@@ -1262,6 +1342,7 @@ case "$method" in
   "service_status": {},
   "service_ensure": {},
   "bootstrap_core": {},
+  "bootstrap_core_async": {},
   "bootstrap_assets": {},
   "bootstrap_default": {},
   "task_status": {},
@@ -1279,7 +1360,10 @@ JSON
 	subscription_setup_run) with_lock subscription_setup_run ;;
 	subscription_refresh) with_lock call_core subscription refresh --json ;;
 	component_update) with_lock component_update ;;
+	component_update_async) start_component_update ;;
+	component_update_run) component_update_run ;;
 	apply) with_lock apply_state ;;
+	config_render) with_lock config_render ;;
 	runtime_start) runtime_start ;;
 	runtime_start_takeover) start_runtime_takeover ;;
 	runtime_start_takeover_run) with_lock runtime_start_takeover_run ;;
@@ -1294,6 +1378,8 @@ JSON
 	service_start) service_start ;;
 	service_stop) [ -x "$SERVICE" ] && "$SERVICE" stop >/dev/null 2>&1 && "$SERVICE" disable >/dev/null 2>&1; service_status ;;
 	bootstrap_core) with_lock bootstrap_core ;;
+	bootstrap_core_async) start_bootstrap_core ;;
+	bootstrap_core_run) with_lock bootstrap_core ;;
 	bootstrap_assets) with_lock bootstrap_assets ;;
 	bootstrap_default) start_bootstrap_default ;;
 	bootstrap_default_run) with_lock bootstrap_default_run ;;

@@ -9,15 +9,21 @@ var callStatus = rpc.declare({
 	expect: { '': {} }
 });
 
-var callBootstrapCore = rpc.declare({
+var callBootstrapCoreAsync = rpc.declare({
 	object: 'localclash',
-	method: 'bootstrap_core',
+	method: 'bootstrap_core_async',
 	expect: { '': {} }
 });
 
 var callBootstrapLogs = rpc.declare({
 	object: 'localclash',
 	method: 'bootstrap_logs',
+	expect: { '': {} }
+});
+
+var callTaskStatus = rpc.declare({
+	object: 'localclash',
+	method: 'task_status',
 	expect: { '': {} }
 });
 
@@ -57,16 +63,10 @@ var callRuntimeStop = rpc.declare({
 	expect: { '': {} }
 });
 
-var callComponentUpdate = rpc.declare({
+var callComponentUpdateAsync = rpc.declare({
 	object: 'localclash',
-	method: 'component_update',
+	method: 'component_update_async',
 	params: [ 'component' ],
-	expect: { '': {} }
-});
-
-var callApply = rpc.declare({
-	object: 'localclash',
-	method: 'apply',
 	expect: { '': {} }
 });
 
@@ -197,6 +197,145 @@ function showError(err) {
 	ui.addNotification(null, E('p', {}, [ err.message || String(err) ]), 'danger');
 }
 
+function formatLogLines(lines) {
+	if (!lines || !lines.length)
+		return _('等待任务输出…');
+
+	return lines.join('\n');
+}
+
+function formatText(text) {
+	var args = Array.prototype.slice.call(arguments, 1);
+	var index = 0;
+
+	text = String(text);
+	if (typeof text.format === 'function')
+		return text.format.apply(text, args);
+
+	return text.replace(/%s/g, function() {
+		var value = args[index++];
+		return value === null || value === undefined ? '' : String(value);
+	});
+}
+
+function showTaskModal(title) {
+	var logOutput = E('pre', { 'class': 'localclash-task-log' }, [ _('等待任务输出…') ]);
+	var statusLine = E('p', { 'class': 'localclash-task-status' }, [ _('正在启动任务…') ]);
+	var resultOutput = E('pre', { 'class': 'localclash-result localclash-task-result' }, []);
+	var closeButton = E('button', {
+		'type': 'button',
+		'class': 'btn',
+		'click': function() {
+			ui.hideModal();
+			if (closeButton.getAttribute('data-reload') === 'true')
+				window.location.reload();
+		}
+	}, [ _('关闭') ]);
+
+	ui.showModal(title, [
+		statusLine,
+		logOutput,
+		resultOutput,
+		E('div', { 'class': 'right' }, [ closeButton ])
+	]);
+
+	return {
+		logOutput: logOutput,
+		statusLine: statusLine,
+		resultOutput: resultOutput,
+		closeButton: closeButton
+	};
+}
+
+function liveTaskButton(label, handler, extraClass) {
+	return E('button', {
+		'type': 'button',
+		'class': 'btn cbi-button localclash-button ' + (extraClass || ''),
+		'click': function(ev) {
+			ev.preventDefault();
+			var button = ev.currentTarget;
+			var startedAt = Date.now();
+			var modal;
+			var timer;
+
+			if (button.disabled)
+				return null;
+
+			button.disabled = true;
+			button.setAttribute('aria-busy', 'true');
+			button.classList.add('localclash-busy');
+			button.textContent = _('查看任务输出…');
+			modal = showTaskModal(label);
+
+			function updateLogs() {
+				return callBootstrapLogs().then(function(result) {
+					var elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+					var lines = (result && result.logs) || [];
+					modal.statusLine.textContent = formatText(_('任务执行中，已等待 %s 秒。'), elapsed);
+					modal.logOutput.textContent = formatLogLines(lines);
+					modal.logOutput.scrollTop = modal.logOutput.scrollHeight;
+				}).catch(function(err) {
+					modal.statusLine.textContent = formatText(_('无法读取任务输出：%s'), err.message || String(err));
+				});
+			}
+
+			function waitForTaskCompletion() {
+				return callTaskStatus().then(function(task) {
+					if (task && task.done)
+						return task.result || task;
+					if (task && task.running === false && task.result)
+						return task.result;
+
+					return new Promise(function(resolve) {
+						window.setTimeout(resolve, 1000);
+					}).then(waitForTaskCompletion);
+				});
+			}
+
+			return Promise.resolve().then(handler).then(function(result) {
+				var completion = (result && (result.started || result.running)) ? waitForTaskCompletion() : Promise.resolve(result);
+
+				timer = window.setInterval(updateLogs, 1000);
+				return updateLogs().then(function() {
+					return completion;
+				});
+			}).then(function(finalResult) {
+				window.clearInterval(timer);
+				return updateLogs().then(function() {
+					return finalResult;
+				});
+			}).then(function(finalResult) {
+				if (finalResult && finalResult.ok === false)
+					modal.statusLine.textContent = formatText(_('任务失败：%s'), finalResult.message || finalResult.code || _('未知错误'));
+				else {
+					modal.statusLine.textContent = _('任务完成。');
+					modal.closeButton.setAttribute('data-reload', 'true');
+				}
+				modal.resultOutput.textContent = JSON.stringify(finalResult, null, 2);
+				if (finalResult && finalResult.ok === true)
+					window.setTimeout(function() {
+						ui.hideModal();
+						window.location.reload();
+					}, 900);
+			}).catch(function(err) {
+				window.clearInterval(timer);
+				if (!timer)
+					modal.logOutput.textContent = _('任务未启动。');
+
+				return (timer ? updateLogs() : Promise.resolve()).then(function() {
+					modal.statusLine.textContent = formatText(_('任务失败：%s'), err.message || String(err));
+					modal.resultOutput.textContent = JSON.stringify({ ok: false, message: err.message || String(err) }, null, 2);
+				});
+			}).finally(function() {
+				button.disabled = false;
+				button.removeAttribute('aria-busy');
+				button.classList.remove('localclash-busy');
+				button.textContent = label;
+			});
+		}
+	}, [ label ]);
+}
+
 function commandButton(label, handler, extraClass, options) {
 	return E('button', {
 		'type': 'button',
@@ -258,7 +397,10 @@ return view.extend({
 				'.localclash-view .localclash-status-table th{width:auto;white-space:nowrap;padding-right:2rem}',
 				'.localclash-view .localclash-status-table td{width:auto;word-break:break-word}',
 				'.localclash-result{box-sizing:border-box;width:100%;min-width:0;max-width:100%;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word}',
-				'@media (max-width: 700px){.localclash-view .localclash-button{width:100%;min-width:0}.localclash-view .localclash-status-table{display:table;width:100%}}'
+				'.localclash-task-status{margin:.25rem 0 1rem 0;line-height:1.45}',
+				'.localclash-task-log{box-sizing:border-box;width:100%;min-width:0;max-width:100%;max-height:48vh;overflow:auto;margin:0 0 1rem 0;padding:1rem;background:#111827;color:#d1d5db;border-radius:6px;white-space:pre-wrap;word-break:break-word}',
+				'.localclash-task-result:empty{display:none}',
+				'@media (max-width: 700px){.localclash-view .localclash-button{width:100%;min-width:0}.localclash-view .localclash-status-table{display:table;width:100%}.localclash-task-log{min-width:0;max-width:100%;max-height:42vh;font-size:12px}.localclash-result{max-width:100%}}'
 			].join('\n') ]),
 			E('h2', {}, [ _('localClash') ]),
 			section(_('状态'), E('table', { 'class': 'table localclash-status-table' }, [
@@ -282,7 +424,7 @@ return view.extend({
 			section(_('初始化'), E('div', {}, [
 				E('p', {}, [ _('从 GitHub 发布清单安装或更新 localClash 核心和基础文件，然后确保 MCP 服务脚本存在。') ]),
 				actionRow([
-					commandButton(_('安装 / 更新核心'), callBootstrapCore, 'cbi-button-action'),
+					liveTaskButton(_('安装 / 更新核心'), callBootstrapCoreAsync, 'cbi-button-action'),
 					commandButton(_('确保 MCP 服务'), callServiceEnsure),
 					commandButton(_('查看日志'), callBootstrapLogs, null, { keepOpen: true })
 				])
@@ -297,9 +439,9 @@ return view.extend({
 				commandButton(_('停止'), callRuntimeStop, 'cbi-button-reset')
 			])),
 			section(_('组件'), actionRow([
-				commandButton(_('更新 localClash'), function() { return callComponentUpdate('localclash'); }),
-				commandButton(_('更新 Mihomo'), function() { return callComponentUpdate('mihomo'); }),
-				commandButton(_('更新 Dashboard'), function() { return callComponentUpdate('dashboard'); })
+				liveTaskButton(_('更新 localClash'), function() { return callComponentUpdateAsync('localclash'); }),
+				liveTaskButton(_('更新 Mihomo'), function() { return callComponentUpdateAsync('mihomo'); }),
+				liveTaskButton(_('更新 Dashboard'), function() { return callComponentUpdateAsync('dashboard'); })
 			])),
 			section(_('网络接管'), actionRow([
 				commandButton(_('应用接管'), callTakeoverApply, 'cbi-button-apply'),

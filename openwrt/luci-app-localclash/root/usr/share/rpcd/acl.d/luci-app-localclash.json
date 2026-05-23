@@ -14,7 +14,9 @@
           "subscription_setup_async",
           "subscription_refresh",
           "component_update",
+          "component_update_async",
           "apply",
+          "config_render",
           "runtime_start",
           "runtime_start_takeover",
           "runtime_restart",
@@ -26,6 +28,7 @@
           "service_stop",
           "service_ensure",
           "bootstrap_core",
+          "bootstrap_core_async",
           "bootstrap_assets",
           "bootstrap_default"
         ]

@@ -36,9 +36,9 @@ var callSubscriptionRefresh = rpc.declare({
 	expect: { '': {} }
 });
 
-var callApply = rpc.declare({
+var callConfigRender = rpc.declare({
 	object: 'localclash',
-	method: 'apply',
+	method: 'config_render',
 	expect: { '': {} }
 });
 
@@ -315,7 +315,7 @@ return view.extend({
 						return callSubscriptionSet(requireSubscriptionUrls());
 					}),
 					commandButton(_('刷新订阅'), callSubscriptionRefresh),
-					commandButton(_('应用配置'), callApply, 'cbi-button-action')
+					commandButton(_('应用配置'), callConfigRender, 'cbi-button-action')
 				])
 			])
 		]);
