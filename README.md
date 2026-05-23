@@ -18,6 +18,30 @@ manifest.
 See [docs/openwrt-luci.md](docs/openwrt-luci.md) for the product and
 implementation contract.
 
+## Package artifacts
+
+OpenWrt currently needs two package formats:
+
+- OpenWrt 24.10 and older: build `dist/luci-app-localclash_<version>-<release>_all.ipk`
+  with `./scripts/build-openwrt-ipk.sh`, then install with `opkg`.
+- OpenWrt 25.12 and newer: build `dist/luci-app-localclash-<version>-r<release>.apk`
+  with `./scripts/build-openwrt-apk.sh`, then install with `apk`.
+
+Both artifacts contain the same UI-only files: LuCI views, menu metadata, rpcd
+ACL, rpcd helper, and static help text. Neither artifact bundles the localClash
+Go core, Mihomo cores, dashboard assets, subscriptions, generated configuration,
+or runtime state.
+
+Router deployment helpers are split by package manager:
+
+```sh
+./scripts/deploy-openwrt-ipk.sh  # OpenWrt 24.10 and older, opkg
+./scripts/deploy-openwrt-apk.sh  # OpenWrt 25.12 and newer, apk
+```
+
+Public releases should upload both package artifacts and label them by OpenWrt
+version/package manager so users do not install the wrong format.
+
 ## Current skeleton
 
 The OpenWrt package work starts under:

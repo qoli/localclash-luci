@@ -1057,7 +1057,9 @@ make package/feeds/<feed>/luci-app-localclash/compile V=s
 Publication stages:
 
 1. GitHub Release artifact: publish the built LuCI package and install
-   instructions.
+   instructions. Every public release must include both the OpenWrt
+   24.10/opkg `.ipk` artifact and the OpenWrt 25.12/apk `.apk` artifact, with
+   labels and checksums that make the target branch clear.
 2. Project package feed: publish an OpenWrt feed repository so users can add
    `src-git localclash ...` to feeds config.
 3. Upstream submission: consider OpenWrt/LuCI upstream only after the package
@@ -1069,7 +1071,38 @@ Package manager compatibility:
 - OpenWrt 25.12 and newer use apk packages.
 
 The package layout should stay source-compatible with OpenWrt buildroot. The
-actual artifact format is produced by the target OpenWrt branch.
+actual artifact format is produced by the target OpenWrt branch: 24.10 builds
+`.ipk` artifacts through the legacy opkg packaging path, while 25.12 builds
+`.apk` artifacts through apk-tools v3.
+
+Standalone artifact scripts in this repository mirror that split:
+
+```sh
+./scripts/build-openwrt-ipk.sh
+./scripts/build-openwrt-apk.sh
+```
+
+The generated filenames intentionally follow each package manager convention:
+
+```text
+dist/luci-app-localclash_<version>-<release>_all.ipk
+dist/luci-app-localclash-<version>-r<release>.apk
+```
+
+Install commands must also be branch-specific:
+
+```sh
+# OpenWrt 24.10 and older
+opkg install /tmp/luci-app-localclash_<version>-<release>_all.ipk
+
+# OpenWrt 25.12 and newer
+apk add --allow-untrusted /tmp/luci-app-localclash-<version>-r<release>.apk
+```
+
+OpenWrt 25 apk support is a package-manager compatibility change only. The APK
+artifact must ship the same UI-only files as the IPK artifact and must not
+bundle localClash core binaries, Mihomo cores, dashboard assets, subscriptions,
+generated configs, or runtime state.
 
 Core binary release workflow:
 
@@ -1100,6 +1133,8 @@ The first implementation is complete only when all of these are true:
   bootstrap errors.
 - LuCI page renders all required states from the status envelope.
 - LuCI package builds in an OpenWrt SDK/buildroot.
+- Standalone package artifacts build for both OpenWrt 24.10/opkg `.ipk` and
+  OpenWrt 25.12/apk `.apk`.
 - Router smoke test covers missing core, core install, subscription refresh,
   config apply, runtime start, takeover apply/stop, runtime stop, and reset.
 
