@@ -407,7 +407,7 @@ clear_zombie_runtime_pid() {
 	[ -f "$pid_file" ] || return 0
 	pid="$(cat "$pid_file" 2>/dev/null)"
 	[ -n "$pid" ] || return 0
-	if ps w 2>/dev/null | awk -v pid="$pid" '$1 == pid && $4 ~ /^Z/ { found = 1 } END { exit found ? 0 : 1 }'; then
+	if runtime_pid_zombie "$pid"; then
 		rm -f "$pid_file"
 		log_line "runtime：已清理僵尸进程 PID 文件，pid=$pid"
 	fi
@@ -417,14 +417,17 @@ runtime_pid_alive() {
 	local pid
 	pid="$1"
 	[ -n "$pid" ] || return 1
-	ps w 2>/dev/null | awk -v pid="$pid" '$1 == pid && $4 !~ /^Z/ { found = 1 } END { exit found ? 0 : 1 }'
+	[ -d "/proc/$pid" ] || return 1
+	kill -0 "$pid" 2>/dev/null || return 1
+	! runtime_pid_zombie "$pid"
 }
 
 runtime_pid_zombie() {
 	local pid
 	pid="$1"
 	[ -n "$pid" ] || return 1
-	ps w 2>/dev/null | awk -v pid="$pid" '$1 == pid && $4 ~ /^Z/ { found = 1 } END { exit found ? 0 : 1 }'
+	[ -r "/proc/$pid/status" ] || return 1
+	awk '$1 == "State:" && $2 == "Z" { found = 1 } END { exit found ? 0 : 1 }' "/proc/$pid/status" 2>/dev/null
 }
 
 wait_runtime_pid_exit() {
@@ -551,7 +554,7 @@ runtime_running() {
 	[ -f "$pid_file" ] || return 1
 	pid="$(cat "$pid_file" 2>/dev/null)"
 	[ -n "$pid" ] || return 1
-	ps w 2>/dev/null | awk -v pid="$pid" '$1 == pid && $4 !~ /^Z/ { found = 1 } END { exit found ? 0 : 1 }'
+	runtime_pid_alive "$pid"
 }
 
 service_body() {
