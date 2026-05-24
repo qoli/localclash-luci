@@ -395,17 +395,62 @@ function commandButton(label, handler, extraClass, options) {
 		'click': function(ev) {
 			ev.preventDefault();
 			var button = ev.currentTarget;
+			var startedAt = Date.now();
+			var modal;
+			var progressDelay;
+			var progressTimer;
 			if (button.disabled)
 				return null;
+
+			function openProgressModal() {
+				modal = showTaskModal(label);
+				modal.logOutput.textContent = _('命令已发送，正在等待路由器返回结果…');
+				progressTimer = window.setInterval(function() {
+					var elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+					modal.statusLine.textContent = formatText(_('命令执行中，已等待 %s 秒。'), elapsed);
+				}, 1000);
+			}
+
+			function finishProgress(result) {
+				if (!modal) {
+					showResult(label, result, options);
+					return;
+				}
+
+				window.clearInterval(progressTimer);
+				if (result && result.ok === false)
+					modal.statusLine.textContent = formatText(_('命令失败：%s'), result.message || result.code || _('未知错误'));
+				else {
+					modal.statusLine.textContent = _('命令完成。');
+					modal.closeButton.setAttribute('data-reload', 'true');
+				}
+				modal.resultOutput.textContent = JSON.stringify(result, null, 2);
+				if (result && result.ok === true && !(options && options.keepOpen))
+					window.setTimeout(function() {
+						ui.hideModal();
+						window.location.reload();
+					}, 900);
+			}
 
 			button.disabled = true;
 			button.setAttribute('aria-busy', 'true');
 			button.classList.add('localclash-busy');
 			button.textContent = _('执行中…');
+			progressDelay = window.setTimeout(openProgressModal, 800);
 
 			return Promise.resolve().then(handler).then(function(result) {
-				showResult(label, result, options);
-			}).catch(showError).finally(function() {
+				window.clearTimeout(progressDelay);
+				finishProgress(result);
+			}).catch(function(err) {
+				window.clearTimeout(progressDelay);
+				if (!modal) {
+					showError(err);
+					return;
+				}
+				window.clearInterval(progressTimer);
+				modal.statusLine.textContent = formatText(_('命令失败：%s'), err.message || String(err));
+				modal.resultOutput.textContent = JSON.stringify({ ok: false, message: err.message || String(err) }, null, 2);
+			}).finally(function() {
 				button.disabled = false;
 				button.removeAttribute('aria-busy');
 				button.classList.remove('localclash-busy');

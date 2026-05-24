@@ -17,6 +17,7 @@ GITHUB_RELEASE_MIRRORS="${LOCALCLASH_GITHUB_RELEASE_MIRRORS:-https://gh.llkk.cc/
 GITHUB_RAW_MIRRORS="${LOCALCLASH_GITHUB_RAW_MIRRORS:-https://v1.ax/https://raw.githubusercontent.com https://ghp.xptvhelper.link/https://raw.githubusercontent.com https://fastly.jsdelivr.net/gh}"
 FETCH_TIMEOUT="${LOCALCLASH_FETCH_TIMEOUT:-20}"
 TASK_STEP_TIMEOUT="${LOCALCLASH_TASK_STEP_TIMEOUT:-180}"
+TAKEOVER_SKIP_FILE="${LOCALCLASH_TAKEOVER_SKIP_FILE:-/tmp/localclash-skip-takeover}"
 
 json_escape() {
 	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
@@ -34,6 +35,10 @@ fail() {
 
 log_line() {
 	printf '%s %s\n' "$(date -Iseconds 2>/dev/null || date)" "$*" >> "$LOG"
+}
+
+takeover_skip_enabled() {
+	[ "${LOCALCLASH_TAKEOVER_SKIP:-0}" = "1" ] || [ -f "$TAKEOVER_SKIP_FILE" ]
 }
 
 now_epoch() {
@@ -559,8 +564,26 @@ runtime_stop() {
 }
 
 runtime_start() {
+	local tmp rc
+	tmp="/tmp/localclash-runtime-start.$$"
 	clear_zombie_runtime_pid
-	call_core runtime start --json
+	call_core runtime start --json > "$tmp"
+	rc=$?
+	if [ "$rc" -ne 0 ]; then
+		cat "$tmp"
+		rm -f "$tmp"
+		return "$rc"
+	fi
+	sleep 2
+	clear_zombie_runtime_pid
+	if ! runtime_running; then
+		log_line "runtime：启动命令已返回成功，但进程没有保持运行"
+		rm -f "$tmp"
+		fail "runtime_not_running_after_start" "运行时启动命令已返回，但进程没有保持运行。请查看运行日志；常见原因是端口被 OpenClash 或其他服务占用。"
+		return 1
+	fi
+	cat "$tmp"
+	rm -f "$tmp"
 }
 
 runtime_restart() {
@@ -572,7 +595,7 @@ runtime_restart() {
 		return 1
 	fi
 	rm -f "$stop_output"
-	call_core runtime start --json
+	runtime_start
 }
 
 base_assets_installed() {
@@ -1396,6 +1419,21 @@ runtime_start_takeover_run() {
 		rm -rf "$tmpdir"
 		return 1
 	fi
+	sleep 2
+	clear_zombie_runtime_pid
+	if ! runtime_running; then
+		log_line "运行时接管：运行时启动命令已返回成功，但进程没有保持运行"
+		fail "runtime_not_running_after_start" "运行时启动命令已返回，但进程没有保持运行。请查看运行日志；常见原因是端口被 OpenClash 或其他服务占用。"
+		rm -rf "$tmpdir"
+		return 1
+	fi
+
+	if takeover_skip_enabled; then
+		log_line "运行时接管：测试模式已启用，跳过网络接管"
+		printf '{"ok":true,"changed":true,"summary":"运行时已启动；测试模式已跳过网络接管。","runtime":%s,"takeover":{"ok":true,"changed":false,"skipped":true,"summary":"测试模式已跳过网络接管。"}}\n' "$(cat "$tmpdir/runtime.json")"
+		rm -rf "$tmpdir"
+		return 0
+	fi
 
 	log_line "运行时接管：正在应用网络接管"
 	if ! run_with_heartbeat "运行时接管：正在应用网络接管" "$tmpdir/takeover.json" call_core takeover apply --json; then
@@ -1416,6 +1454,15 @@ runtime_start_takeover_run() {
 	log_line "运行时接管：已完成"
 	printf '{"ok":true,"changed":true,"summary":"运行时已启动，网络接管已应用。","runtime":%s,"takeover":%s}\n' "$(cat "$tmpdir/runtime.json")" "$(cat "$tmpdir/takeover.json")"
 	rm -rf "$tmpdir"
+}
+
+takeover_apply() {
+	if takeover_skip_enabled; then
+		fail "takeover_skipped_for_test" "测试模式已启用，已阻止网络接管。删除 /tmp/localclash-skip-takeover 后才允许应用网络接管。"
+		return 1
+	fi
+
+	call_core takeover apply --json
 }
 
 method="${1:-}"
@@ -1480,7 +1527,7 @@ JSON
 	runtime_restart) runtime_restart ;;
 	runtime_stop) runtime_stop ;;
 	takeover_status) call_core takeover status --json ;;
-	takeover_apply) call_core takeover apply --json ;;
+	takeover_apply) takeover_apply ;;
 	takeover_stop) call_core takeover stop --json ;;
 	reset) call_core reset --json ;;
 	service_status) service_status ;;
