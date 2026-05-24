@@ -17,6 +17,7 @@
           "component_update_async",
           "apply",
           "config_render",
+          "config_reset",
           "runtime_start",
           "runtime_start_takeover",
           "runtime_restart",

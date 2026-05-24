@@ -88,6 +88,48 @@ function row(label, value) {
 	]);
 }
 
+function replaceContent(id, content) {
+	var node = document.getElementById(id);
+	var items = Array.isArray(content) ? content : [ content ];
+
+	if (!node)
+		return;
+
+	while (node.firstChild)
+		node.removeChild(node.firstChild);
+
+	items.forEach(function(item) {
+		if (item === null || item === undefined)
+			return;
+		if (typeof item === 'string')
+			node.appendChild(document.createTextNode(item));
+		else
+			node.appendChild(item);
+	});
+}
+
+function setText(id, text) {
+	var node = document.getElementById(id);
+
+	if (node)
+		node.textContent = statusText(text);
+}
+
+function deferAfterPaint(fn, delay) {
+	var run = function() {
+		window.setTimeout(fn, delay || 0);
+	};
+
+	if (window.requestAnimationFrame) {
+		window.requestAnimationFrame(function() {
+			window.requestAnimationFrame(run);
+		});
+	}
+	else {
+		window.setTimeout(run, delay || 0);
+	}
+}
+
 function section(title, body, extraClass) {
 	return E('div', { 'class': 'cbi-section localclash-section ' + (extraClass || '') }, [
 		E('h3', {}, [ title ]),
@@ -461,11 +503,66 @@ function refreshTakeoverStatus() {
 	});
 }
 
-function classify(data, takeover) {
+function refreshOverviewStatus() {
+	var takeover = { pending: true };
+
+	return Promise.all([
+		callStatus().catch(function(err) {
+			return { ok: false, error: err.message || String(err) };
+		}),
+		callBootstrapTaskStatus().catch(function(err) {
+			return { ok: false, running: false, done: false, message: err.message || String(err) };
+		})
+	]).then(function(results) {
+		var data = results[0] || {};
+		var task = results[1] || {};
+		var state;
+		var message;
+
+		if (data.ok === false && data.error) {
+			state = {
+				id: 'status_failed',
+				title: _('状态读取失败'),
+				message: data.error
+			};
+		}
+		else {
+			state = classify(data, takeover, task);
+		}
+
+		message = state.id === 'running'
+			? [ _('localClash 运行时正在运行。网络接管：'), E('span', { 'id': 'localclash-overview-takeover-hero' }, [ takeoverState(takeover) ]) ]
+			: [ state.message ];
+
+		setText('localclash-overview-state-title', state.title);
+		replaceContent('localclash-overview-state-message', message);
+		replaceContent('localclash-overview-actions', primaryActions(state));
+		replaceContent('localclash-overview-diagnostics-body', diagnosticTable(data, takeover));
+		return refreshTakeoverStatus();
+	});
+}
+
+function classify(data, takeover, task) {
 	var status = productStatus(data);
 	var core = data.core || {};
 	var baseAssets = data.base_assets || {};
 	var missing = [];
+
+	if (task && task.running === true) {
+		return {
+			id: 'task_running',
+			title: _('任务正在执行'),
+			message: task.summary || _('localClash 正在完成当前任务，请等待任务结果。')
+		};
+	}
+
+	if (task && task.done === true && task.result && task.result.ok === false) {
+		return {
+			id: 'task_failed',
+			title: _('上次任务未完成'),
+			message: task.result.message || _('任务没有完成，请查看日志后重试。')
+		};
+	}
 
 	if (!core.installed) {
 		missing = [ 'localClash 核心', '基础文件', 'Mihomo 核心', 'Dashboard 面板' ];
@@ -519,6 +616,39 @@ function classify(data, takeover) {
 }
 
 function primaryActions(state) {
+	if (state.id === 'loading') {
+		return actionRow([
+			E('button', {
+				'type': 'button',
+				'class': 'btn cbi-button localclash-button',
+				'disabled': 'disabled',
+				'aria-busy': 'true'
+			}, [ _('正在检查…') ])
+		]);
+	}
+
+	if (state.id === 'status_failed') {
+		return actionRow([
+			commandButton(_('查看日志'), callBootstrapLogs, null, { keepOpen: true }),
+			linkButton(_('进入进阶'), L.url('admin/services/localclash/advanced'))
+		]);
+	}
+
+	if (state.id === 'task_running') {
+		return actionRow([
+			liveTaskButton(_('查看任务输出'), function() {
+				return { ok: true, started: true, running: true };
+			}, 'cbi-button-apply')
+		]);
+	}
+
+	if (state.id === 'task_failed') {
+		return actionRow([
+			commandButton(_('查看失败原因'), callBootstrapLogs, null, { keepOpen: true }),
+			liveTaskButton(_('重试一键初始化'), callBootstrapDefault, 'cbi-button-apply')
+		]);
+	}
+
 	if (state.id === 'bootstrap') {
 		return actionRow([
 			liveTaskButton(_('一键初始化'), callBootstrapDefault, 'cbi-button-apply'),
@@ -584,6 +714,29 @@ function diagnosticTable(data, takeover) {
 	]);
 }
 
+function diagnosticLoadingTable() {
+	var pending = _('加载中…');
+
+	return E('table', { 'class': 'table localclash-status-table' }, [
+		E('tbody', {}, [
+			row(_('localClash 核心'), pending),
+			row(_('核心路径'), pending),
+			row(_('基础文件'), pending),
+			row(_('基础文件路径'), pending),
+			row(_('Mihomo 核心'), pending),
+			row(_('Mihomo 核心类型'), pending),
+			row(_('Mihomo 核心路径'), pending),
+			row(_('Dashboard 面板'), pending),
+			row(_('订阅'), pending),
+			row(_('Mihomo 运行时运行中'), pending),
+			row(_('网络接管'), _('检查中…')),
+			row(_('MCP 服务已安装'), pending),
+			row(_('MCP 服务运行中'), pending),
+			row(_('MCP 端点'), pending)
+		])
+	]);
+}
+
 function copyText(text) {
 	if (navigator.clipboard && navigator.clipboard.writeText)
 		return navigator.clipboard.writeText(text);
@@ -597,10 +750,13 @@ function copyText(text) {
 	return Promise.resolve();
 }
 
-function mcpGuidance(help) {
+function mcpGuidanceBody(help) {
+	if (help && help.loading === true)
+		return E('p', { 'class': 'localclash-muted' }, [ _('正在加载 MCP 接入指令…') ]);
+
 	var text = (help && help.text) || '';
 
-	return section(_('MCP 接入指令'), E('div', {}, [
+	return E('div', {}, [
 		E('p', { 'class': 'localclash-muted' }, [ _('将这段文字复制给 Agent，用于安全接入路由器上的 localClash MCP。') ]),
 		E('textarea', {
 			'class': 'cbi-input-textarea localclash-copybox',
@@ -613,29 +769,37 @@ function mcpGuidance(help) {
 				});
 			})
 		])
+	]);
+}
+
+function mcpGuidance(help) {
+	return section(_('MCP 接入指令'), E('div', { 'id': 'localclash-overview-mcp-body' }, [
+		mcpGuidanceBody(help)
 	]), 'localclash-mcp-help');
+}
+
+function refreshMcpGuidance() {
+	return callMcpHelp().catch(function(err) {
+		return { ok: false, text: '', message: err.message || String(err) };
+	}).then(function(help) {
+		replaceContent('localclash-overview-mcp-body', mcpGuidanceBody(help));
+	});
 }
 
 return view.extend({
 	load: function() {
-		return Promise.all([
-			callStatus(),
-			callMcpHelp().catch(function(err) {
-				return { ok: false, text: '', message: err.message || String(err) };
-			})
-		]);
+		return {};
 	},
 
 	render: function(results) {
-		var data = results[0] || {};
-		var takeover = { pending: true };
-		var help = results[1] || {};
-		var state = classify(data, takeover);
-		var message = state.id === 'running'
-			? [ _('localClash 运行时正在运行。网络接管：'), E('span', { 'id': 'localclash-overview-takeover-hero' }, [ takeoverState(takeover) ]) ]
-			: [ state.message ];
+		var state = {
+			id: 'loading',
+			title: _('正在检查状态'),
+			message: _('正在读取路由器状态，请稍候。')
+		};
 
-		window.setTimeout(refreshTakeoverStatus, 0);
+		deferAfterPaint(refreshOverviewStatus, 600);
+		deferAfterPaint(refreshMcpGuidance, 1200);
 
 		return E('div', { 'class': 'cbi-map localclash-view localclash-overview' }, [
 			E('style', {}, [ [
@@ -661,12 +825,17 @@ return view.extend({
 				'@media (max-width: 700px){.localclash-view .localclash-button{width:100%;min-width:0}.localclash-view .localclash-status-table{display:table;width:100%}.localclash-task-log{min-width:0;max-width:100%;max-height:42vh;font-size:12px}.localclash-result{max-width:100%}}'
 			].join('\n') ]),
 			E('h2', {}, [ _('localClash') ]),
-			section(state.title, E('div', { 'class': 'localclash-hero' }, [
-				E('p', {}, message),
-				primaryActions(state)
+			section(_('概览'), E('div', { 'class': 'localclash-hero' }, [
+				E('h3', { 'id': 'localclash-overview-state-title' }, [ state.title ]),
+				E('p', { 'id': 'localclash-overview-state-message' }, [ state.message ]),
+				E('div', { 'id': 'localclash-overview-actions' }, [
+					primaryActions(state)
+				])
 			]), 'localclash-next-step'),
-			section(_('状态'), diagnosticTable(data, takeover), 'localclash-diagnostics'),
-			mcpGuidance(help)
+			section(_('状态'), E('div', { 'id': 'localclash-overview-diagnostics-body' }, [
+				diagnosticLoadingTable()
+			]), 'localclash-diagnostics'),
+			mcpGuidance({ loading: true })
 		]);
 	}
 });

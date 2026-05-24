@@ -94,6 +94,12 @@ var callReset = rpc.declare({
 	expect: { '': {} }
 });
 
+var callConfigReset = rpc.declare({
+	object: 'localclash',
+	method: 'config_reset',
+	expect: { '': {} }
+});
+
 function statusText(value) {
 	if (value === null || value === undefined || value === '')
 		return '-';
@@ -112,11 +118,33 @@ function coreFlavorText(value) {
 	return statusText(value);
 }
 
-function row(label, value) {
+function row(label, value, id) {
 	return E('tr', {}, [
 		E('th', { 'scope': 'row' }, [ label ]),
-		E('td', {}, [ statusText(value) ])
+		E('td', id ? { 'id': id } : {}, [ statusText(value) ])
 	]);
+}
+
+function setCellText(id, value) {
+	var cell = document.getElementById(id);
+
+	if (cell)
+		cell.textContent = statusText(value);
+}
+
+function deferAfterPaint(fn, delay) {
+	var run = function() {
+		window.setTimeout(fn, delay || 0);
+	};
+
+	if (window.requestAnimationFrame) {
+		window.requestAnimationFrame(function() {
+			window.requestAnimationFrame(run);
+		});
+	}
+	else {
+		window.setTimeout(run, delay || 0);
+	}
 }
 
 function takeoverSummary(takeover) {
@@ -159,6 +187,30 @@ function refreshTakeoverStatus() {
 
 		if (cell)
 			cell.textContent = err.message || String(err);
+	});
+}
+
+function refreshStatus() {
+	return callStatus().then(function(data) {
+		var core = data.core || {};
+		var baseAssets = data.base_assets || {};
+		var runtimeProfile = data.runtime_profile || {};
+		var service = (data.mcp_service && data.mcp_service.service) || {};
+		var mcp = (data.mcp_service && data.mcp_service.mcp) || {};
+		var runtime = (data.status && data.status.runtime) || {};
+
+		setCellText('localclash-advanced-core-installed', core.installed ? _('已安装') : _('缺失'));
+		setCellText('localclash-advanced-core-path', core.path);
+		setCellText('localclash-advanced-assets-installed', baseAssets.installed ? _('已安装') : _('缺失'));
+		setCellText('localclash-advanced-assets-path', baseAssets.path);
+		setCellText('localclash-advanced-core-flavor', coreFlavorText(runtimeProfile.core));
+		setCellText('localclash-advanced-mihomo-path', runtimeProfile.core_path);
+		setCellText('localclash-advanced-mcp-installed', service.installed);
+		setCellText('localclash-advanced-mcp-running', service.running);
+		setCellText('localclash-advanced-mcp-endpoint', mcp.endpoint);
+		setCellText('localclash-advanced-runtime-running', runtime.running);
+	}).catch(function(err) {
+		setCellText('localclash-advanced-core-installed', err.message || String(err));
 	});
 }
 
@@ -369,19 +421,15 @@ function actionRow(buttons) {
 
 return view.extend({
 	load: function() {
-		return callStatus();
+		return {};
 	},
 
 	render: function(data) {
 		var takeover = { pending: true };
-		var core = data.core || {};
-		var baseAssets = data.base_assets || {};
-		var runtimeProfile = data.runtime_profile || {};
-		var service = (data.mcp_service && data.mcp_service.service) || {};
-		var mcp = (data.mcp_service && data.mcp_service.mcp) || {};
-		var runtime = (data.status && data.status.runtime) || {};
+		var pending = _('加载中…');
 
-		window.setTimeout(refreshTakeoverStatus, 0);
+		deferAfterPaint(refreshStatus, 600);
+		deferAfterPaint(refreshTakeoverStatus, 1000);
 
 		return E('div', { 'class': 'cbi-map localclash-view' }, [
 			E('style', {}, [ [
@@ -405,16 +453,16 @@ return view.extend({
 			E('h2', {}, [ _('localClash') ]),
 			section(_('状态'), E('table', { 'class': 'table localclash-status-table' }, [
 					E('tbody', {}, [
-						row(_('localClash 核心'), core.installed ? _('已安装') : _('缺失')),
-						row(_('核心路径'), core.path),
-						row(_('基础文件'), baseAssets.installed ? _('已安装') : _('缺失')),
-						row(_('基础文件路径'), baseAssets.path),
-						row(_('Mihomo 核心类型'), coreFlavorText(runtimeProfile.core)),
-						row(_('Mihomo 核心路径'), runtimeProfile.core_path),
-						row(_('MCP 服务已安装'), service.installed),
-						row(_('MCP 服务运行中'), service.running),
-						row(_('MCP 端点'), mcp.endpoint),
-						row(_('Mihomo 运行时运行中'), runtime.running),
+						row(_('localClash 核心'), pending, 'localclash-advanced-core-installed'),
+						row(_('核心路径'), pending, 'localclash-advanced-core-path'),
+						row(_('基础文件'), pending, 'localclash-advanced-assets-installed'),
+						row(_('基础文件路径'), pending, 'localclash-advanced-assets-path'),
+						row(_('Mihomo 核心类型'), pending, 'localclash-advanced-core-flavor'),
+						row(_('Mihomo 核心路径'), pending, 'localclash-advanced-mihomo-path'),
+						row(_('MCP 服务已安装'), pending, 'localclash-advanced-mcp-installed'),
+						row(_('MCP 服务运行中'), pending, 'localclash-advanced-mcp-running'),
+						row(_('MCP 端点'), pending, 'localclash-advanced-mcp-endpoint'),
+						row(_('Mihomo 运行时运行中'), pending, 'localclash-advanced-runtime-running'),
 						E('tr', {}, [
 							E('th', { 'scope': 'row' }, [ _('网络接管') ]),
 							E('td', { 'id': 'localclash-advanced-takeover-status' }, [ takeoverSummary(takeover) ])
@@ -448,6 +496,7 @@ return view.extend({
 				commandButton(_('停止接管'), callTakeoverStop, 'cbi-button-reset')
 			])),
 			section(_('维护'), actionRow([
+				commandButton(_('配置复位'), callConfigReset, 'cbi-button-reset'),
 				commandButton(_('重置 localClash'), callReset, 'localclash-danger')
 			]))
 		]);

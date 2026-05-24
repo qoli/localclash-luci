@@ -16,6 +16,7 @@ GITHUB_MIRROR="${LOCALCLASH_GITHUB_MIRROR:-auto}"
 GITHUB_RELEASE_MIRRORS="${LOCALCLASH_GITHUB_RELEASE_MIRRORS:-https://gh.llkk.cc/https://github.com https://gh-proxy.com/https://github.com https://v1.ax/https://github.com https://ghp.xptvhelper.link/https://github.com}"
 GITHUB_RAW_MIRRORS="${LOCALCLASH_GITHUB_RAW_MIRRORS:-https://v1.ax/https://raw.githubusercontent.com https://ghp.xptvhelper.link/https://raw.githubusercontent.com https://fastly.jsdelivr.net/gh}"
 FETCH_TIMEOUT="${LOCALCLASH_FETCH_TIMEOUT:-20}"
+TASK_STEP_TIMEOUT="${LOCALCLASH_TASK_STEP_TIMEOUT:-180}"
 
 json_escape() {
 	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
@@ -35,9 +36,60 @@ log_line() {
 	printf '%s %s\n' "$(date -Iseconds 2>/dev/null || date)" "$*" >> "$LOG"
 }
 
+now_epoch() {
+	date +%s 2>/dev/null || printf '0\n'
+}
+
+write_task_running() {
+	printf '{"ok":true,"running":true,"done":false,"started_at":%s,"summary":"%s"}\n' "$(now_epoch)" "$(json_escape "$1")" > "$TASK_STATUS"
+}
+
+task_started_at() {
+	jsonfilter -i "$TASK_STATUS" -e '@.started_at' 2>/dev/null || printf '0\n'
+}
+
+lock_pid_alive() {
+	local pid
+	[ -f "$LOCK_DIR/pid" ] || return 1
+	pid="$(cat "$LOCK_DIR/pid" 2>/dev/null)"
+	[ -n "$pid" ] || return 1
+	kill -0 "$pid" 2>/dev/null
+}
+
+clear_stale_lock() {
+	[ -d "$LOCK_DIR" ] || return 0
+	if ! lock_pid_alive; then
+		rm -rf "$LOCK_DIR" 2>/dev/null || true
+		log_line "任务锁：已清理失效任务锁"
+	fi
+}
+
+write_task_stale_result() {
+	local result
+	result='{"ok":false,"code":"task_interrupted","message":"初始化任务已中断，请重试。","details":{},"next_actions":["点击一键初始化重试。"]}'
+	printf '%s\n' "$result" > "$TASK_RESULT"
+	printf '{"ok":true,"running":false,"done":true,"exit_code":124,"result":%s}\n' "$result" > "$TASK_STATUS"
+}
+
+reconcile_task_status() {
+	local started age
+	[ -f "$TASK_STATUS" ] || return 0
+	grep -q '"running":true' "$TASK_STATUS" 2>/dev/null || return 0
+	clear_stale_lock
+	[ -d "$LOCK_DIR" ] && return 0
+	started="$(task_started_at)"
+	age=$(( $(now_epoch) - started ))
+	[ "$started" -gt 0 ] && [ "$age" -lt 10 ] && return 0
+	if ! ps w 2>/dev/null | grep -q '[l]ocalclash .*_run'; then
+		log_line "任务状态：检测到后台任务已中断"
+		write_task_stale_result
+	fi
+}
+
 with_lock() {
 	waited=0
 	while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+		clear_stale_lock
 		if [ "$waited" -ge 120 ]; then
 			log_line "等待任务锁超时：$*"
 			fail "task_locked" "另一个 localClash 任务仍在运行，请稍后再试。"
@@ -46,10 +98,11 @@ with_lock() {
 		waited=$((waited + 1))
 		sleep 1
 	done
-	trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT INT TERM
+	printf '%s\n' "$$" > "$LOCK_DIR/pid"
+	trap 'rm -rf "$LOCK_DIR" 2>/dev/null || true' EXIT INT TERM
 	"$@"
 	rc=$?
-	rmdir "$LOCK_DIR" 2>/dev/null || true
+	rm -rf "$LOCK_DIR" 2>/dev/null || true
 	trap - EXIT INT TERM
 	return "$rc"
 }
@@ -67,6 +120,15 @@ run_with_heartbeat() {
 		if kill -0 "$pid" 2>/dev/null; then
 			elapsed=$((elapsed + 5))
 			log_line "$label：仍在执行（${elapsed}s）"
+			if [ "$TASK_STEP_TIMEOUT" -gt 0 ] && [ "$elapsed" -ge "$TASK_STEP_TIMEOUT" ]; then
+				log_line "$label：超过 ${TASK_STEP_TIMEOUT}s，已停止等待"
+				kill "$pid" 2>/dev/null || true
+				sleep 2
+				kill -9 "$pid" 2>/dev/null || true
+				wait "$pid" 2>/dev/null || true
+				printf '{"ok":false,"code":"step_timeout","message":"%s 超时，请检查路由器是否能访问下载源，或稍后重试。","details":{"timeout_seconds":%s},"next_actions":["确认路由器可以访问下载源后重试。"]}\n' "$(json_escape "$label")" "$TASK_STEP_TIMEOUT" > "$output"
+				return 124
+			fi
 		fi
 	done
 	wait "$pid"
@@ -776,13 +838,14 @@ component_update() {
 
 start_bootstrap_core() {
 	local result rc
+	clear_stale_lock
 	if [ -d "$LOCK_DIR" ]; then
 		printf '{"ok":true,"started":false,"running":true,"summary":"另一个 localClash 任务正在运行。"}\n'
 		return 0
 	fi
 	rm -f "$TASK_STATUS" "$TASK_RESULT" "$TASK_INPUT"
 	: > "$LOG"
-	printf '{"ok":true,"running":true,"done":false,"summary":"localClash 核心更新任务正在运行。"}\n' > "$TASK_STATUS"
+	write_task_running "localClash 核心更新任务正在运行。"
 	log_line "核心初始化：已加入后台任务队列"
 	(
 		result="$("$0" call bootstrap_core_run 2>>"$LOG")"
@@ -798,6 +861,7 @@ start_bootstrap_core() {
 
 start_component_update() {
 	local payload component result rc
+	clear_stale_lock
 	if [ -d "$LOCK_DIR" ]; then
 		printf '{"ok":true,"started":false,"running":true,"summary":"另一个 localClash 任务正在运行。"}\n'
 		return 0
@@ -811,7 +875,7 @@ start_component_update() {
 	rm -f "$TASK_STATUS" "$TASK_RESULT" "$TASK_INPUT"
 	: > "$LOG"
 	printf '%s\n' "$payload" > "$TASK_INPUT"
-	printf '{"ok":true,"running":true,"done":false,"summary":"组件更新任务正在运行。"}\n' > "$TASK_STATUS"
+	write_task_running "组件更新任务正在运行。"
 	log_line "组件更新：$component 已加入后台任务队列"
 	(
 		result="$("$0" call component_update_run 2>>"$LOG")"
@@ -952,6 +1016,7 @@ subscription_setup() {
 
 start_subscription_setup() {
 	local payload result rc
+	clear_stale_lock
 	if [ -d "$LOCK_DIR" ]; then
 		printf '{"ok":true,"started":false,"running":true,"summary":"另一个 localClash 任务正在运行。"}\n'
 		return 0
@@ -960,7 +1025,7 @@ start_subscription_setup() {
 	rm -f "$TASK_STATUS" "$TASK_RESULT" "$TASK_INPUT"
 	: > "$LOG"
 	write_versioned_payload "$payload" > "$TASK_INPUT"
-	printf '{"ok":true,"running":true,"done":false,"summary":"订阅设置任务正在运行。"}\n' > "$TASK_STATUS"
+	write_task_running "订阅设置任务正在运行。"
 	log_line "订阅设置：已加入后台任务队列"
 	(
 		result="$("$0" call subscription_setup_run 2>>"$LOG")"
@@ -989,6 +1054,35 @@ apply_state() {
 
 config_render() {
 	call_core config render --json
+}
+
+config_reset() {
+	local deleted path
+	if runtime_running; then
+		fail "runtime_running" "Mihomo 运行时正在运行，请先停止运行时再执行配置复位。"
+		return 1
+	fi
+	deleted=""
+	for path in \
+		"$STATE_DIR/generated" \
+		"$STATE_DIR/profiles" \
+		"$STATE_DIR/localclash.yaml" \
+		"$STATE_DIR/localclash-packs.yaml" \
+		"$STATE_DIR/localclash-subscriptions.yaml" \
+		"$STATE_DIR/localclash-runtime.yaml" \
+		"$STATE_DIR/.runtime/subscriptions" \
+		"$STATE_DIR"/subscription*.yaml
+	do
+		[ -e "$path" ] || continue
+		rm -rf "$path" || {
+			fail "config_reset_failed" "配置复位失败，请检查文件权限。"
+			return 1
+		}
+		[ -n "$deleted" ] && deleted="$deleted,"
+		deleted="$deleted\"$(json_escape "${path#$STATE_DIR/}")\""
+	done
+	log_line "配置复位：已清理配置并保留核心、二进制和基础资源"
+	ok '"changed":true,"summary":"配置已复位，已保留 localClash 核心、Mihomo 核心、Dashboard 和基础文件。","deleted":['"$deleted"']'
 }
 
 bootstrap_core() {
@@ -1137,6 +1231,7 @@ bootstrap_logs() {
 }
 
 bootstrap_task_status() {
+	reconcile_task_status
 	if [ -f "$TASK_STATUS" ]; then
 		cat "$TASK_STATUS"
 	else
@@ -1150,13 +1245,14 @@ task_status() {
 
 start_bootstrap_default() {
 	local result rc
+	clear_stale_lock
 	if [ -d "$LOCK_DIR" ]; then
 		printf '{"ok":true,"started":false,"running":true,"summary":"另一个 localClash 任务正在运行。"}\n'
 		return 0
 	fi
 	rm -f "$TASK_STATUS" "$TASK_RESULT"
 	: > "$LOG"
-	printf '{"ok":true,"running":true,"done":false,"summary":"初始化任务正在运行。"}\n' > "$TASK_STATUS"
+	write_task_running "初始化任务正在运行。"
 	log_line "默认初始化：已加入后台任务队列"
 	(
 		result="$("$0" call bootstrap_default_run 2>>"$LOG")"
@@ -1202,26 +1298,34 @@ bootstrap_default_run() {
 		log_line "默认初始化：基础文件已安装"
 	fi
 
-	log_line "默认初始化：正在更新 Mihomo 核心"
-	mihomo_attempt=1
-	while ! run_with_heartbeat "默认初始化：正在更新 Mihomo 核心" "$tmpdir/mihomo.json" call_core component update mihomo --json; do
-		if [ "$mihomo_attempt" -ge 3 ]; then
-			log_line "默认初始化：Mihomo 核心更新失败，已尝试 $mihomo_attempt 次"
-			cat "$tmpdir/mihomo.json"
+	if mihomo_core_installed; then
+		log_line "默认初始化：Mihomo 核心已安装，跳过更新"
+	else
+		log_line "默认初始化：正在更新 Mihomo 核心"
+		mihomo_attempt=1
+		while ! run_with_heartbeat "默认初始化：正在更新 Mihomo 核心" "$tmpdir/mihomo.json" call_core component update mihomo --json; do
+			if [ "$mihomo_attempt" -ge 3 ]; then
+				log_line "默认初始化：Mihomo 核心更新失败，已尝试 $mihomo_attempt 次"
+				cat "$tmpdir/mihomo.json"
+				rm -rf "$tmpdir"
+				return 1
+			fi
+			mihomo_attempt=$((mihomo_attempt + 1))
+			log_line "默认初始化：Mihomo 核心更新失败，正在进行第 $mihomo_attempt 次重试"
+			sleep 2
+		done
+	fi
+
+	if dashboard_installed; then
+		log_line "默认初始化：Dashboard 面板文件已安装，跳过更新"
+	else
+		log_line "默认初始化：正在更新 Dashboard 面板文件"
+		if ! run_with_heartbeat "默认初始化：正在更新 Dashboard 面板文件" "$tmpdir/dashboard.json" call_core component update dashboard --json; then
+			log_line "默认初始化：Dashboard 面板更新失败"
+			cat "$tmpdir/dashboard.json"
 			rm -rf "$tmpdir"
 			return 1
 		fi
-		mihomo_attempt=$((mihomo_attempt + 1))
-		log_line "默认初始化：Mihomo 核心更新失败，正在进行第 $mihomo_attempt 次重试"
-		sleep 2
-	done
-
-	log_line "默认初始化：正在更新 Dashboard 面板文件"
-	if ! run_with_heartbeat "默认初始化：正在更新 Dashboard 面板文件" "$tmpdir/dashboard.json" call_core component update dashboard --json; then
-		log_line "默认初始化：Dashboard 面板更新失败"
-		cat "$tmpdir/dashboard.json"
-		rm -rf "$tmpdir"
-		return 1
 	fi
 
 	cat > "$tmpdir/template.json" <<'JSON'
@@ -1255,13 +1359,14 @@ JSON
 
 start_runtime_takeover() {
 	local result rc
+	clear_stale_lock
 	if [ -d "$LOCK_DIR" ]; then
 		printf '{"ok":true,"started":false,"running":true,"summary":"另一个 localClash 任务正在运行。"}\n'
 		return 0
 	fi
 	rm -f "$TASK_STATUS" "$TASK_RESULT"
 	: > "$LOG"
-	printf '{"ok":true,"running":true,"done":false,"summary":"运行时启动和网络接管任务正在运行。"}\n' > "$TASK_STATUS"
+	write_task_running "运行时启动和网络接管任务正在运行。"
 	log_line "运行时接管：已加入后台任务队列"
 	(
 		result="$("$0" call runtime_start_takeover_run 2>>"$LOG")"
@@ -1332,6 +1437,7 @@ case "$method" in
   "component_update_async": { "component": "localclash" },
   "apply": {},
   "config_render": {},
+  "config_reset": {},
   "runtime_start": {},
   "runtime_start_takeover": {},
   "runtime_restart": {},
@@ -1367,6 +1473,7 @@ JSON
 	component_update_run) component_update_run ;;
 	apply) with_lock apply_state ;;
 	config_render) with_lock config_render ;;
+	config_reset) with_lock config_reset ;;
 	runtime_start) runtime_start ;;
 	runtime_start_takeover) start_runtime_takeover ;;
 	runtime_start_takeover_run) with_lock runtime_start_takeover_run ;;
