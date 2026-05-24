@@ -318,15 +318,52 @@ function requireSubscriptionUrls() {
 	return urls;
 }
 
+function deferAfterPaint(fn, delay) {
+	var run = function() {
+		window.setTimeout(fn, delay || 0);
+	};
+
+	if (window.requestAnimationFrame) {
+		window.requestAnimationFrame(function() {
+			window.requestAnimationFrame(run);
+		});
+	}
+	else {
+		window.setTimeout(run, delay || 0);
+	}
+}
+
+function setSubscriptionLoadStatus(text, isError) {
+	var status = document.getElementById('localclash-subscription-load-status');
+
+	if (!status)
+		return;
+
+	status.textContent = text || '';
+	status.classList.toggle('localclash-error', !!isError);
+}
+
+function refreshSubscriptionInput() {
+	return callSubscriptionGet().then(function(subscription) {
+		var textarea = document.getElementById('localclash-subscription-urls');
+		var savedUrls = subscription && Array.isArray(subscription.urls) ? subscription.urls.join('\n') : '';
+
+		if (textarea && textarea.getAttribute('data-dirty') !== 'true')
+			textarea.value = savedUrls;
+
+		setSubscriptionLoadStatus(savedUrls ? _('订阅内容已加载。') : _('尚未保存订阅。'));
+	}).catch(function(err) {
+		setSubscriptionLoadStatus(formatText(_('订阅读取失败：%s'), err.message || String(err)), true);
+	});
+}
+
 return view.extend({
 	load: function() {
-		return callSubscriptionGet().catch(function() {
-			return { ok: false, urls: [] };
-		});
+		return {};
 	},
 
 	render: function(subscription) {
-		var savedUrls = subscription && Array.isArray(subscription.urls) ? subscription.urls.join('\n') : '';
+		deferAfterPaint(refreshSubscriptionInput, 600);
 
 		return E('div', { 'class': 'cbi-map localclash-view' }, [
 			E('style', {}, [ [
@@ -337,6 +374,8 @@ return view.extend({
 				'.localclash-view .localclash-button:active{transform:translateY(1px)}',
 				'.localclash-view .localclash-button.localclash-busy{cursor:wait;opacity:.72}',
 				'.localclash-view .localclash-textarea{box-sizing:border-box;width:calc(100% - 2rem);min-height:12rem;margin:1rem;padding:1rem;font-family:monospace;line-height:1.45;resize:vertical}',
+				'.localclash-view .localclash-subscription-status{margin:.25rem 1rem 0 1rem;color:#667085;line-height:1.45}',
+				'.localclash-view .localclash-subscription-status.localclash-error{color:#b42318}',
 				'.localclash-view + .cbi-page-actions,.localclash-view ~ .cbi-page-actions,.cbi-page-actions{display:none!important}',
 				'.localclash-result{box-sizing:border-box;width:100%;min-width:0;max-width:100%;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word}',
 				'.localclash-task-status{margin:.25rem 0 1rem 0;line-height:1.45}',
@@ -350,8 +389,16 @@ return view.extend({
 					E('textarea', {
 						'id': 'localclash-subscription-urls',
 						'class': 'cbi-input-textarea localclash-textarea',
-						'placeholder': _('每行一条订阅 URL')
-					}, [ savedUrls ]),
+						'placeholder': _('每行一条订阅 URL'),
+						'input': function(ev) {
+							ev.currentTarget.setAttribute('data-dirty', 'true');
+							setSubscriptionLoadStatus(_('正在编辑，已暂停覆盖订阅内容。'));
+						}
+					}, []),
+				E('p', {
+					'id': 'localclash-subscription-load-status',
+					'class': 'localclash-subscription-status'
+				}, [ _('正在加载订阅内容…') ]),
 				actionRow([
 					liveTaskButton(_('保存并应用订阅'), function() {
 						return callSubscriptionSetupAsync(requireSubscriptionUrls());

@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-localclash
 PKG_VERSION:=0.1.0
-PKG_RELEASE:=6
+PKG_RELEASE:=7
 PKGARCH:=all
 
 LUCI_TITLE:=LuCI support for localClash
