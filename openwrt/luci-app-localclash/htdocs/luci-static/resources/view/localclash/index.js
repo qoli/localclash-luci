@@ -118,6 +118,24 @@ function coreFlavorText(value) {
 	return statusText(value);
 }
 
+function defaultTemplateText(value) {
+	if (value === 'patch_set')
+		return _('Patch 集合');
+	if (value === 'legacy')
+		return _('传统单文件');
+	if (value === 'missing')
+		return _('缺失');
+	return statusText(value);
+}
+
+function defaultPatchStatusText(baseAssets) {
+	if (!baseAssets || baseAssets.default_template !== 'patch_set')
+		return '-';
+	if (baseAssets.default_patches_installed)
+		return formatText(_('已安装（%s 个）'), baseAssets.default_patch_count || 0);
+	return formatText(_('缺失（清单 %s 个）'), baseAssets.default_patch_count || 0);
+}
+
 function row(label, value, id) {
 	return E('tr', {}, [
 		E('th', { 'scope': 'row' }, [ label ]),
@@ -203,6 +221,8 @@ function refreshStatus() {
 		setCellText('localclash-advanced-core-path', core.path);
 		setCellText('localclash-advanced-assets-installed', baseAssets.installed ? _('已安装') : _('缺失'));
 		setCellText('localclash-advanced-assets-path', baseAssets.path);
+		setCellText('localclash-advanced-default-template', defaultTemplateText(baseAssets.default_template));
+		setCellText('localclash-advanced-default-patches', defaultPatchStatusText(baseAssets));
 		setCellText('localclash-advanced-core-flavor', coreFlavorText(runtimeProfile.core));
 		setCellText('localclash-advanced-mihomo-path', runtimeProfile.core_path);
 		setCellText('localclash-advanced-mcp-installed', service.installed);
@@ -502,6 +522,8 @@ return view.extend({
 						row(_('核心路径'), pending, 'localclash-advanced-core-path'),
 						row(_('基础文件'), pending, 'localclash-advanced-assets-installed'),
 						row(_('基础文件路径'), pending, 'localclash-advanced-assets-path'),
+						row(_('默认配置模板'), pending, 'localclash-advanced-default-template'),
+						row(_('默认 Patch 文件'), pending, 'localclash-advanced-default-patches'),
 						row(_('Mihomo 核心类型'), pending, 'localclash-advanced-core-flavor'),
 						row(_('Mihomo 核心路径'), pending, 'localclash-advanced-mihomo-path'),
 						row(_('MCP 服务已安装'), pending, 'localclash-advanced-mcp-installed'),

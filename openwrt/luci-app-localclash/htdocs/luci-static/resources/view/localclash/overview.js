@@ -81,6 +81,24 @@ function coreFlavorText(value) {
 	return statusText(value);
 }
 
+function defaultTemplateText(value) {
+	if (value === 'patch_set')
+		return _('Patch 集合');
+	if (value === 'legacy')
+		return _('传统单文件');
+	if (value === 'missing')
+		return _('缺失');
+	return statusText(value);
+}
+
+function defaultPatchStatusText(baseAssets) {
+	if (!baseAssets || baseAssets.default_template !== 'patch_set')
+		return '-';
+	if (baseAssets.default_patches_installed)
+		return formatText(_('已安装（%s 个）'), baseAssets.default_patch_count || 0);
+	return formatText(_('缺失（清单 %s 个）'), baseAssets.default_patch_count || 0);
+}
+
 function row(label, value) {
 	return E('tr', {}, [
 		E('th', { 'scope': 'row' }, [ label ]),
@@ -740,6 +758,8 @@ function diagnosticTable(data, takeover) {
 			row(_('核心路径'), core.path),
 			row(_('基础文件'), baseAssets.installed ? _('已安装') : _('缺失')),
 			row(_('基础文件路径'), baseAssets.path),
+			row(_('默认配置模板'), defaultTemplateText(baseAssets.default_template)),
+			row(_('默认 Patch 文件'), defaultPatchStatusText(baseAssets)),
 			row(_('Mihomo 核心'), core.installed ? (componentInstalled(status, [ 'mihomo' ]) ? _('已安装') : _('缺失')) : _('缺失')),
 			row(_('Mihomo 核心类型'), coreFlavorText(runtimeProfile.core)),
 			row(_('Mihomo 核心路径'), runtimeProfile.core_path),
@@ -766,6 +786,8 @@ function diagnosticLoadingTable() {
 			row(_('核心路径'), pending),
 			row(_('基础文件'), pending),
 			row(_('基础文件路径'), pending),
+			row(_('默认配置模板'), pending),
+			row(_('默认 Patch 文件'), pending),
 			row(_('Mihomo 核心'), pending),
 			row(_('Mihomo 核心类型'), pending),
 			row(_('Mihomo 核心路径'), pending),

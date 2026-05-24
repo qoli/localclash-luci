@@ -628,9 +628,77 @@ runtime_restart() {
 	runtime_start
 }
 
+default_template_path() {
+	printf '%s/policy-templates/localclash-default.yaml\n' "$STATE_DIR"
+}
+
+default_template_mode() {
+	local template
+	template="$(default_template_path)"
+	if [ ! -f "$template" ]; then
+		printf 'missing\n'
+		return 0
+	fi
+	if grep -q '^[[:space:]]*patches:[[:space:]]*$' "$template" 2>/dev/null; then
+		printf 'patch_set\n'
+		return 0
+	fi
+	printf 'legacy\n'
+}
+
+default_template_patch_paths() {
+	local template
+	template="$(default_template_path)"
+	[ -f "$template" ] || return 0
+	awk '
+		/^[[:space:]]*patches:[[:space:]]*$/ {
+			in_patches = 1
+			next
+		}
+		in_patches && /^[^[:space:]-]/ {
+			in_patches = 0
+		}
+		in_patches {
+			line = $0
+			sub(/^[[:space:]-]*/, "", line)
+			if (line ~ /^path:[[:space:]]*/) {
+				sub(/^path:[[:space:]]*/, "", line)
+				gsub(/^[[:space:]"'"'"']+|[[:space:]"'"'"']+$/, "", line)
+				if (line != "")
+					print line
+			}
+		}
+	' "$template" 2>/dev/null
+}
+
+default_template_patch_count() {
+	default_template_patch_paths | wc -l | tr -d '[:space:]'
+}
+
+default_patch_assets_installed() {
+	local path count
+	count=0
+	for path in $(default_template_patch_paths); do
+		count=$((count + 1))
+		case "$path" in
+			/*|*../*) return 1 ;;
+		esac
+		[ -f "$STATE_DIR/policy-templates/$path" ] || return 1
+	done
+	[ "$count" -gt 0 ]
+}
+
+default_policy_template_assets_installed() {
+	local mode
+	[ -f "$(default_template_path)" ] || return 1
+	mode="$(default_template_mode)"
+	[ "$mode" = "patch_set" ] || return 0
+	default_patch_assets_installed
+}
+
 base_assets_installed() {
 	[ -f "$STATE_DIR/policies/loyalsoldier.yaml" ] || return 1
-	[ -f "$STATE_DIR/policy-templates/localclash-default.yaml" ] || return 1
+	default_policy_template_assets_installed || return 1
 	[ -f "$STATE_DIR/.runtime/mihomo/Country.mmdb" ] || return 1
 	[ -f "$STATE_DIR/.runtime/mihomo/geoip.dat" ] || return 1
 	[ -f "$STATE_DIR/.runtime/mihomo/geosite.dat" ] || return 1
@@ -639,6 +707,66 @@ base_assets_installed() {
 		[ -e "$source" ] && return 0
 	done
 	return 1
+}
+
+base_assets_missing_reason() {
+	local mode source
+	[ -f "$STATE_DIR/policies/loyalsoldier.yaml" ] || {
+		printf '缺少 Loyalsoldier 策略文件。'
+		return 0
+	}
+	[ -f "$(default_template_path)" ] || {
+		printf '缺少 localClash 默认配置模板。'
+		return 0
+	}
+	mode="$(default_template_mode)"
+	if [ "$mode" = "patch_set" ] && ! default_patch_assets_installed; then
+		printf '默认配置模板是 patch set，但缺少对应 patch 文件。'
+		return 0
+	fi
+	[ -f "$STATE_DIR/.runtime/mihomo/Country.mmdb" ] || {
+		printf '缺少 Country.mmdb。'
+		return 0
+	}
+	[ -f "$STATE_DIR/.runtime/mihomo/geoip.dat" ] || {
+		printf '缺少 geoip.dat。'
+		return 0
+	}
+	[ -f "$STATE_DIR/.runtime/mihomo/geosite.dat" ] || {
+		printf '缺少 geosite.dat。'
+		return 0
+	}
+	[ -f "$STATE_DIR/.runtime/mihomo/ASN.mmdb" ] || {
+		printf '缺少 ASN.mmdb。'
+		return 0
+	}
+	for source in "$STATE_DIR"/rule-sources/*.yaml; do
+		[ -e "$source" ] && {
+			printf '基础文件不完整。'
+			return 0
+		}
+	done
+	printf '缺少 rule-sources 规则源文件。'
+}
+
+base_assets_body() {
+	local installed mode patch_installed patch_count
+	installed=false
+	base_assets_installed && installed=true
+	mode="$(default_template_mode)"
+	patch_installed=null
+	patch_count="$(default_template_patch_count)"
+	[ -n "$patch_count" ] || patch_count=0
+	case "$mode" in
+		patch_set)
+			patch_installed=false
+			default_patch_assets_installed && patch_installed=true
+			;;
+		missing)
+			patch_installed=false
+			;;
+	esac
+	printf '"base_assets":{"installed":%s,"path":"%s","default_template":"%s","default_patches_installed":%s,"default_patch_count":%s}' "$installed" "$(json_escape "$STATE_DIR")" "$(json_escape "$mode")" "$patch_installed" "$patch_count"
 }
 
 mihomo_core_installed() {
@@ -851,17 +979,17 @@ service_start() {
 }
 
 status() {
-	local core_ok assets_ok mihomo_ok dashboard_ok subscription_ok runtime_ok summary runtime_profile
+	local core_ok mihomo_ok dashboard_ok subscription_ok runtime_ok summary runtime_profile base_assets
 	clear_zombie_runtime_pid
 	core_ok="$(core_installed && echo true || echo false)"
-	assets_ok="$(base_assets_installed && echo true || echo false)"
 	mihomo_ok="$(mihomo_core_installed && echo true || echo false)"
 	dashboard_ok="$(dashboard_installed && echo true || echo false)"
 	subscription_ok="$(subscription_configured && echo true || echo false)"
 	runtime_ok="$(runtime_running && echo true || echo false)"
 	runtime_profile="$(runtime_profile_body)"
+	base_assets="$(base_assets_body)"
 	summary='"components":{"mihomo":{"installed":'"$mihomo_ok"'},"dashboard":{"installed":'"$dashboard_ok"'}},"subscription":{"configured":'"$subscription_ok"'},"runtime":{"running":'"$runtime_ok"'}'
-	printf '{"ok":true,"core":{"installed":%s,"path":"%s"},"base_assets":{"installed":%s,"path":"%s"},%s,"mcp_service":{%s},"status":{"ok":true,"changed":false,"summary":"localClash LuCI 状态摘要。",%s,"status":{%s}}}\n' "$core_ok" "$CORE" "$assets_ok" "$STATE_DIR" "$runtime_profile" "$(service_body)" "$summary" "$summary"
+	printf '{"ok":true,"core":{"installed":%s,"path":"%s"},%s,%s,"mcp_service":{%s},"status":{"ok":true,"changed":false,"summary":"localClash LuCI 状态摘要。",%s,"status":{%s}}}\n' "$core_ok" "$CORE" "$base_assets" "$runtime_profile" "$(service_body)" "$summary" "$summary"
 }
 
 component_update() {
@@ -1208,7 +1336,7 @@ bootstrap_core() {
 }
 
 install_base_assets() {
-	local manifest tmpdir assets_url assets_sha archive source
+	local manifest tmpdir assets_url assets_sha archive missing
 	manifest="$1"
 	tmpdir="$2"
 	assets_url="$(jsonfilter -i "$manifest" -e '@.base_assets.url' 2>/dev/null)"
@@ -1239,8 +1367,9 @@ install_base_assets() {
 		return 1
 	fi
 	if ! base_assets_installed; then
-		log_line "基础文件初始化：安装后仍缺少必要文件"
-		fail "base_assets_incomplete" "已安装的 localClash 基础文件不完整。"
+		missing="$(base_assets_missing_reason)"
+		log_line "基础文件初始化：安装后仍缺少必要文件：$missing"
+		fail "base_assets_incomplete" "已安装的 localClash 基础文件不完整：$missing"
 		return 1
 	fi
 	log_line "基础文件初始化：已安装"
@@ -1341,7 +1470,7 @@ bootstrap_default_run() {
 	fi
 
 	if ! base_assets_installed; then
-		log_line "默认初始化：基础文件缺失，开始初始化"
+		log_line "默认初始化：基础文件缺失，开始初始化：$(base_assets_missing_reason)"
 		if ! bootstrap_assets > "$tmpdir/assets.json"; then
 			cat "$tmpdir/assets.json"
 			rm -rf "$tmpdir"

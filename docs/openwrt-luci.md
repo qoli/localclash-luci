@@ -484,6 +484,10 @@ Code-grounded notes:
 
 - `template` values come from current files under `policy-templates/` and the
   constants in `internal/policytemplate`.
+- `localclash-default` may be either a legacy single template or a patch-set
+  manifest. When the template contains `patches:`, every referenced patch file
+  under `policy-templates/localclash-default.d/` must be present before LuCI
+  treats base assets as installed.
 - `runtime_profile` values come from `runtimeprofile.ModeNormal` and
   `runtimeprofile.ModeRouter`.
 - `core` values come from `runtimeprofile.CoreMeta` and
@@ -756,6 +760,10 @@ Package rules:
 - The package should install a bootstrap helper capable of downloading
   localClash core after explicit user action and generating/repairing the MCP
   service wrapper from helper-owned logic.
+- The bootstrap helper must validate downloaded base assets recursively. A
+  `policy-templates/localclash-default.yaml` patch-set manifest is incomplete
+  unless all referenced `policy-templates/localclash-default.d/*.yaml` patch
+  files were extracted.
 - The package should not run network downloads from `postinst`.
 - The package should depend only on the LuCI/rpcd/runtime tools needed by the UI
   and helper.
