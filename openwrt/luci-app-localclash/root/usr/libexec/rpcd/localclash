@@ -112,13 +112,37 @@ with_lock() {
 	return "$rc"
 }
 
+child_pids() {
+	local parent status pid ppid
+	parent="$1"
+	for status in /proc/[0-9]*/status; do
+		[ -r "$status" ] || continue
+		pid="$(awk '$1 == "Pid:" { print $2; exit }' "$status" 2>/dev/null)"
+		ppid="$(awk '$1 == "PPid:" { print $2; exit }' "$status" 2>/dev/null)"
+		[ "$ppid" = "$parent" ] && [ -n "$pid" ] && printf '%s\n' "$pid"
+	done
+}
+
+kill_process_tree() {
+	local signal pid child
+	signal="$1"
+	pid="$2"
+	[ -n "$pid" ] || return 0
+	for child in $(child_pids "$pid"); do
+		kill_process_tree "$signal" "$child"
+	done
+	kill "$signal" "$pid" 2>/dev/null || true
+}
+
 run_with_heartbeat() {
-	local label output pid elapsed rc
+	local label output tmp_output pid elapsed rc
 	label="$1"
 	output="$2"
 	shift 2
 	elapsed=0
-	( "$@" > "$output" ) &
+	tmp_output="${output}.run.$$"
+	rm -f "$tmp_output"
+	( "$@" > "$tmp_output" ) &
 	pid="$!"
 	while kill -0 "$pid" 2>/dev/null; do
 		sleep 5
@@ -127,10 +151,11 @@ run_with_heartbeat() {
 			log_line "$label：仍在执行（${elapsed}s）"
 			if [ "$TASK_STEP_TIMEOUT" -gt 0 ] && [ "$elapsed" -ge "$TASK_STEP_TIMEOUT" ]; then
 				log_line "$label：超过 ${TASK_STEP_TIMEOUT}s，已停止等待"
-				kill "$pid" 2>/dev/null || true
+				kill_process_tree -TERM "$pid"
 				sleep 2
-				kill -9 "$pid" 2>/dev/null || true
+				kill_process_tree -KILL "$pid"
 				wait "$pid" 2>/dev/null || true
+				rm -f "$tmp_output"
 				printf '{"ok":false,"code":"step_timeout","message":"%s 超时，请检查路由器是否能访问下载源，或稍后重试。","details":{"timeout_seconds":%s},"next_actions":["确认路由器可以访问下载源后重试。"]}\n' "$(json_escape "$label")" "$TASK_STEP_TIMEOUT" > "$output"
 				return 124
 			fi
@@ -138,6 +163,11 @@ run_with_heartbeat() {
 	done
 	wait "$pid"
 	rc="$?"
+	if [ -f "$tmp_output" ]; then
+		mv "$tmp_output" "$output"
+	else
+		: > "$output"
+	fi
 	return "$rc"
 }
 
