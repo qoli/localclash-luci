@@ -1,1 +1,10 @@
-请连接 localClash MCP：http://192.168.6.1:8765/mcp。请先调用 tools_list 和 environment_inspect，再根据返回的 safety_level 决定是否执行运行时或路由器网络接管变更。
+请为当前 Agent 会话接入路由器上的 localClash MCP。
+
+MCP 地址：http://192.168.6.1:8765/mcp
+
+如果你使用 Claude Code，可以先执行：
+claude mcp add --transport http localclash http://192.168.6.1:8765/mcp
+
+配置完成后，请刷新或重启当前 Agent 会话，直到可以看到 localClash MCP 工具。工具可见后，先调用 localClash MCP 的 tools_list，再调用 environment_inspect。根据 environment_inspect 返回的 safety_level 决定下一步：只读检查可以直接执行；写入、运行时、路由器网络接管等变更必须先说明影响并等待用户确认。
+
+不要通过搜索或读取本机的 /Volumes/Data/Github/localClash 源码仓库来代替 MCP 连接；这不是在操作路由器上的 localClash 实例。

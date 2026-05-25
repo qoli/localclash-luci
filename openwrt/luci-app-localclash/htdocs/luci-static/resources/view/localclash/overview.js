@@ -822,7 +822,7 @@ function mcpGuidanceBody(help) {
 	var text = (help && help.text) || '';
 
 	return E('div', {}, [
-		E('p', { 'class': 'localclash-muted' }, [ _('将这段文字复制给 Agent，用于安全接入路由器上的 localClash MCP。') ]),
+		E('p', { 'class': 'localclash-muted' }, [ _('将这段文字复制给 Agent，用于配置并安全接入路由器上的 localClash MCP。') ]),
 		E('textarea', {
 			'class': 'cbi-input-textarea localclash-copybox',
 			'readonly': 'readonly'

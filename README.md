@@ -18,6 +18,15 @@ manifest.
 See [docs/openwrt-luci.md](docs/openwrt-luci.md) for the product and
 implementation contract.
 
+## Current UI
+
+![localClash LuCI overview running state](docs/assets/luci-overview-running.png)
+
+The overview page is designed as the beginner-facing control surface. It shows
+whether localClash is ready, whether Mihomo runtime and network takeover are
+active, the installed core/assets state, and a copyable MCP connection prompt
+for Agent workflows.
+
 ## Package artifacts
 
 OpenWrt currently needs two package formats:
@@ -58,6 +67,31 @@ The LuCI package and the localClash core are released independently.
 
 The latest package release at the time this README was updated is `v0.1.0-9`,
 which contains both OpenWrt 24 `.ipk` and OpenWrt 25 `.apk` artifacts.
+
+For example, `localClash` core `v0.1.10` can be adopted by the existing
+`localclash-luci v0.1.0-9` package because the package bootstrap flow reads the
+latest core manifest at runtime. No new LuCI package is required unless the LuCI
+UI/helper files also change.
+
+## User Update Flow
+
+Install or update the LuCI package only when this repository publishes a new
+`luci-app-localclash` release.
+
+Update the localClash core from inside LuCI when the core repository publishes a
+new release:
+
+1. Open LuCI: `Services -> localClash`.
+2. Go to the overview or advanced page.
+3. Run the core install/update action.
+4. LuCI downloads `localclash-release-manifest.json`, selects the router
+   architecture, verifies sha256, and replaces `/usr/local/bin/localclash`.
+5. Keep the installed LuCI package in place unless a new `localclash-luci`
+   release is available.
+
+This split keeps the OpenWrt package small and stable while allowing the core,
+base assets, rules, runtime fixes, and MCP behavior to update through the core
+release channel.
 
 ## Package Layout
 

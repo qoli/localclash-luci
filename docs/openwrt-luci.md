@@ -310,14 +310,28 @@ If a full uninstall flow is added later, it should be separate from reset.
 
 ### 9. MCP Connection Guidance
 
-Show one copyable sentence that a user can paste into an Agent conversation.
-The sentence should include the router MCP endpoint and the expected first
-inspection tools.
+Show copyable guidance that a user can paste into an Agent conversation. The
+guidance should help the Agent configure localClash MCP first, then use it. It
+must not assume the Agent already has localClash MCP tools visible.
 
 Example:
 
 ```text
-Please connect to localClash MCP at http://192.168.6.1:8765/mcp, first call tools_list and environment_inspect, then use the reported safety_level before making any runtime or router takeover changes.
+Please connect this Agent session to the router localClash MCP.
+
+MCP endpoint: http://192.168.6.1:8765/mcp
+
+For Claude Code, run:
+claude mcp add --transport http localclash http://192.168.6.1:8765/mcp
+
+After MCP is configured, refresh or restart the current Agent session until the
+localClash MCP tools are visible. Then call localClash tools_list first, followed
+by environment_inspect. Use the reported safety_level before making changes:
+read-only checks may run directly; writes, runtime changes, and router network
+takeover changes must explain their impact and wait for user confirmation.
+
+Do not search or read the local /Volumes/Data/Github/localClash source checkout
+as a substitute for connecting to the router MCP instance.
 ```
 
 The IP address should be generated from the observed router address or the
