@@ -42,7 +42,24 @@ Router deployment helpers are split by package manager:
 Public releases should upload both package artifacts and label them by OpenWrt
 version/package manager so users do not install the wrong format.
 
-## Current skeleton
+## Release Boundary
+
+The LuCI package and the localClash core are released independently.
+
+- Publish a new LuCI release when the LuCI JavaScript views, rpcd helper, ACL,
+  menu metadata, package metadata, or package scripts change.
+- Do not publish a new LuCI release only because the localClash core has a new
+  version. The helper downloads the latest core through the trusted release
+  manifest.
+- Users who already have the current LuCI package can update the core from the
+  LuCI "install/update core" action. That action reads the latest
+  `localClash` release manifest, verifies sha256, installs the selected
+  architecture binary, and keeps the package-installed UI layer unchanged.
+
+The latest package release at the time this README was updated is `v0.1.0-9`,
+which contains both OpenWrt 24 `.ipk` and OpenWrt 25 `.apk` artifacts.
+
+## Package Layout
 
 The OpenWrt package work starts under:
 
@@ -50,11 +67,11 @@ The OpenWrt package work starts under:
 openwrt/luci-app-localclash/
 ```
 
-It currently contains the package metadata, LuCI view entrypoint, rpcd ACL, and
-a narrow rpcd helper. The helper can report bootstrap/service status, download
-the localClash core from the release manifest, verify sha256, install it to
-`/usr/local/bin/localclash`, and bridge installed-core calls to the product JSON
-CLI.
+It contains package metadata, LuCI views, rpcd ACL, static help text, and a
+narrow rpcd helper. The helper can report bootstrap/service status, download the
+localClash core from the release manifest, verify sha256, install it to
+`/usr/local/bin/localclash`, manage the MCP service wrapper, and bridge
+installed-core calls to the product JSON CLI.
 
 By default `bootstrap_core` reads:
 
