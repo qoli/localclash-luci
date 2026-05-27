@@ -18,6 +18,11 @@ manifest.
 See [docs/openwrt-luci.md](docs/openwrt-luci.md) for the product and
 implementation contract.
 
+For real router testing, follow
+[docs/real-router-safe-test.md](docs/real-router-safe-test.md). The real router
+runbook keeps OpenClash-managed networks safe by separating package-only reset,
+bootstrap tests, MCP/config tests, runtime tests, and router takeover tests.
+
 ## Current UI
 
 ![localClash LuCI overview running state](docs/assets/luci-overview-running.png)
