@@ -697,76 +697,41 @@ default_policy_template_assets_installed() {
 }
 
 base_assets_installed() {
-	[ -f "$STATE_DIR/policies/loyalsoldier.yaml" ] || return 1
-	default_policy_template_assets_installed || return 1
-	[ -f "$STATE_DIR/.runtime/mihomo/Country.mmdb" ] || return 1
-	[ -f "$STATE_DIR/.runtime/mihomo/geoip.dat" ] || return 1
-	[ -f "$STATE_DIR/.runtime/mihomo/geosite.dat" ] || return 1
-	[ -f "$STATE_DIR/.runtime/mihomo/ASN.mmdb" ] || return 1
-	for source in "$STATE_DIR"/rule-sources/*.yaml; do
-		[ -e "$source" ] && return 0
-	done
-	return 1
+	local tmp installed
+	core_installed || return 1
+	tmp="/tmp/localclash-component-status.$$.json"
+	if ! call_core component status --json > "$tmp" 2>/tmp/localclash-component-status.$$.err; then
+		rm -f "$tmp" /tmp/localclash-component-status.$$.err
+		return 1
+	fi
+	installed="$(jsonfilter -i "$tmp" -e '@.status.base_assets.installed' 2>/dev/null || true)"
+	rm -f "$tmp" /tmp/localclash-component-status.$$.err
+	[ "$installed" = "true" ]
 }
 
 base_assets_missing_reason() {
-	local mode source
-	[ -f "$STATE_DIR/policies/loyalsoldier.yaml" ] || {
-		printf '缺少 Loyalsoldier 策略文件。'
-		return 0
-	}
-	[ -f "$(default_template_path)" ] || {
-		printf '缺少 localClash 默认配置模板。'
-		return 0
-	}
-	mode="$(default_template_mode)"
-	if [ "$mode" = "patch_set" ] && ! default_patch_assets_installed; then
-		printf '默认配置模板是 patch set，但缺少对应 patch 文件。'
+	if ! core_installed; then
+		printf 'localClash 核心尚未安装。'
 		return 0
 	fi
-	[ -f "$STATE_DIR/.runtime/mihomo/Country.mmdb" ] || {
-		printf '缺少 Country.mmdb。'
-		return 0
-	}
-	[ -f "$STATE_DIR/.runtime/mihomo/geoip.dat" ] || {
-		printf '缺少 geoip.dat。'
-		return 0
-	}
-	[ -f "$STATE_DIR/.runtime/mihomo/geosite.dat" ] || {
-		printf '缺少 geosite.dat。'
-		return 0
-	}
-	[ -f "$STATE_DIR/.runtime/mihomo/ASN.mmdb" ] || {
-		printf '缺少 ASN.mmdb。'
-		return 0
-	}
-	for source in "$STATE_DIR"/rule-sources/*.yaml; do
-		[ -e "$source" ] && {
-			printf '基础文件不完整。'
-			return 0
-		}
-	done
-	printf '缺少 rule-sources 规则源文件。'
+	printf '需要由 localClash 核心安装基础文件。'
 }
 
 base_assets_body() {
-	local installed mode patch_installed patch_count
+	local installed tmp path missing
 	installed=false
 	base_assets_installed && installed=true
-	mode="$(default_template_mode)"
-	patch_installed=null
-	patch_count="$(default_template_patch_count)"
-	[ -n "$patch_count" ] || patch_count=0
-	case "$mode" in
-		patch_set)
-			patch_installed=false
-			default_patch_assets_installed && patch_installed=true
-			;;
-		missing)
-			patch_installed=false
-			;;
-	esac
-	printf '"base_assets":{"installed":%s,"path":"%s","default_template":"%s","default_patches_installed":%s,"default_patch_count":%s}' "$installed" "$(json_escape "$STATE_DIR")" "$(json_escape "$mode")" "$patch_installed" "$patch_count"
+	path="$STATE_DIR"
+	missing=""
+	if core_installed; then
+		tmp="/tmp/localclash-component-status.$$.json"
+		if call_core component status --json > "$tmp" 2>/dev/null; then
+			path="$(jsonfilter -i "$tmp" -e '@.status.base_assets.path' 2>/dev/null || printf '%s' "$STATE_DIR")"
+			missing="$(jsonfilter -i "$tmp" -e '@.status.base_assets.missing' 2>/dev/null || true)"
+		fi
+		rm -f "$tmp"
+	fi
+	printf '"base_assets":{"installed":%s,"path":"%s","source":"localclash-core","missing":"%s"}' "$installed" "$(json_escape "$path")" "$(json_escape "$missing")"
 }
 
 mihomo_core_installed() {
@@ -783,9 +748,9 @@ dashboard_installed() {
 }
 
 subscription_configured() {
-	[ -f "$STATE_DIR/localclash-subscriptions.yaml" ] || return 1
-	[ -f "$STATE_DIR/subscription.yaml" ] || return 1
-	for source in "$STATE_DIR"/.runtime/subscriptions/*.yaml; do
+	[ -f "$STATE_DIR/localclash-subscriptions.json" ] || return 1
+	[ -f "$STATE_DIR/subscription.gob" ] || return 1
+	for source in "$STATE_DIR"/.runtime/subscriptions/*.gob; do
 		[ -e "$source" ] && return 0
 	done
 	return 1
@@ -1345,71 +1310,30 @@ bootstrap_core() {
 }
 
 install_base_assets() {
-	local manifest tmpdir assets_url assets_sha archive missing
-	manifest="$1"
-	tmpdir="$2"
-	assets_url="$(jsonfilter -i "$manifest" -e '@.base_assets.url' 2>/dev/null)"
-	assets_sha="$(jsonfilter -i "$manifest" -e '@.base_assets.sha256' 2>/dev/null)"
-	archive="$tmpdir/localclash-base-assets.tar.gz"
-	if [ -z "$assets_url" ] || [ -z "$assets_sha" ]; then
-		log_line "基础文件初始化：Release 清单中没有基础文件"
-		fail "manifest_base_assets_missing" "Release 清单中没有 localClash 基础文件。"
+	local output
+	output="/tmp/localclash-base-assets.$$.json"
+	if ! core_installed; then
+		fail "bootstrap_core_missing" "localClash 核心尚未安装，无法初始化基础文件。"
 		return 1
 	fi
-	if ! command -v tar >/dev/null 2>&1; then
-		log_line "基础文件初始化：缺少 tar"
-		fail "tar_missing" "需要 tar 安装 localClash 基础文件。"
-		return 1
-	fi
-	log_line "基础文件初始化：正在下载基础文件"
-	if ! fetch_url_verified "$assets_url" "$archive" "$assets_sha"; then
-		log_line "基础文件初始化：下载失败"
-		fail "base_assets_download_failed" "无法下载 localClash 基础文件。"
-		return 1
-	fi
-	log_line "基础文件初始化：sha256 校验通过"
 	mkdir -p "$STATE_DIR"
-	log_line "基础文件初始化：正在安装基础文件到 $STATE_DIR"
-	if ! tar -xzf "$archive" -C "$STATE_DIR"; then
-		log_line "基础文件初始化：安装失败"
-		fail "base_assets_install_failed" "无法安装 localClash 基础文件。"
+	log_line "基础文件初始化：交由 localClash 核心安装基础文件"
+	if ! call_core component update assets --json > "$output"; then
+		log_line "基础文件初始化：核心安装基础文件失败"
+		cat "$output"
+		rm -f "$output"
 		return 1
 	fi
-	if ! base_assets_installed; then
-		missing="$(base_assets_missing_reason)"
-		log_line "基础文件初始化：安装后仍缺少必要文件：$missing"
-		fail "base_assets_incomplete" "已安装的 localClash 基础文件不完整：$missing"
-		return 1
-	fi
-	log_line "基础文件初始化：已安装"
+	log_line "基础文件初始化：已由 localClash 核心安装"
+	rm -f "$output"
 	return 0
 }
 
 bootstrap_assets() {
-	local tmpdir manifest
 	log_line "基础文件初始化：开始"
-	if ! command -v jsonfilter >/dev/null 2>&1; then
-		log_line "基础文件初始化：缺少 jsonfilter"
-		fail "jsonfilter_missing" "需要 jsonfilter 解析 localClash Release 清单。"
+	if ! install_base_assets "" ""; then
 		return 1
 	fi
-	tmpdir="$(mktemp -d /tmp/localclash-assets.XXXXXX)" || {
-		fail "tmpdir_failed" "无法创建临时基础文件目录。"
-		return 1
-	}
-	manifest="$tmpdir/manifest.json"
-	log_line "基础文件初始化：正在下载 Release 清单"
-	if ! fetch_manifest "$MANIFEST_URL" "$manifest"; then
-		rm -rf "$tmpdir"
-		log_line "基础文件初始化：Release 清单下载失败"
-		fail "manifest_download_failed" "无法下载 localClash Release 清单。"
-		return 1
-	fi
-	if ! install_base_assets "$manifest" "$tmpdir"; then
-		rm -rf "$tmpdir"
-		return 1
-	fi
-	rm -rf "$tmpdir"
 	ok "\"changed\":true,\"summary\":\"localClash 基础文件已安装。\",\"base_assets\":{\"installed\":true,\"path\":\"$(json_escape "$STATE_DIR")\"}"
 }
 

@@ -618,13 +618,18 @@ otherwise.
   procd service inspection; LuCI combines it with rpcd `service_status` for the
   complete page report.
 - `subscription status --json`: maps to `subscriptions.Status` with defaults
-  `localclash-subscriptions.yaml`, `subscription.yaml`, and
+  `localclash-subscriptions.json`, `subscription.gob`, and
   `.runtime/subscriptions`.
 - `subscription refresh --json`: maps to `subscriptions.Refresh` with the same
   defaults and no source ID filter. It refreshes all configured sources.
 - `component status --json`: reports local presence and versions when available
-  for localClash, Mihomo cores, and dashboard assets. This may require new
-  read-only glue code, but it must not invent component configuration state.
+  for localClash, base assets, Mihomo cores, and dashboard assets. Base asset
+  completeness belongs to the Go core because the package layer must not know
+  whether assets are JSON, GOB, or another internal runtime format.
+- `component update assets --json`: maps to the Go core's base asset installer.
+  It downloads the localClash release manifest, verifies the base asset archive,
+  and installs the core-owned policy templates, policies, rule sources, and
+  geodata under the localClash working directory.
 - `component update mihomo --json`: maps to `coredownload.Download` with router
   defaults: target `router`, OS `linux`, flavor `all`, output dir `bin`, and
   force replace semantics for update.
@@ -635,11 +640,11 @@ otherwise.
   when the Go core is missing. If implemented inside the Go core later, it must
   use a trusted localClash release manifest and atomic replace semantics.
 - `config status --json`: maps to the existing config status behavior in MCP and
-  local config inspection. It reads `localclash.yaml`, `localclash-packs.yaml`,
+  local config inspection. It reads `localclash.json`, `localclash-packs.gob`,
   `generated/mihomo.yaml`, subscription state, and runtime profile state.
 - `config render --json`: maps to `configrender.Render` using current defaults:
-  source `subscription.yaml`, policy `policies/loyalsoldier.yaml`, selection
-  `localclash-packs.yaml`, runtime profile `localclash-runtime.yaml`, output
+  source `subscription.gob`, policy `policies/loyalsoldier.json`, selection
+  `localclash-packs.gob`, runtime profile `localclash-runtime.json`, output
   `generated/mihomo.yaml`, and force overwrite because generated config is a
   build artifact.
 - `runtime status --json`: maps to `corerun.Status` with generated config and
@@ -771,13 +776,14 @@ Package rules:
   `/etc/init.d/localclash-mcp`; that service file is managed by helper function
   calls.
 - The package must not install Mihomo cores or dashboard assets.
-- The package should install a bootstrap helper capable of downloading
+- The package should install a bootstrap helper capable of downloading the
   localClash core after explicit user action and generating/repairing the MCP
   service wrapper from helper-owned logic.
-- The bootstrap helper must validate downloaded base assets recursively. A
-  `policy-templates/localclash-default.yaml` patch-set manifest is incomplete
-  unless all referenced `policy-templates/localclash-default.d/*.yaml` patch
-  files were extracted.
+- The package helper must not validate base assets by hard-coding policy,
+  template, rule-source, YAML, JSON, or GOB file names. After the core is
+  installed, base asset installation and completeness checks are delegated to
+  `localclash component update assets --json` and
+  `localclash component status --json`.
 - The package should not run network downloads from `postinst`.
 - The package should depend only on the LuCI/rpcd/runtime tools needed by the UI
   and helper.
