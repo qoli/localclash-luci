@@ -88,15 +88,21 @@ function defaultTemplateText(value) {
 		return _('传统单文件');
 	if (value === 'missing')
 		return _('缺失');
+	if (value)
+		return _('已安装');
 	return statusText(value);
 }
 
 function defaultPatchStatusText(baseAssets) {
-	if (!baseAssets || baseAssets.default_template !== 'patch_set')
+	if (!baseAssets || !baseAssets.default_template)
 		return '-';
-	if (baseAssets.default_patches_installed)
+	if (baseAssets.default_patches_installed && baseAssets.default_patch_count)
 		return formatText(_('已安装（%s 个）'), baseAssets.default_patch_count || 0);
-	return formatText(_('缺失（清单 %s 个）'), baseAssets.default_patch_count || 0);
+	if (baseAssets.default_patches_installed)
+		return _('已安装');
+	if (baseAssets.default_patch_count)
+		return formatText(_('缺失（清单 %s 个）'), baseAssets.default_patch_count || 0);
+	return _('缺失');
 }
 
 function row(label, value) {

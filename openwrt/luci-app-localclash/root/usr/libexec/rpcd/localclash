@@ -494,206 +494,16 @@ call_core() {
 	(cd "$STATE_DIR" && "$CORE" "$@") 2>>"$LOG"
 }
 
-runtime_pid_file() {
-	printf '%s/.runtime/mihomo/mihomo.pid\n' "$STATE_DIR"
-}
-
-clear_zombie_runtime_pid() {
-	local pid_file pid
-	pid_file="$(runtime_pid_file)"
-	[ -f "$pid_file" ] || return 0
-	pid="$(cat "$pid_file" 2>/dev/null)"
-	[ -n "$pid" ] || return 0
-	if runtime_pid_zombie "$pid"; then
-		rm -f "$pid_file"
-		log_line "runtime：已清理僵尸进程 PID 文件，pid=$pid"
-	fi
-}
-
-runtime_pid_alive() {
-	local pid
-	pid="$1"
-	[ -n "$pid" ] || return 1
-	[ -d "/proc/$pid" ] || return 1
-	kill -0 "$pid" 2>/dev/null || return 1
-	! runtime_pid_zombie "$pid"
-}
-
-runtime_pid_zombie() {
-	local pid
-	pid="$1"
-	[ -n "$pid" ] || return 1
-	[ -r "/proc/$pid/status" ] || return 1
-	awk '$1 == "State:" && $2 == "Z" { found = 1 } END { exit found ? 0 : 1 }' "/proc/$pid/status" 2>/dev/null
-}
-
-wait_runtime_pid_exit() {
-	local pid waited limit
-	pid="$1"
-	limit="$2"
-	waited=0
-	while runtime_pid_alive "$pid"; do
-		[ "$waited" -ge "$limit" ] && return 1
-		sleep 1
-		waited=$((waited + 1))
-	done
-	return 0
-}
-
-runtime_force_cleanup() {
-	local pid_file pid
-	pid_file="$(runtime_pid_file)"
-	[ -f "$pid_file" ] || return 0
-	pid="$(cat "$pid_file" 2>/dev/null)"
-	[ -n "$pid" ] || {
-		rm -f "$pid_file"
-		return 1
-	}
-
-	if runtime_pid_zombie "$pid"; then
-		rm -f "$pid_file"
-		log_line "runtime：已清理僵尸进程 PID 文件，pid=$pid"
-		return 1
-	fi
-
-	if ! runtime_pid_alive "$pid"; then
-		rm -f "$pid_file"
-		return 1
-	fi
-
-	kill "$pid" 2>/dev/null || true
-	if ! wait_runtime_pid_exit "$pid" 5; then
-		kill -9 "$pid" 2>/dev/null || true
-		wait_runtime_pid_exit "$pid" 3 || return 2
-	fi
-	rm -f "$pid_file"
-	log_line "runtime：已强制停止残留进程，pid=$pid"
-	return 1
-}
-
 runtime_stop() {
-	local tmp rc cleanup_rc
-	tmp="/tmp/localclash-runtime-stop.$$"
-	call_core runtime stop --json > "$tmp"
-	rc=$?
-	clear_zombie_runtime_pid
-	runtime_force_cleanup
-	cleanup_rc=$?
-	if [ "$cleanup_rc" -eq 1 ]; then
-		ok '"changed":true,"summary":"Runtime stop completed.","status":{"stopped":true,"forced_cleanup":true},"changes":["runtime_stopped"],"warnings":[],"next_actions":[]'
-	elif [ "$cleanup_rc" -eq 2 ]; then
-		fail "runtime_stop_failed" "运行时停止命令已执行，但残留进程无法被清理。"
-		rc=1
-	elif grep -q "runtime did not stop before timeout" "$tmp" && ! runtime_running; then
-		ok '"changed":true,"summary":"Runtime stop completed.","status":{"stopped":true,"forced_cleanup":true},"changes":["runtime_stopped"],"warnings":[],"next_actions":[]'
-	else
-		cat "$tmp"
-	fi
-	rm -f "$tmp"
-	return "$rc"
+	call_core runtime stop --json
 }
 
 runtime_start() {
-	local tmp rc
-	tmp="/tmp/localclash-runtime-start.$$"
-	clear_zombie_runtime_pid
-	call_core runtime start --json > "$tmp"
-	rc=$?
-	if [ "$rc" -ne 0 ]; then
-		cat "$tmp"
-		rm -f "$tmp"
-		return "$rc"
-	fi
-	sleep 2
-	clear_zombie_runtime_pid
-	if ! runtime_running; then
-		log_line "runtime：启动命令已返回成功，但进程没有保持运行"
-		rm -f "$tmp"
-		fail "runtime_not_running_after_start" "运行时启动命令已返回，但进程没有保持运行。请查看运行日志；常见原因是端口被 OpenClash 或其他服务占用。"
-		return 1
-	fi
-	cat "$tmp"
-	rm -f "$tmp"
+	call_core runtime start --json
 }
 
 runtime_restart() {
-	local stop_output
-	stop_output="/tmp/localclash-runtime-restart-stop.$$"
-	if ! runtime_stop > "$stop_output"; then
-		cat "$stop_output"
-		rm -f "$stop_output"
-		return 1
-	fi
-	rm -f "$stop_output"
-	runtime_start
-}
-
-default_template_path() {
-	printf '%s/policy-templates/localclash-default.yaml\n' "$STATE_DIR"
-}
-
-default_template_mode() {
-	local template
-	template="$(default_template_path)"
-	if [ ! -f "$template" ]; then
-		printf 'missing\n'
-		return 0
-	fi
-	if grep -q '^[[:space:]]*patches:[[:space:]]*$' "$template" 2>/dev/null; then
-		printf 'patch_set\n'
-		return 0
-	fi
-	printf 'legacy\n'
-}
-
-default_template_patch_paths() {
-	local template
-	template="$(default_template_path)"
-	[ -f "$template" ] || return 0
-	awk '
-		/^[[:space:]]*patches:[[:space:]]*$/ {
-			in_patches = 1
-			next
-		}
-		in_patches && /^[^[:space:]-]/ {
-			in_patches = 0
-		}
-		in_patches {
-			line = $0
-			sub(/^[[:space:]-]*/, "", line)
-			if (line ~ /^path:[[:space:]]*/) {
-				sub(/^path:[[:space:]]*/, "", line)
-				gsub(/^[[:space:]"'"'"']+|[[:space:]"'"'"']+$/, "", line)
-				if (line != "")
-					print line
-			}
-		}
-	' "$template" 2>/dev/null
-}
-
-default_template_patch_count() {
-	default_template_patch_paths | wc -l | tr -d '[:space:]'
-}
-
-default_patch_assets_installed() {
-	local path count
-	count=0
-	for path in $(default_template_patch_paths); do
-		count=$((count + 1))
-		case "$path" in
-			/*|*../*) return 1 ;;
-		esac
-		[ -f "$STATE_DIR/policy-templates/$path" ] || return 1
-	done
-	[ "$count" -gt 0 ]
-}
-
-default_policy_template_assets_installed() {
-	local mode
-	[ -f "$(default_template_path)" ] || return 1
-	mode="$(default_template_mode)"
-	[ "$mode" = "patch_set" ] || return 0
-	default_patch_assets_installed
+	call_core runtime restart --json
 }
 
 base_assets_installed() {
@@ -718,51 +528,86 @@ base_assets_missing_reason() {
 }
 
 base_assets_body() {
-	local installed tmp path missing
+	local installed tmp path missing policy default_template rule_source_dir default_patch_count default_patches_installed
 	installed=false
-	base_assets_installed && installed=true
 	path="$STATE_DIR"
 	missing=""
+	policy=""
+	default_template=""
+	rule_source_dir=""
+	default_patch_count=0
+	default_patches_installed=false
 	if core_installed; then
 		tmp="/tmp/localclash-component-status.$$.json"
 		if call_core component status --json > "$tmp" 2>/dev/null; then
+			installed="$(jsonfilter -i "$tmp" -e '@.status.base_assets.installed' 2>/dev/null || printf false)"
 			path="$(jsonfilter -i "$tmp" -e '@.status.base_assets.path' 2>/dev/null || printf '%s' "$STATE_DIR")"
-			missing="$(jsonfilter -i "$tmp" -e '@.status.base_assets.missing' 2>/dev/null || true)"
+			missing="$(jsonfilter -i "$tmp" -e '@.status.base_assets.missing[*]' 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+			policy="$(jsonfilter -i "$tmp" -e '@.status.base_assets.policy' 2>/dev/null || true)"
+			default_template="$(jsonfilter -i "$tmp" -e '@.status.base_assets.default_template' 2>/dev/null || true)"
+			rule_source_dir="$(jsonfilter -i "$tmp" -e '@.status.base_assets.rule_source_dir' 2>/dev/null || true)"
+			default_patch_count="$(jsonfilter -i "$tmp" -e '@.status.base_assets.default_patch_count' 2>/dev/null || printf 0)"
+			default_patches_installed="$(jsonfilter -i "$tmp" -e '@.status.base_assets.default_patches_installed' 2>/dev/null || printf false)"
+			if [ "${default_patch_count:-0}" -gt 0 ]; then
+				default_template="patch_set"
+			fi
 		fi
 		rm -f "$tmp"
 	fi
-	printf '"base_assets":{"installed":%s,"path":"%s","source":"localclash-core","missing":"%s"}' "$installed" "$(json_escape "$path")" "$(json_escape "$missing")"
+	printf '"base_assets":{"installed":%s,"path":"%s","source":"localclash-core","missing":"%s","policy":"%s","default_template":"%s","rule_source_dir":"%s","default_patch_count":%s,"default_patches_installed":%s}' "$installed" "$(json_escape "$path")" "$(json_escape "$missing")" "$(json_escape "$policy")" "$(json_escape "$default_template")" "$(json_escape "$rule_source_dir")" "${default_patch_count:-0}" "$default_patches_installed"
 }
 
 mihomo_core_installed() {
-	local arch
-	arch="$(router_arch 2>/dev/null)" || return 1
-	[ -x "$STATE_DIR/bin/linux-$arch/mihomo-smart" ] || [ -x "$STATE_DIR/bin/linux-$arch/mihomo-meta" ]
+	local tmp installed
+	core_installed || return 1
+	tmp="/tmp/localclash-component-status.$$.json"
+	if ! call_core component status --json > "$tmp" 2>/dev/null; then
+		rm -f "$tmp"
+		return 1
+	fi
+	installed="$(jsonfilter -i "$tmp" -e '@.status.mihomo.installed' 2>/dev/null || true)"
+	rm -f "$tmp"
+	[ "$installed" = "true" ]
 }
 
 dashboard_installed() {
-	for asset in "$STATE_DIR"/.runtime/mihomo/ui/*; do
-		[ -e "$asset" ] && return 0
-	done
-	return 1
+	local tmp installed
+	core_installed || return 1
+	tmp="/tmp/localclash-component-status.$$.json"
+	if ! call_core component status --json > "$tmp" 2>/dev/null; then
+		rm -f "$tmp"
+		return 1
+	fi
+	installed="$(jsonfilter -i "$tmp" -e '@.status.dashboard.installed' 2>/dev/null || true)"
+	rm -f "$tmp"
+	[ "$installed" = "true" ]
 }
 
 subscription_configured() {
-	[ -f "$STATE_DIR/localclash-subscriptions.json" ] || return 1
-	[ -f "$STATE_DIR/subscription.gob" ] || return 1
-	for source in "$STATE_DIR"/.runtime/subscriptions/*.gob; do
-		[ -e "$source" ] && return 0
-	done
-	return 1
+	local tmp configured merged
+	core_installed || return 1
+	tmp="/tmp/localclash-subscription-status.$$.json"
+	if ! call_core subscription status --json > "$tmp" 2>/dev/null; then
+		rm -f "$tmp"
+		return 1
+	fi
+	configured="$(jsonfilter -i "$tmp" -e '@.status.configured' 2>/dev/null || true)"
+	merged="$(jsonfilter -i "$tmp" -e '@.status.merged.exists' 2>/dev/null || true)"
+	rm -f "$tmp"
+	[ "$configured" = "true" ] && [ "$merged" = "true" ]
 }
 
 runtime_running() {
-	local pid_file pid
-	pid_file="$(runtime_pid_file)"
-	[ -f "$pid_file" ] || return 1
-	pid="$(cat "$pid_file" 2>/dev/null)"
-	[ -n "$pid" ] || return 1
-	runtime_pid_alive "$pid"
+	local tmp running
+	core_installed || return 1
+	tmp="/tmp/localclash-runtime-status.$$.json"
+	if ! call_core runtime status --json > "$tmp" 2>/dev/null; then
+		rm -f "$tmp"
+		return 1
+	fi
+	running="$(jsonfilter -i "$tmp" -e '@.status.running' 2>/dev/null || true)"
+	rm -f "$tmp"
+	[ "$running" = "true" ]
 }
 
 service_body() {
@@ -856,24 +701,23 @@ service_status() {
 }
 
 runtime_profile_body() {
-	local profile mode core core_path exists
-	profile="$STATE_DIR/localclash-runtime.yaml"
+	local tmp profile mode core core_path exists
+	profile=""
 	exists=false
 	mode=""
 	core=""
 	core_path=""
 
-	if [ -f "$profile" ]; then
-		exists=true
-		mode="$(awk -F: '$1 == "mode" { gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit }' "$profile" 2>/dev/null)"
-		core="$(awk -F: '$1 == "core" { gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit }' "$profile" 2>/dev/null)"
-		if [ -n "$core" ]; then
-			core_path="$(awk -v target="$core" '
-				/^[^[:space:]]/ { section = $1; sub(":", "", section); in_core = 0 }
-				section == "cores" && $1 == target ":" { in_core = 1; next }
-				section == "cores" && in_core && $1 == "path:" { print $2; exit }
-			' "$profile" 2>/dev/null)"
+	if core_installed; then
+		tmp="/tmp/localclash-config-status.$$.json"
+		if call_core config status --json > "$tmp" 2>/dev/null; then
+			profile="$(jsonfilter -i "$tmp" -e '@.status.runtime_profile.path' 2>/dev/null || true)"
+			exists="$(jsonfilter -i "$tmp" -e '@.status.runtime_profile.exists' 2>/dev/null || printf false)"
+			mode="$(jsonfilter -i "$tmp" -e '@.status.runtime_profile.mode' 2>/dev/null || true)"
+			core="$(jsonfilter -i "$tmp" -e '@.status.runtime_profile.core' 2>/dev/null || true)"
+			core_path="$(jsonfilter -i "$tmp" -e '@.status.runtime_profile.core_path' 2>/dev/null || true)"
 		fi
+		rm -f "$tmp"
 	fi
 
 	printf '"runtime_profile":{"path":"%s","exists":%s,"mode":"%s","core":"%s","core_path":"%s"}' "$(json_escape "$profile")" "$exists" "$(json_escape "$mode")" "$(json_escape "$core")" "$(json_escape "$core_path")"
@@ -954,7 +798,6 @@ service_start() {
 
 status() {
 	local core_ok mihomo_ok dashboard_ok subscription_ok runtime_ok summary runtime_profile base_assets
-	clear_zombie_runtime_pid
 	core_ok="$(core_installed && echo true || echo false)"
 	mihomo_ok="$(mihomo_core_installed && echo true || echo false)"
 	dashboard_ok="$(dashboard_installed && echo true || echo false)"
@@ -1093,29 +936,36 @@ subscription_set() {
 }
 
 subscription_get() {
-	local config urls count line url
-	config="$STATE_DIR/localclash-subscriptions.yaml"
+	local tmp configured urls count url
 	urls=""
 	count=0
 
-	if [ ! -f "$config" ]; then
+	if ! core_installed; then
 		ok '"configured":false,"urls":[],"count":0'
 		return 0
 	fi
 
-	while IFS= read -r line; do
-		url="$(printf '%s\n' "$line" | sed -n 's/^[[:space:]]*url:[[:space:]]*//p')"
-		[ -n "$url" ] || continue
-		case "$url" in
-			\"*\") url="${url#\"}"; url="${url%\"}" ;;
-			\'*\') url="${url#\'}"; url="${url%\'}" ;;
-		esac
+	tmp="/tmp/localclash-subscription-get.$$.json"
+	if ! call_core subscription get --json > "$tmp" 2>/dev/null; then
+		rm -f "$tmp"
+		ok '"configured":false,"urls":[],"count":0'
+		return 0
+	fi
+	configured="$(jsonfilter -i "$tmp" -e '@.status.configured' 2>/dev/null || printf false)"
+	if [ "$configured" != "true" ]; then
+		rm -f "$tmp"
+		ok '"configured":false,"urls":[],"count":0'
+		return 0
+	fi
+
+	for url in $(jsonfilter -i "$tmp" -e '@.status.urls[*]' 2>/dev/null); do
 		if [ "$count" -gt 0 ]; then
 			urls="$urls,"
 		fi
 		urls="$urls\"$(json_escape "$url")\""
 		count=$((count + 1))
-	done < "$config"
+	done
+	rm -f "$tmp"
 
 	ok '"configured":true,"urls":['"$urls"'],"count":'"$count"
 }
@@ -1212,32 +1062,11 @@ config_render() {
 }
 
 config_reset() {
-	local deleted path
 	if runtime_running; then
 		fail "runtime_running" "Mihomo 运行时正在运行，请先停止运行时再执行配置复位。"
 		return 1
 	fi
-	deleted=""
-	for path in \
-		"$STATE_DIR/generated" \
-		"$STATE_DIR/profiles" \
-		"$STATE_DIR/localclash.yaml" \
-		"$STATE_DIR/localclash-packs.yaml" \
-		"$STATE_DIR/localclash-subscriptions.yaml" \
-		"$STATE_DIR/localclash-runtime.yaml" \
-		"$STATE_DIR/.runtime/subscriptions" \
-		"$STATE_DIR"/subscription*.yaml
-	do
-		[ -e "$path" ] || continue
-		rm -rf "$path" || {
-			fail "config_reset_failed" "配置复位失败，请检查文件权限。"
-			return 1
-		}
-		[ -n "$deleted" ] && deleted="$deleted,"
-		deleted="$deleted\"$(json_escape "${path#$STATE_DIR/}")\""
-	done
-	log_line "配置复位：已清理配置并保留核心、二进制和基础资源"
-	ok '"changed":true,"summary":"配置已复位，已保留 localClash 核心、Mihomo 核心、Dashboard 和基础文件。","deleted":['"$deleted"']'
+	call_core reset --json
 }
 
 bootstrap_core() {
@@ -1512,7 +1341,6 @@ runtime_start_takeover_run() {
 		return 1
 	fi
 	sleep 2
-	clear_zombie_runtime_pid
 	if ! runtime_running; then
 		log_line "运行时接管：运行时启动命令已返回成功，但进程没有保持运行"
 		fail "runtime_not_running_after_start" "运行时启动命令已返回，但进程没有保持运行。请查看运行日志；常见原因是端口被 OpenClash 或其他服务占用。"
