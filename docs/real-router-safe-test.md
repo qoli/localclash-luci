@@ -182,8 +182,32 @@ http://192.168.6.1/cgi-bin/luci/admin/services/localclash
 - localClash 内部运行态应优先使用 JSON/GOB，避免 YAML runtime hot path。
 - `mihomo -t` 只应该在 `config_patch_apply` 或 doctor 类诊断中执行，不应由
   `run_runtime` / `restart_runtime` 默认执行。
+- 真机当前网络依赖 localClash 透明代理时，`mihomo -t` 不允许直接使用 live
+  `.runtime/mihomo`。测试必须先建立临时隔离 workdir，只复制 `Model.bin`、
+  geodata/mmdb 和 rule-provider 等验证必需 artifact，并跳过 `cache.db`、
+  `mihomo.pid`、日志和 UI 目录。cache 不是配置验证目标，不能让验证进程争用
+  live Smart core 正在持有的 DB。
 
-### 4.1 OpenClash 端口差异化检查
+### 4.1 已知 runtime status 观察项
+
+2026-05-27 真机只读观察发现：Smart core 以相对路径启动：
+
+```sh
+bin/linux-arm64/mihomo-smart -d .runtime/mihomo -f generated/mihomo.yaml
+```
+
+进程 cwd 是 `/root/localclash`，并且仍持有
+`/root/localclash/.runtime/mihomo/cache.db`。但 `localclash runtime status
+--json` 可能把它报告为 `running:false` / `stale_pid_file:true`，理由是
+“not using the configured runtime directory”。这很可能是状态检查用绝对
+runtime dir 与进程命令列中的相对 `-d .runtime/mihomo` 做字串比对导致的误
+判。
+
+这项先记录为后续 core 修复项。只要当前网络依赖 localClash runtime，不得因
+这个 status 误判而执行 runtime start/restart/stop；应使用 `/proc/$pid/cwd`、
+`/proc/$pid/cmdline`、`/proc/$pid/fd` 和 `kill -0` 做只读确认。
+
+### 4.2 OpenClash 端口差异化检查
 
 真机测试常见风险不是只有网络接管，端口冲突也会破坏正在工作的 OpenClash。
 如果 localClash 生成的 Mihomo 配置复用了 OpenClash 正在监听的端口，runtime
