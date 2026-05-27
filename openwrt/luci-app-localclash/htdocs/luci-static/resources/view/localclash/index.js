@@ -27,6 +27,12 @@ var callTaskStatus = rpc.declare({
 	expect: { '': {} }
 });
 
+var callTaskCancel = rpc.declare({
+	object: 'localclash',
+	method: 'task_cancel',
+	expect: { '': {} }
+});
+
 var callServiceEnsure = rpc.declare({
 	object: 'localclash',
 	method: 'service_ensure',
@@ -296,10 +302,28 @@ function formatText(text) {
 	});
 }
 
-function showTaskModal(title) {
+function showTaskModal(title, cancellable) {
 	var logOutput = E('pre', { 'class': 'localclash-task-log' }, [ _('等待任务输出…') ]);
 	var statusLine = E('p', { 'class': 'localclash-task-status' }, [ _('正在启动任务…') ]);
 	var resultOutput = E('pre', { 'class': 'localclash-result localclash-task-result' }, []);
+	var cancelButton = E('button', {
+		'type': 'button',
+		'class': 'btn cbi-button-negative',
+		'style': cancellable ? '' : 'display:none',
+		'click': function() {
+			if (cancelButton.disabled)
+				return;
+			cancelButton.disabled = true;
+			statusLine.textContent = _('正在中止任务…');
+			callTaskCancel().then(function(result) {
+				statusLine.textContent = result && result.message ? result.message : _('任务已中止。');
+				resultOutput.textContent = JSON.stringify(result, null, 2);
+			}).catch(function(err) {
+				cancelButton.disabled = false;
+				statusLine.textContent = formatText(_('中止任务失败：%s'), err.message || String(err));
+			});
+		}
+	}, [ _('中止任务') ]);
 	var closeButton = E('button', {
 		'type': 'button',
 		'class': 'btn',
@@ -314,13 +338,14 @@ function showTaskModal(title) {
 		statusLine,
 		logOutput,
 		resultOutput,
-		E('div', { 'class': 'right' }, [ closeButton ])
+		E('div', { 'class': 'right' }, [ cancelButton, closeButton ])
 	]);
 
 	return {
 		logOutput: logOutput,
 		statusLine: statusLine,
 		resultOutput: resultOutput,
+		cancelButton: cancelButton,
 		closeButton: closeButton
 	};
 }
@@ -343,7 +368,7 @@ function liveTaskButton(label, handler, extraClass) {
 			button.setAttribute('aria-busy', 'true');
 			button.classList.add('localclash-busy');
 			button.textContent = _('查看任务输出…');
-			modal = showTaskModal(label);
+			modal = showTaskModal(label, true);
 
 			function updateLogs() {
 				return callBootstrapLogs().then(function(result) {
@@ -389,6 +414,7 @@ function liveTaskButton(label, handler, extraClass) {
 					modal.statusLine.textContent = _('任务完成。');
 					modal.closeButton.setAttribute('data-reload', 'true');
 				}
+				modal.cancelButton.disabled = true;
 				modal.resultOutput.textContent = JSON.stringify(finalResult, null, 2);
 				if (finalResult && finalResult.ok === true)
 					window.setTimeout(function() {
@@ -403,6 +429,7 @@ function liveTaskButton(label, handler, extraClass) {
 				return (timer ? updateLogs() : Promise.resolve()).then(function() {
 					modal.statusLine.textContent = formatText(_('任务失败：%s'), err.message || String(err));
 					modal.resultOutput.textContent = JSON.stringify({ ok: false, message: err.message || String(err) }, null, 2);
+					modal.cancelButton.disabled = true;
 				});
 			}).finally(function() {
 				button.disabled = false;

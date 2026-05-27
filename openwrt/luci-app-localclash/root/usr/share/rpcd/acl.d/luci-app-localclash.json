@@ -31,7 +31,8 @@
           "bootstrap_core",
           "bootstrap_core_async",
           "bootstrap_assets",
-          "bootstrap_default"
+          "bootstrap_default",
+          "task_cancel"
         ]
       }
     }

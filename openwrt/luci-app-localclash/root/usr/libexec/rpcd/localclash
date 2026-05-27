@@ -8,6 +8,7 @@ LOCK_DIR="/tmp/localclash-helper.lock"
 TASK_STATUS="/tmp/localclash-task-status.json"
 TASK_RESULT="/tmp/localclash-task-result.json"
 TASK_INPUT="/tmp/localclash-task-input.json"
+TASK_PID="/tmp/localclash-task.pid"
 MIRROR_CACHE_DIR="/tmp/localclash-mirror-cache"
 MCP_ADDR="${LOCALCLASH_MCP_ADDR:-0.0.0.0:8765}"
 MCP_HELP="/usr/share/localclash/mcp-help.txt"
@@ -49,8 +50,21 @@ write_task_running() {
 	printf '{"ok":true,"running":true,"done":false,"started_at":%s,"summary":"%s"}\n' "$(now_epoch)" "$(json_escape "$1")" > "$TASK_STATUS"
 }
 
+write_task_pid() {
+	[ -n "$1" ] || return 0
+	printf '%s\n' "$1" > "$TASK_PID"
+}
+
 task_started_at() {
 	jsonfilter -i "$TASK_STATUS" -e '@.started_at' 2>/dev/null || printf '0\n'
+}
+
+task_pid_alive() {
+	local pid
+	[ -f "$TASK_PID" ] || return 1
+	pid="$(cat "$TASK_PID" 2>/dev/null)"
+	[ -n "$pid" ] || return 1
+	kill -0 "$pid" 2>/dev/null
 }
 
 lock_pid_alive() {
@@ -69,6 +83,12 @@ clear_stale_lock() {
 	fi
 }
 
+clear_stale_task_pid() {
+	[ -f "$TASK_PID" ] || return 0
+	task_pid_alive && return 0
+	rm -f "$TASK_PID" 2>/dev/null || true
+}
+
 write_task_stale_result() {
 	local result
 	result='{"ok":false,"code":"task_interrupted","message":"初始化任务已中断，请重试。","details":{},"next_actions":["点击一键初始化重试。"]}'
@@ -81,7 +101,9 @@ reconcile_task_status() {
 	[ -f "$TASK_STATUS" ] || return 0
 	grep -q '"running":true' "$TASK_STATUS" 2>/dev/null || return 0
 	clear_stale_lock
+	clear_stale_task_pid
 	[ -d "$LOCK_DIR" ] && return 0
+	task_pid_alive && return 0
 	started="$(task_started_at)"
 	age=$(( $(now_epoch) - started ))
 	[ "$started" -gt 0 ] && [ "$age" -lt 10 ] && return 0
@@ -132,6 +154,48 @@ kill_process_tree() {
 		kill_process_tree "$signal" "$child"
 	done
 	kill "$signal" "$pid" 2>/dev/null || true
+}
+
+task_cancel() {
+	local pid lock_pid result killed
+	killed=0
+	reconcile_task_status
+	if ! task_pid_alive && ! lock_pid_alive; then
+		log_line "任务控制：没有正在运行的任务可中止"
+		if [ -f "$TASK_STATUS" ]; then
+			cat "$TASK_STATUS"
+		else
+			fail "task_not_running" "当前没有正在运行的 localClash 任务。"
+		fi
+		return 0
+	fi
+	log_line "任务控制：收到中止请求"
+	if [ -f "$TASK_PID" ]; then
+		pid="$(cat "$TASK_PID" 2>/dev/null)"
+		if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+			kill_process_tree -TERM "$pid"
+			killed=1
+		fi
+	fi
+	if [ -f "$LOCK_DIR/pid" ]; then
+		lock_pid="$(cat "$LOCK_DIR/pid" 2>/dev/null)"
+		if [ -n "$lock_pid" ] && [ "$lock_pid" != "$pid" ] && kill -0 "$lock_pid" 2>/dev/null; then
+			kill_process_tree -TERM "$lock_pid"
+			killed=1
+		fi
+	fi
+	if [ "$killed" -eq 1 ]; then
+		sleep 2
+		[ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && kill_process_tree -KILL "$pid"
+		[ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null && kill_process_tree -KILL "$lock_pid"
+	fi
+	rm -rf "$LOCK_DIR" 2>/dev/null || true
+	rm -f "$TASK_PID" "$TASK_INPUT" 2>/dev/null || true
+	result='{"ok":false,"code":"task_cancelled","message":"任务已中止。","details":{},"next_actions":["可以重新执行刚才的操作。"]}'
+	printf '%s\n' "$result" > "$TASK_RESULT"
+	printf '{"ok":true,"running":false,"done":true,"exit_code":130,"result":%s}\n' "$result" > "$TASK_STATUS"
+	log_line "任务控制：任务已中止"
+	printf '%s\n' "$result"
 }
 
 run_with_heartbeat() {
@@ -835,13 +899,13 @@ component_update() {
 }
 
 start_bootstrap_core() {
-	local result rc
+	local result rc bg_pid
 	clear_stale_lock
 	if [ -d "$LOCK_DIR" ]; then
 		printf '{"ok":true,"started":false,"running":true,"summary":"另一个 localClash 任务正在运行。"}\n'
 		return 0
 	fi
-	rm -f "$TASK_STATUS" "$TASK_RESULT" "$TASK_INPUT"
+	rm -f "$TASK_STATUS" "$TASK_RESULT" "$TASK_INPUT" "$TASK_PID"
 	: > "$LOG"
 	write_task_running "localClash 核心更新任务正在运行。"
 	log_line "核心初始化：已加入后台任务队列"
@@ -853,12 +917,15 @@ start_bootstrap_core() {
 		fi
 		printf '%s\n' "$result" > "$TASK_RESULT"
 		printf '{"ok":true,"running":false,"done":true,"exit_code":%s,"result":%s}\n' "$rc" "$result" > "$TASK_STATUS"
+		rm -f "$TASK_PID"
 	) >/dev/null 2>&1 &
+	bg_pid="$!"
+	write_task_pid "$bg_pid"
 	ok '"started":true,"running":true,"summary":"localClash 核心更新任务已启动。"'
 }
 
 start_component_update() {
-	local payload component result rc
+	local payload component result rc bg_pid
 	clear_stale_lock
 	if [ -d "$LOCK_DIR" ]; then
 		printf '{"ok":true,"started":false,"running":true,"summary":"另一个 localClash 任务正在运行。"}\n'
@@ -870,7 +937,7 @@ start_component_update() {
 		localclash|mihomo|dashboard) ;;
 		*) fail "invalid_component" "component 必须是 localclash、mihomo 或 dashboard。"; return 1 ;;
 	esac
-	rm -f "$TASK_STATUS" "$TASK_RESULT" "$TASK_INPUT"
+	rm -f "$TASK_STATUS" "$TASK_RESULT" "$TASK_INPUT" "$TASK_PID"
 	: > "$LOG"
 	printf '%s\n' "$payload" > "$TASK_INPUT"
 	write_task_running "组件更新任务正在运行。"
@@ -883,8 +950,10 @@ start_component_update() {
 		fi
 		printf '%s\n' "$result" > "$TASK_RESULT"
 		printf '{"ok":true,"running":false,"done":true,"exit_code":%s,"result":%s}\n' "$rc" "$result" > "$TASK_STATUS"
-		rm -f "$TASK_INPUT"
+		rm -f "$TASK_INPUT" "$TASK_PID"
 	) >/dev/null 2>&1 &
+	bg_pid="$!"
+	write_task_pid "$bg_pid"
 	ok '"started":true,"running":true,"summary":"组件更新任务已启动。"'
 }
 
@@ -1020,14 +1089,14 @@ subscription_setup() {
 }
 
 start_subscription_setup() {
-	local payload result rc
+	local payload result rc bg_pid
 	clear_stale_lock
 	if [ -d "$LOCK_DIR" ]; then
 		printf '{"ok":true,"started":false,"running":true,"summary":"另一个 localClash 任务正在运行。"}\n'
 		return 0
 	fi
 	payload="$(strip_ubus_rpc_session "$(cat)")"
-	rm -f "$TASK_STATUS" "$TASK_RESULT" "$TASK_INPUT"
+	rm -f "$TASK_STATUS" "$TASK_RESULT" "$TASK_INPUT" "$TASK_PID"
 	: > "$LOG"
 	write_versioned_payload "$payload" > "$TASK_INPUT"
 	write_task_running "订阅设置任务正在运行。"
@@ -1040,8 +1109,10 @@ start_subscription_setup() {
 		fi
 		printf '%s\n' "$result" > "$TASK_RESULT"
 		printf '{"ok":true,"running":false,"done":true,"exit_code":%s,"result":%s}\n' "$rc" "$result" > "$TASK_STATUS"
-		rm -f "$TASK_INPUT"
+		rm -f "$TASK_INPUT" "$TASK_PID"
 	) >/dev/null 2>&1 &
+	bg_pid="$!"
+	write_task_pid "$bg_pid"
 	ok '"started":true,"running":true,"summary":"订阅设置任务已启动。"'
 }
 
@@ -1188,13 +1259,13 @@ task_status() {
 }
 
 start_bootstrap_default() {
-	local result rc
+	local result rc bg_pid
 	clear_stale_lock
 	if [ -d "$LOCK_DIR" ]; then
 		printf '{"ok":true,"started":false,"running":true,"summary":"另一个 localClash 任务正在运行。"}\n'
 		return 0
 	fi
-	rm -f "$TASK_STATUS" "$TASK_RESULT"
+	rm -f "$TASK_STATUS" "$TASK_RESULT" "$TASK_INPUT" "$TASK_PID"
 	: > "$LOG"
 	write_task_running "初始化任务正在运行。"
 	log_line "默认初始化：已加入后台任务队列"
@@ -1206,7 +1277,10 @@ start_bootstrap_default() {
 		fi
 		printf '%s\n' "$result" > "$TASK_RESULT"
 		printf '{"ok":true,"running":false,"done":true,"exit_code":%s,"result":%s}\n' "$rc" "$result" > "$TASK_STATUS"
+		rm -f "$TASK_PID"
 	) >/dev/null 2>&1 &
+	bg_pid="$!"
+	write_task_pid "$bg_pid"
 	ok '"started":true,"running":true,"summary":"初始化任务已启动。"'
 }
 
@@ -1302,13 +1376,13 @@ JSON
 }
 
 start_runtime_takeover() {
-	local result rc
+	local result rc bg_pid
 	clear_stale_lock
 	if [ -d "$LOCK_DIR" ]; then
 		printf '{"ok":true,"started":false,"running":true,"summary":"另一个 localClash 任务正在运行。"}\n'
 		return 0
 	fi
-	rm -f "$TASK_STATUS" "$TASK_RESULT"
+	rm -f "$TASK_STATUS" "$TASK_RESULT" "$TASK_INPUT" "$TASK_PID"
 	: > "$LOG"
 	write_task_running "运行时启动和网络接管任务正在运行。"
 	log_line "运行时接管：已加入后台任务队列"
@@ -1320,7 +1394,10 @@ start_runtime_takeover() {
 		fi
 		printf '%s\n' "$result" > "$TASK_RESULT"
 		printf '{"ok":true,"running":false,"done":true,"exit_code":%s,"result":%s}\n' "$rc" "$result" > "$TASK_STATUS"
+		rm -f "$TASK_PID"
 	) >/dev/null 2>&1 &
+	bg_pid="$!"
+	write_task_pid "$bg_pid"
 	ok '"started":true,"running":true,"summary":"运行时启动和网络接管任务已启动。"'
 }
 
@@ -1422,6 +1499,7 @@ case "$method" in
   "bootstrap_assets": {},
   "bootstrap_default": {},
   "task_status": {},
+  "task_cancel": {},
   "bootstrap_task_status": {},
   "mcp_help": {},
   "bootstrap_logs": {}
@@ -1461,6 +1539,7 @@ JSON
 	bootstrap_default) start_bootstrap_default ;;
 	bootstrap_default_run) with_lock bootstrap_default_run ;;
 	task_status) task_status ;;
+	task_cancel) task_cancel ;;
 	bootstrap_task_status) bootstrap_task_status ;;
 	mcp_help) mcp_help ;;
 	bootstrap_logs) bootstrap_logs ;;
