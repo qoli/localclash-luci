@@ -56,6 +56,9 @@ Router deployment helpers are split by package manager:
 Public releases should upload both package artifacts and label them by OpenWrt
 version/package manager so users do not install the wrong format.
 
+The operational GitHub Release procedure is documented in
+[docs/github-release-runbook.md](docs/github-release-runbook.md).
+
 ## Release Boundary
 
 The LuCI package and the localClash core are released independently.

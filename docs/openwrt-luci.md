@@ -1110,6 +1110,10 @@ Standalone artifact scripts in this repository mirror that split:
 ./scripts/build-openwrt-apk.sh
 ```
 
+Use [github-release-runbook.md](github-release-runbook.md) for the exact
+GitHub Release procedure, including version bump, checksums, asset upload, and
+post-publish verification.
+
 The generated filenames intentionally follow each package manager convention:
 
 ```text
