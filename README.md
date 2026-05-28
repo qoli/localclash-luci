@@ -101,6 +101,14 @@ This split keeps the OpenWrt package small and stable while allowing the core,
 base assets, rules, runtime fixes, and MCP behavior to update through the core
 release channel.
 
+## Support
+
+localclash-luci follows the localClash core project's voluntary support flow.
+If localClash saves you time and you want to support ongoing maintenance, see
+the core project support page:
+
+[Support localClash](https://github.com/qoli/localClash/blob/main/SUPPORT.md)
+
 ## Package Layout
 
 The OpenWrt package work starts under:
