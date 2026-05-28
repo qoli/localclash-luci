@@ -70,11 +70,11 @@ The LuCI package and the localClash core are released independently.
   `localClash` release manifest, verifies sha256, installs the selected
   architecture binary, and keeps the package-installed UI layer unchanged.
 
-The latest package release at the time this README was updated is `v0.1.0-13`,
+The latest package release at the time this README was updated is `v0.1.0-14`,
 which contains both OpenWrt 24 `.ipk` and OpenWrt 25 `.apk` artifacts.
 
 For example, `localClash` core `v0.1.16` can be adopted by the existing
-`localclash-luci v0.1.0-13` package because the package bootstrap flow reads the
+`localclash-luci v0.1.0-14` package because the package bootstrap flow reads the
 latest core manifest at runtime. No new LuCI package is required unless the LuCI
 UI/helper files also change.
 
