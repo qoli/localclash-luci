@@ -14,8 +14,8 @@ MCP_ADDR="${LOCALCLASH_MCP_ADDR:-0.0.0.0:8765}"
 MCP_HELP="/usr/share/localclash/mcp-help.txt"
 MANIFEST_URL="${LOCALCLASH_RELEASE_MANIFEST:-https://github.com/qoli/localClash/releases/latest/download/localclash-release-manifest.json}"
 GITHUB_MIRROR="${LOCALCLASH_GITHUB_MIRROR:-auto}"
-GITHUB_RELEASE_MIRRORS="${LOCALCLASH_GITHUB_RELEASE_MIRRORS:-https://gh.llkk.cc/https://github.com https://gh-proxy.com/https://github.com https://v1.ax/https://github.com https://ghp.xptvhelper.link/https://github.com}"
-GITHUB_RAW_MIRRORS="${LOCALCLASH_GITHUB_RAW_MIRRORS:-https://v1.ax/https://raw.githubusercontent.com https://ghp.xptvhelper.link/https://raw.githubusercontent.com https://fastly.jsdelivr.net/gh}"
+GITHUB_RELEASE_MIRRORS="${LOCALCLASH_GITHUB_RELEASE_MIRRORS:-https://gh-proxy.com/https://github.com https://ghproxy.imciel.com/https://github.com https://gitproxy.mrhjx.cn/https://github.com https://gh.jasonzeng.dev/https://github.com https://gh.monlor.com/https://github.com https://gh.noki.icu/https://github.com https://ghfast.top/https://github.com}"
+GITHUB_RAW_MIRRORS="${LOCALCLASH_GITHUB_RAW_MIRRORS:-https://gh-proxy.com/https://raw.githubusercontent.com https://ghproxy.imciel.com/https://raw.githubusercontent.com https://gitproxy.mrhjx.cn/https://raw.githubusercontent.com https://gh.jasonzeng.dev/https://raw.githubusercontent.com https://gh.monlor.com/https://raw.githubusercontent.com https://gh.noki.icu/https://raw.githubusercontent.com https://ghfast.top/https://raw.githubusercontent.com https://fastly.jsdelivr.net/gh}"
 FETCH_TIMEOUT="${LOCALCLASH_FETCH_TIMEOUT:-20}"
 TASK_STEP_TIMEOUT="${LOCALCLASH_TASK_STEP_TIMEOUT:-180}"
 TAKEOVER_SKIP_FILE="${LOCALCLASH_TAKEOVER_SKIP_FILE:-/tmp/localclash-skip-takeover}"
@@ -432,10 +432,12 @@ raw_github_to_jsdelivr() {
 github_download_candidates() {
 	local url mirror selected
 	url="$1"
-	if [ "$GITHUB_MIRROR" = "0" ] || [ "$GITHUB_MIRROR" = "off" ] || [ "$GITHUB_MIRROR" = "false" ]; then
-		printf '%s\n' "$url"
-		return 0
-	fi
+	case "$GITHUB_MIRROR" in
+		0|off|false|direct|none)
+			printf '%s\n' "$url"
+			return 0
+			;;
+	esac
 
 	case "$url" in
 		https://github.com/*)
