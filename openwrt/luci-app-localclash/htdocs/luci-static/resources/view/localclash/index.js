@@ -454,6 +454,8 @@ function commandButton(label, handler, extraClass, options) {
 			var progressTimer;
 			if (button.disabled)
 				return null;
+			if (options && options.confirm && !window.confirm(options.confirm))
+				return null;
 
 			function openProgressModal() {
 				modal = showTaskModal(label);
@@ -597,7 +599,9 @@ return view.extend({
 			])),
 			section(_('维护'), actionRow([
 				commandButton(_('配置复位'), callConfigReset, 'cbi-button-reset'),
-				commandButton(_('重置 localClash'), callReset, 'localclash-danger')
+				commandButton(_('完整重置 localClash'), callReset, 'localclash-danger', {
+					confirm: _('完整重置会删除 localClash 工作目录，包括运行状态、订阅、配置、生成文件和已下载资源。继续？')
+				})
 			]))
 		]);
 	}

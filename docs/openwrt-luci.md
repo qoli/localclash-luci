@@ -284,29 +284,40 @@ Any step that can interrupt network access must be explicit in the UI copy.
 
 ### 8. Reset
 
-Provide a reset button, but keep destructive scope narrow.
+Provide two reset buttons with distinct destructive scope.
 
-V1 reset should clear localClash configuration and runtime state while keeping
-downloaded binaries and dashboard assets:
+Configuration reset should clear localClash configuration and runtime state
+while keeping downloaded core binaries and base assets outside `.runtime/`:
 
 - subscription source config
 - effective subscription artifacts
-- `localclash.yaml`
-- `localclash-packs.yaml`
+- `localclash.json`
+- `localclash-packs.gob`
+- `localclash-runtime.json`
+- `profiles/`
 - generated config
 - runtime state under `.runtime/`
 
-Reset should not remove:
+Configuration reset should not remove:
 
 - localClash core binary
 - Mihomo core binary
-- dashboard assets
+- built-in policy templates and rule sources
 - package files installed by the OpenWrt package
 
-V1 reset has a fixed scope and should not accept a caller-provided deletion
-scope. This keeps LuCI and CLI behavior predictable.
+Full localClash reset should call the core full-workspace reset and delete the
+configured localClash workspace directory, normally `/root/localclash`, while
+keeping LuCI package files, the service wrapper, and the core binary outside the
+workspace. It must be a separate destructive UI action from configuration reset.
 
-If a full uninstall flow is added later, it should be separate from reset.
+LuCI owns the configured workspace value but not deletion validation. The helper
+must validate `STATE_DIR` as an absolute, non-protected path, resolve it with
+`pwd -P`, invoke the core from `/`, and pass the resolved path via
+`LOCALCLASH_WORKDIR`. The core owns marker checks (`.localclash-workspace`),
+source-checkout refusal, runtime-running refusal, and the final delete plan.
+
+Both reset modes have fixed scopes and should not accept caller-provided
+deletion paths through RPC. This keeps LuCI and CLI behavior predictable.
 
 ### 9. MCP Connection Guidance
 
@@ -395,6 +406,7 @@ localclash takeover stop --json
 
 localclash apply --input desired-state.json --json
 localclash reset --json
+localclash reset --full --json
 localclash mcp serve
 ```
 
@@ -660,8 +672,12 @@ otherwise.
 - `takeover apply --json`: maps to `routertakeover.Apply`; it requires router
   profile mode and running Mihomo.
 - `takeover stop --json`: maps to `routertakeover.Stop`.
-- `reset --json`: maps to `reset.Run` with the fixed V1 reset scope described
-  above. It must refuse while Mihomo is running, matching current reset behavior.
+- `reset --json`: maps to `reset.Run` with the fixed configuration/runtime
+  reset scope described above. It must refuse while Mihomo is running.
+- `reset --full --json`: maps to `reset.Run` with full-workspace reset enabled.
+  It must refuse while Mihomo is running, require the explicit workspace supplied
+  by `LOCALCLASH_WORKDIR`, require the workspace marker, and must not accept
+  caller-provided deletion paths through LuCI RPC.
 - `mcp serve`: starts the existing MCP server. Existing MCP tool names and
   schemas are outside this CLI restructuring.
 
@@ -863,7 +879,8 @@ Method contracts:
 - `takeover_status`: no input. Calls `localclash takeover status --json`.
 - `takeover_apply`: no input. Calls `localclash takeover apply --json`.
 - `takeover_stop`: no input. Calls `localclash takeover stop --json`.
-- `reset`: no input. Calls `localclash reset --json`.
+- `config_reset`: no input. Calls `localclash reset --json`.
+- `reset`: no input. Calls `localclash reset --full --json`.
 - `service_start`: no input. Ensures the procd service wrapper exists, enables
   it for boot restore, then starts the procd service for MCP.
 - `service_stop`: no input. Stops and disables the procd service for MCP.

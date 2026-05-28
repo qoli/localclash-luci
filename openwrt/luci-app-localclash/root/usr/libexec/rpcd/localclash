@@ -549,13 +549,48 @@ core_installed() {
 	[ -x "$CORE" ]
 }
 
+validate_state_dir_path() {
+	local path
+	path="$1"
+	case "$path" in
+		/*) ;;
+		*)
+			fail "invalid_state_dir" "localClash 工作目录必须是绝对路径。"
+			return 1
+			;;
+	esac
+	case "$path" in
+		/|/bin|/dev|/etc|/lib|/lib64|/opt|/proc|/root|/sbin|/sys|/tmp|/usr|/var)
+			fail "invalid_state_dir" "localClash 工作目录过于宽泛，拒绝执行。"
+			return 1
+			;;
+	esac
+	return 0
+}
+
+resolve_state_dir() {
+	local workdir
+	validate_state_dir_path "$STATE_DIR" || return 1
+	mkdir -p "$STATE_DIR" || {
+		fail "state_dir_create_failed" "无法创建 localClash 工作目录。"
+		return 1
+	}
+	workdir="$(cd "$STATE_DIR" 2>/dev/null && pwd -P)" || {
+		fail "state_dir_resolve_failed" "无法解析 localClash 工作目录。"
+		return 1
+	}
+	validate_state_dir_path "$workdir" || return 1
+	printf '%s\n' "$workdir"
+}
+
 call_core() {
+	local workdir
 	if ! core_installed; then
 		fail "bootstrap_core_missing" "localClash 核心尚未安装。"
 		return 1
 	fi
-	mkdir -p "$STATE_DIR"
-	(cd "$STATE_DIR" && "$CORE" "$@") 2>>"$LOG"
+	workdir="$(resolve_state_dir)" || return 1
+	(cd / && LOCALCLASH_WORKDIR="$workdir" "$CORE" "$@") 2>>"$LOG"
 }
 
 runtime_stop() {
@@ -824,7 +859,7 @@ start_service() {
 	fi
 	mkdir -p "\$WORKDIR"
 	procd_open_instance
-	procd_set_param command /bin/sh -c 'cd "\$1" && exec "\$2" mcp serve --addr "\$3" --path /mcp' localclash-mcp "\$WORKDIR" "\$CORE" "\$MCP_ADDR"
+	procd_set_param command /bin/sh -c 'mkdir -p "\$1" && WORKDIR_REAL="\$(cd "\$1" && pwd -P)" && cd / && LOCALCLASH_WORKDIR="\$WORKDIR_REAL" exec "\$2" mcp serve --addr "\$3" --path /mcp' localclash-mcp "\$WORKDIR" "\$CORE" "\$MCP_ADDR"
 	procd_set_param respawn
 	procd_close_instance
 }
@@ -1136,6 +1171,14 @@ config_reset() {
 		return 1
 	fi
 	call_core reset --json
+}
+
+reset() {
+	if runtime_running; then
+		fail "runtime_running" "Mihomo 运行时正在运行，请先停止运行时再执行完整重置。"
+		return 1
+	fi
+	call_core reset --full --json
 }
 
 bootstrap_core() {
@@ -1520,7 +1563,7 @@ JSON
 	takeover_status) call_core takeover status --json ;;
 	takeover_apply) takeover_apply ;;
 	takeover_stop) call_core takeover stop --json ;;
-	reset) call_core reset --json ;;
+	reset) with_lock reset ;;
 	service_status) service_status ;;
 	service_ensure) service_ensure ;;
 	service_start) service_start ;;
