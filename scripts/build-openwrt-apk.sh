@@ -10,6 +10,7 @@ image="${OPENWRT_APK_BUILD_IMAGE:-alpine:edge}"
 pkg_name="$(awk -F':=' '/^PKG_NAME:=/ { print $2; exit }' "${package_dir}/Makefile")"
 pkg_version="$(awk -F':=' '/^PKG_VERSION:=/ { print $2; exit }' "${package_dir}/Makefile")"
 pkg_release="$(awk -F':=' '/^PKG_RELEASE:=/ { print $2; exit }' "${package_dir}/Makefile")"
+pkg_license="$(awk -F':=' '/^PKG_LICENSE:=/ { print $2; exit }' "${package_dir}/Makefile")"
 apk_version="${pkg_version}-r${pkg_release}"
 apk_name="${pkg_name}-${apk_version}.apk"
 
@@ -47,6 +48,7 @@ docker run --rm \
 			--info 'version:${apk_version}' \
 			--info 'description:LuCI support for localClash.' \
 			--info 'arch:all' \
+			--info 'license:${pkg_license}' \
 			--info 'origin:localclash-luci' \
 			--info 'url:https://github.com/qoli/localclash-luci' \
 			--info 'maintainer:qoli' \

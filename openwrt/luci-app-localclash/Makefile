@@ -4,6 +4,7 @@ PKG_NAME:=luci-app-localclash
 PKG_VERSION:=0.1.0
 PKG_RELEASE:=14
 PKGARCH:=all
+PKG_LICENSE:=MIT
 
 LUCI_TITLE:=LuCI support for localClash
 LUCI_DEPENDS:=+luci-base +rpcd +uclient-fetch +ca-bundle +jsonfilter

@@ -11,6 +11,7 @@ source_date_epoch="${SOURCE_DATE_EPOCH:-0}"
 pkg_name="$(awk -F':=' '/^PKG_NAME:=/ { print $2; exit }' "${package_dir}/Makefile")"
 pkg_version="$(awk -F':=' '/^PKG_VERSION:=/ { print $2; exit }' "${package_dir}/Makefile")"
 pkg_release="$(awk -F':=' '/^PKG_RELEASE:=/ { print $2; exit }' "${package_dir}/Makefile")"
+pkg_license="$(awk -F':=' '/^PKG_LICENSE:=/ { print $2; exit }' "${package_dir}/Makefile")"
 ipk_name="${pkg_name}_${pkg_version}-${pkg_release}_all.ipk"
 
 rm -rf "${build_dir}"
@@ -29,6 +30,7 @@ Architecture: all
 Maintainer: qoli
 Section: luci
 Priority: optional
+License: ${pkg_license}
 Description: LuCI support for localClash.
 EOF
 

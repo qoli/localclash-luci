@@ -123,3 +123,7 @@ https://github.com/qoli/localClash/releases/latest/download/localclash-release-m
 
 Override it with `LOCALCLASH_RELEASE_MANIFEST` for testing or alternate release
 channels.
+
+## License
+
+localclash-luci is released under the MIT License. See [LICENSE](LICENSE).
