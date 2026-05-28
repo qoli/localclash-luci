@@ -130,11 +130,11 @@ https://example.com/sub-1
 https://example.com/sub-2
 ```
 
-Each non-empty line is one subscription URL. The dialog should provide:
+Each non-empty line is one subscription URL. The dialog should provide one
+primary action:
 
-- `Save`: stores subscription sources without refreshing them.
-- `Save and Refresh`: stores sources, downloads them, and updates the effective
-  `subscription.yaml`.
+- `Save and Apply Subscription`: stores sources, downloads them, updates the
+  effective `subscription.yaml`, and renders the generated Mihomo config.
 
 Subscription URLs are secrets. The status page may show source IDs and refresh
 state, but must not render full URLs after save.
@@ -1050,8 +1050,8 @@ Required UI states:
   and offer service start/restart.
 - `core_installed_unconfigured`: core exists, subscription is missing. Enable
   subscription dialog and component updates. Runtime controls remain disabled.
-- `subscription_configured_not_refreshed`: enable `Save and Refresh`; show that
-  runtime cannot start until refresh succeeds.
+- `subscription_configured_not_refreshed`: enable `Save and Apply Subscription`;
+  show that runtime cannot start until refresh succeeds.
 - `config_ready_runtime_stopped`: enable start/restart/apply. Router takeover
   apply remains disabled until runtime is running.
 - `runtime_running_takeover_inactive`: enable takeover apply when router takeover

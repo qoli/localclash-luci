@@ -3,23 +3,9 @@
 'require rpc';
 'require ui';
 
-var callSubscriptionSet = rpc.declare({
-	object: 'localclash',
-	method: 'subscription_set',
-	params: [ 'urls' ],
-	expect: { '': {} }
-});
-
 var callSubscriptionGet = rpc.declare({
 	object: 'localclash',
 	method: 'subscription_get',
-	expect: { '': {} }
-});
-
-var callSubscriptionSetup = rpc.declare({
-	object: 'localclash',
-	method: 'subscription_setup',
-	params: [ 'urls' ],
 	expect: { '': {} }
 });
 
@@ -27,18 +13,6 @@ var callSubscriptionSetupAsync = rpc.declare({
 	object: 'localclash',
 	method: 'subscription_setup_async',
 	params: [ 'urls' ],
-	expect: { '': {} }
-});
-
-var callSubscriptionRefresh = rpc.declare({
-	object: 'localclash',
-	method: 'subscription_refresh',
-	expect: { '': {} }
-});
-
-var callConfigRender = rpc.declare({
-	object: 'localclash',
-	method: 'config_render',
 	expect: { '': {} }
 });
 
@@ -59,37 +33,6 @@ var callBootstrapLogs = rpc.declare({
 	method: 'bootstrap_logs',
 	expect: { '': {} }
 });
-
-function showResult(title, result) {
-	var shouldReload = !(result && result.ok === false);
-	var shouldAutoClose = result && result.ok === true;
-
-	ui.showModal(title, [
-		E('pre', { 'class': 'localclash-result' }, [ JSON.stringify(result, null, 2) ]),
-		E('div', { 'class': 'right' }, [
-			E('button', {
-				'type': 'button',
-				'class': 'btn',
-				'click': function() {
-					ui.hideModal();
-					if (shouldReload)
-						window.location.reload();
-				}
-			}, [ _('关闭') ])
-		])
-	]);
-
-	if (shouldAutoClose)
-		window.setTimeout(function() {
-			ui.hideModal();
-			if (shouldReload)
-				window.location.reload();
-		}, 900);
-}
-
-function showError(err) {
-	ui.addNotification(null, E('p', {}, [ err.message || String(err) ]), 'danger');
-}
 
 function formatLogLines(lines) {
 	if (!lines || !lines.length)
@@ -251,78 +194,6 @@ function liveTaskButton(label, handler, extraClass) {
 	}, [ label ]);
 }
 
-function commandButton(label, handler, extraClass) {
-	return E('button', {
-		'type': 'button',
-		'class': 'btn cbi-button localclash-button ' + (extraClass || ''),
-		'click': function(ev) {
-			ev.preventDefault();
-			var button = ev.currentTarget;
-			var startedAt = Date.now();
-			var modal;
-			var progressDelay;
-			var progressTimer;
-			if (button.disabled)
-				return null;
-
-			function openProgressModal() {
-				modal = showTaskModal(label);
-				modal.logOutput.textContent = _('命令已发送，正在等待路由器返回结果…');
-				progressTimer = window.setInterval(function() {
-					var elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
-					modal.statusLine.textContent = formatText(_('命令执行中，已等待 %s 秒。'), elapsed);
-				}, 1000);
-			}
-
-			function finishProgress(result) {
-				if (!modal) {
-					showResult(label, result);
-					return;
-				}
-
-				window.clearInterval(progressTimer);
-				if (result && result.ok === false)
-					modal.statusLine.textContent = formatText(_('命令失败：%s'), result.message || result.code || _('未知错误'));
-				else {
-					modal.statusLine.textContent = _('命令完成。');
-					modal.closeButton.setAttribute('data-reload', 'true');
-				}
-				modal.resultOutput.textContent = JSON.stringify(result, null, 2);
-				if (result && result.ok === true)
-					window.setTimeout(function() {
-						ui.hideModal();
-						window.location.reload();
-					}, 900);
-			}
-
-			button.disabled = true;
-			button.setAttribute('aria-busy', 'true');
-			button.classList.add('localclash-busy');
-			button.textContent = _('执行中…');
-			progressDelay = window.setTimeout(openProgressModal, 800);
-
-			return Promise.resolve().then(handler).then(function(result) {
-				window.clearTimeout(progressDelay);
-				finishProgress(result);
-			}).catch(function(err) {
-				window.clearTimeout(progressDelay);
-				if (!modal) {
-					showError(err);
-					return;
-				}
-				window.clearInterval(progressTimer);
-				modal.statusLine.textContent = formatText(_('命令失败：%s'), err.message || String(err));
-				modal.resultOutput.textContent = JSON.stringify({ ok: false, message: err.message || String(err) }, null, 2);
-			}).finally(function() {
-				button.disabled = false;
-				button.removeAttribute('aria-busy');
-				button.classList.remove('localclash-busy');
-				button.textContent = label;
-			});
-		}
-	}, [ label ]);
-}
-
 function actionRow(buttons) {
 	return E('div', { 'class': 'localclash-actions' }, buttons);
 }
@@ -429,12 +300,7 @@ return view.extend({
 				actionRow([
 					liveTaskButton(_('保存并应用订阅'), function() {
 						return callSubscriptionSetupAsync(requireSubscriptionUrls());
-					}, 'cbi-button-apply'),
-					commandButton(_('保存订阅'), function() {
-						return callSubscriptionSet(requireSubscriptionUrls());
-					}),
-					commandButton(_('刷新订阅'), callSubscriptionRefresh),
-					commandButton(_('应用配置'), callConfigRender, 'cbi-button-action')
+					}, 'cbi-button-apply')
 				])
 			])
 		]);

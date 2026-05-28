@@ -1291,16 +1291,11 @@ bootstrap_default_run() {
 		return 1
 	}
 
-	if ! core_installed; then
-		log_line "默认初始化：localClash 核心缺失，开始初始化"
-		if ! bootstrap_core > "$tmpdir/core.json"; then
-			cat "$tmpdir/core.json"
-			rm -rf "$tmpdir"
-			return 1
-		fi
-	else
-		log_line "默认初始化：localClash 核心已安装"
-		printf '{"ok":true,"changed":false,"summary":"localClash 核心已安装。"}\n' > "$tmpdir/core.json"
+	log_line "默认初始化：正在检查并更新 localClash 核心"
+	if ! bootstrap_core > "$tmpdir/core.json"; then
+		cat "$tmpdir/core.json"
+		rm -rf "$tmpdir"
+		return 1
 	fi
 
 	if ! base_assets_installed; then

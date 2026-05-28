@@ -655,7 +655,7 @@ function classify(data, takeover, task) {
 		return {
 			id: 'bootstrap',
 			title: _('初始化未完成'),
-			message: formatText(_('缺少 %s。应用「预设配置（路由器配置 / meta 核心 / default 预设）」后即可完成一条龙初始化。'), missing.join(' / ')),
+			message: formatText(_('缺少 %s。一键初始化会先检查并更新 localClash 核心，然后应用「预设配置（路由器配置 / meta 核心 / default 预设）」。'), missing.join(' / ')),
 			missing: missing
 		};
 	}
@@ -673,7 +673,7 @@ function classify(data, takeover, task) {
 		return {
 			id: 'bootstrap',
 			title: _('初始化未完成'),
-			message: formatText(_('缺少 %s。应用「预设配置（路由器配置 / meta 核心 / default 预设）」后即可完成一条龙初始化。'), missing.join(' / ')),
+			message: formatText(_('缺少 %s。一键初始化会先检查并更新 localClash 核心，然后应用「预设配置（路由器配置 / meta 核心 / default 预设）」。'), missing.join(' / ')),
 			missing: missing
 		};
 	}
