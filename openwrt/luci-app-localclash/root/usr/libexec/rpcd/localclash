@@ -802,12 +802,15 @@ service_status() {
 }
 
 runtime_profile_body() {
-	local tmp profile mode core core_path exists
+	local tmp profile mode core core_path exists runtime_source user_profile_path user_profile_exists
 	profile=""
 	exists=false
 	mode=""
 	core=""
 	core_path=""
+	runtime_source=""
+	user_profile_path=""
+	user_profile_exists=false
 
 	if core_installed; then
 		tmp="/tmp/localclash-config-status.$$.json"
@@ -817,11 +820,14 @@ runtime_profile_body() {
 			mode="$(jsonfilter -i "$tmp" -e '@.status.runtime_profile.mode' 2>/dev/null || true)"
 			core="$(jsonfilter -i "$tmp" -e '@.status.runtime_profile.core' 2>/dev/null || true)"
 			core_path="$(jsonfilter -i "$tmp" -e '@.status.runtime_profile.core_path' 2>/dev/null || true)"
+			runtime_source="$(jsonfilter -i "$tmp" -e '@.status.runtime_profile.runtime_source' 2>/dev/null || true)"
+			user_profile_path="$(jsonfilter -i "$tmp" -e '@.status.runtime_profile.user_profile_path' 2>/dev/null || true)"
+			user_profile_exists="$(jsonfilter -i "$tmp" -e '@.status.runtime_profile.user_profile_exists' 2>/dev/null || printf false)"
 		fi
 		rm -f "$tmp"
 	fi
 
-	printf '"runtime_profile":{"path":"%s","exists":%s,"mode":"%s","core":"%s","core_path":"%s"}' "$(json_escape "$profile")" "$exists" "$(json_escape "$mode")" "$(json_escape "$core")" "$(json_escape "$core_path")"
+	printf '"runtime_profile":{"path":"%s","exists":%s,"mode":"%s","core":"%s","core_path":"%s","runtime_source":"%s","user_profile_path":"%s","user_profile_exists":%s}' "$(json_escape "$profile")" "$exists" "$(json_escape "$mode")" "$(json_escape "$core")" "$(json_escape "$core_path")" "$(json_escape "$runtime_source")" "$(json_escape "$user_profile_path")" "$user_profile_exists"
 }
 
 mcp_help() {

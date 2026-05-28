@@ -291,12 +291,15 @@ while keeping downloaded core binaries and base assets outside `.runtime/`:
 
 - subscription source config
 - effective subscription artifacts
-- `localclash.json`
+- `localclash-intent.json`
 - `localclash-packs.gob`
 - `localclash-runtime.json`
 - `profiles/`
 - generated config
 - runtime state under `.runtime/`
+
+It must preserve the advanced-user `localclash-user.json`; only full workspace
+reset may remove that file.
 
 Configuration reset should not remove:
 
@@ -652,7 +655,7 @@ otherwise.
   when the Go core is missing. If implemented inside the Go core later, it must
   use a trusted localClash release manifest and atomic replace semantics.
 - `config status --json`: maps to the existing config status behavior in MCP and
-  local config inspection. It reads `localclash.json`, `localclash-packs.gob`,
+  local config inspection. It reads `localclash-intent.json`, `localclash-packs.gob`,
   `generated/mihomo.yaml`, subscription state, and runtime profile state.
 - `config render --json`: maps to `configrender.Render` using current defaults:
   source `subscription.gob`, policy `policies/loyalsoldier.json`, selection

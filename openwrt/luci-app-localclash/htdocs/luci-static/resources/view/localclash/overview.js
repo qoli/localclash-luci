@@ -87,6 +87,14 @@ function coreFlavorText(value) {
 	return statusText(value);
 }
 
+function runtimeSourceText(value) {
+	if (value === 'builtin')
+		return _('内置模板');
+	if (value === 'user')
+		return _('用户配置');
+	return statusText(value);
+}
+
 function defaultTemplateText(value) {
 	if (value === 'patch_set')
 		return _('Patch 集合');
@@ -795,6 +803,7 @@ function diagnosticTable(data, takeover) {
 			row(_('默认 Patch 文件'), defaultPatchStatusText(baseAssets)),
 			row(_('Mihomo 核心'), core.installed ? (componentInstalled(status, [ 'mihomo' ]) ? _('已安装') : _('缺失')) : _('缺失')),
 			row(_('Mihomo 核心类型'), coreFlavorText(runtimeProfile.core)),
+			row(_('运行时来源'), runtimeSourceText(runtimeProfile.runtime_source)),
 			row(_('Mihomo 核心路径'), runtimeProfile.core_path),
 			row(_('Dashboard 面板'), core.installed ? (componentInstalled(status, [ 'dashboard', 'ui' ]) ? _('已安装') : _('缺失')) : _('缺失')),
 			row(_('订阅'), subscriptionConfigured(status) ? _('已配置') : _('缺失')),
@@ -823,6 +832,7 @@ function diagnosticLoadingTable() {
 			row(_('默认 Patch 文件'), pending),
 			row(_('Mihomo 核心'), pending),
 			row(_('Mihomo 核心类型'), pending),
+			row(_('运行时来源'), pending),
 			row(_('Mihomo 核心路径'), pending),
 			row(_('Dashboard 面板'), pending),
 			row(_('订阅'), pending),
