@@ -742,7 +742,14 @@ once it exists.
 
 The LuCI page is supported by the product command tree as follows:
 
-- Subscription dialog: `subscription set` and `subscription refresh`.
+- First-run setup: overview accepts subscription URLs, Smart/minimal choices,
+  then calls the helper `bootstrap_default` task. The helper temporarily writes
+  the subscription URLs to `/tmp`, passes them to `subscription set`/refresh,
+  applies the selected template/core, renders config when a subscription is
+  available, starts Mihomo, applies router takeover, and removes the temporary
+  task input after completion. When the core, Mihomo, dashboard, or base assets
+  are already installed, the helper should skip those update/download steps
+  instead of blocking the first-run task on redundant network work.
 - Service status report: `status`, plus focused `component status`,
   `runtime status`, and `takeover status` when a section needs live refresh.
 - Required components: `component update localclash`, `component update mihomo`,
@@ -870,6 +877,14 @@ Method contracts:
   file.
 - `subscription_refresh`: no input. Calls
   `localclash subscription refresh --json`.
+- `bootstrap_default`: optional input `{ "urls": ["https://..."], "core":
+  "meta|smart", "template": "localclash-default|minimal" }`. It installs or
+  updates the localClash core, base assets, Mihomo, and dashboard; when URLs are
+  present, it saves and refreshes them before applying `router` runtime profile
+  with the selected core/template. If a subscription is available after this
+  step, it renders config, starts Mihomo, and applies router takeover before the
+  background task is marked complete. The helper must not log or return full
+  URLs.
 - `component_update`: input `{ "component": "localclash|mihomo|dashboard" }`.
   `localclash` uses bootstrap install when the core is missing; other values call
   `localclash component update <component> --json`.
@@ -1062,14 +1077,18 @@ success from button clicks.
 
 Required UI states:
 
-- `core_missing`: localClash core is absent. Enable only `Download or Update
-  localClash`, service log/status, and static MCP help. Disable subscription,
-  config, runtime, takeover, and reset actions that require the core.
+- `subscription_missing`: subscription is missing. Expand the subscription
+  textarea on overview. The primary button reads `请填写订阅` and is disabled
+  until at least one URL is entered. Smart core and minimal configuration are
+  selectable inline.
+- `core_missing`: localClash core is absent after subscription is available.
+  Enable overview `开始初始化`, service log/status, and static MCP help. Disable
+  runtime, takeover, and reset actions that require rendered config/runtime.
 - `mcp_service_unhealthy`: procd service is stopped or MCP health fails. Keep
   local runtime controls available, but show MCP connection guidance as not ready
   and offer service start/restart.
-- `core_installed_unconfigured`: core exists, subscription is missing. Enable
-  subscription dialog and component updates. Runtime controls remain disabled.
+- `core_installed_unconfigured`: core exists, subscription is missing. Use the
+  same overview subscription-first panel. Runtime controls remain disabled.
 - `subscription_configured_not_refreshed`: enable `Save and Apply Subscription`;
   show that runtime cannot start until refresh succeeds.
 - `config_ready_runtime_stopped`: enable start/restart/apply. Router takeover

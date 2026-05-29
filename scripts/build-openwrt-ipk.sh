@@ -56,8 +56,10 @@ docker run --rm \
 	bash -lc "
 		set -euo pipefail
 		export DEBIAN_FRONTEND=noninteractive
-		apt-get update >/dev/null
-		apt-get install -y --no-install-recommends gzip tar >/dev/null
+		if ! command -v gzip >/dev/null 2>&1 || ! command -v tar >/dev/null 2>&1; then
+			apt-get update >/dev/null
+			apt-get install -y --no-install-recommends gzip tar >/dev/null
+		fi
 		tmp_dir=/tmp/localclash-ipk
 		rm -rf \"\$tmp_dir\"
 		mkdir -p \"\$tmp_dir\"

@@ -18,6 +18,7 @@ var callTakeoverStatus = rpc.declare({
 var callBootstrapDefault = rpc.declare({
 	object: 'localclash',
 	method: 'bootstrap_default',
+	params: [ 'urls', 'core', 'template' ],
 	expect: { '': {} }
 });
 
@@ -445,6 +446,106 @@ function actionRow(buttons) {
 	return E('div', { 'class': 'localclash-actions' }, buttons);
 }
 
+function subscriptionUrls() {
+	var textarea = document.getElementById('localclash-overview-subscription-urls');
+	var value = textarea ? textarea.value : '';
+
+	return value.split(/\r?\n/)
+		.map(function(line) { return line.trim(); })
+		.filter(function(line) { return line.length > 0; });
+}
+
+function selectedBootstrapCore() {
+	var checkbox = document.getElementById('localclash-bootstrap-smart');
+	return checkbox && checkbox.checked ? 'smart' : 'meta';
+}
+
+function selectedBootstrapTemplate() {
+	var checkbox = document.getElementById('localclash-bootstrap-minimal');
+	return checkbox && checkbox.checked ? 'minimal' : 'localclash-default';
+}
+
+function updateBootstrapStartButton() {
+	var button = document.getElementById('localclash-bootstrap-start');
+	var requiresSubscription;
+
+	if (!button || button.getAttribute('aria-busy') === 'true')
+		return;
+
+	requiresSubscription = button.getAttribute('data-subscription-required') === 'true';
+	if (requiresSubscription && !subscriptionUrls().length) {
+		button.disabled = true;
+		button.textContent = _('请填写订阅');
+	}
+	else {
+		button.disabled = false;
+		button.textContent = _('开始初始化');
+	}
+}
+
+function startBootstrapFromOverview(requiresSubscription) {
+	var urls = subscriptionUrls();
+
+	if (requiresSubscription && !urls.length)
+		throw new Error(_('请至少输入一个订阅 URL。'));
+
+	return callBootstrapDefault(urls, selectedBootstrapCore(), selectedBootstrapTemplate());
+}
+
+function bootstrapStartButton(requiresSubscription) {
+	var button = liveTaskButton(_('开始初始化'), function() {
+		return startBootstrapFromOverview(requiresSubscription);
+	}, 'cbi-button-apply');
+
+	button.setAttribute('id', 'localclash-bootstrap-start');
+	button.setAttribute('data-subscription-required', requiresSubscription ? 'true' : 'false');
+	if (requiresSubscription) {
+		button.disabled = true;
+		button.textContent = _('请填写订阅');
+	}
+
+	return button;
+}
+
+function bootstrapOptions() {
+	return E('div', { 'class': 'localclash-bootstrap-options' }, [
+		E('label', { 'class': 'localclash-check-option' }, [
+			E('input', {
+				'id': 'localclash-bootstrap-smart',
+				'type': 'checkbox'
+			}),
+			_('使用 Smart 核心')
+		]),
+		E('label', { 'class': 'localclash-check-option' }, [
+			E('input', {
+				'id': 'localclash-bootstrap-minimal',
+				'type': 'checkbox'
+			}),
+			_('使用 minimal 配置')
+		])
+	]);
+}
+
+function bootstrapSetupPanel(requiresSubscription) {
+	var body = [];
+
+	if (requiresSubscription) {
+		body.push(E('textarea', {
+			'id': 'localclash-overview-subscription-urls',
+			'class': 'cbi-input-textarea localclash-textarea',
+			'placeholder': _('每行一条订阅 URL'),
+			'input': updateBootstrapStartButton
+		}, []));
+	}
+
+	body.push(bootstrapOptions());
+	body.push(actionRow([
+		bootstrapStartButton(requiresSubscription)
+	]));
+
+	return E('div', { 'class': 'localclash-setup-panel' }, body);
+}
+
 function lower(value) {
 	return String(value === null || value === undefined ? '' : value).toLowerCase();
 }
@@ -651,6 +752,7 @@ function refreshOverviewStatus() {
 		setText('localclash-overview-state-title', state.title);
 		replaceContent('localclash-overview-state-message', message);
 		replaceContent('localclash-overview-actions', primaryActions(state));
+		updateBootstrapStartButton();
 		replaceContent('localclash-overview-diagnostics-body', diagnosticTable(data, takeover, task));
 		return refreshTakeoverStatus();
 	});
@@ -670,12 +772,20 @@ function classify(data, takeover, task) {
 		};
 	}
 
+	if (!subscriptionConfigured(status)) {
+		return {
+			id: 'subscription',
+			title: _('等待订阅'),
+			message: _('请先填写订阅，然后开始初始化。')
+		};
+	}
+
 	if (!core.installed) {
 		missing = [ 'localClash 核心', '基础文件', 'Mihomo 核心', 'Dashboard 面板' ];
 		return {
 			id: 'bootstrap',
 			title: _('初始化未完成'),
-			message: formatText(_('缺少 %s。一键初始化会先检查并更新 localClash 核心，然后应用「预设配置（路由器配置 / meta 核心 / default 预设）」。'), missing.join(' / ')),
+			message: formatText(_('缺少 %s。初始化会检查并更新 localClash 核心，然后应用所选配置。'), missing.join(' / ')),
 			missing: missing
 		};
 	}
@@ -693,16 +803,8 @@ function classify(data, takeover, task) {
 		return {
 			id: 'bootstrap',
 			title: _('初始化未完成'),
-			message: formatText(_('缺少 %s。一键初始化会先检查并更新 localClash 核心，然后应用「预设配置（路由器配置 / meta 核心 / default 预设）」。'), missing.join(' / ')),
+			message: formatText(_('缺少 %s。初始化会检查并更新 localClash 核心，然后应用所选配置。'), missing.join(' / ')),
 			missing: missing
-		};
-	}
-
-	if (!subscriptionConfigured(status)) {
-		return {
-			id: 'subscription',
-			title: _('等待订阅'),
-			message: _('localClash 已就绪，但还没有可用订阅。')
 		};
 	}
 
@@ -749,16 +851,16 @@ function primaryActions(state) {
 	}
 
 	if (state.id === 'bootstrap') {
-		return actionRow([
-			liveTaskButton(_('一键初始化'), callBootstrapDefault, 'cbi-button-apply'),
-			commandButton(_('查看日志'), callBootstrapLogs, null, { keepOpen: true })
-		]);
+		return [
+			bootstrapSetupPanel(false),
+			actionRow([
+				commandButton(_('查看日志'), callBootstrapLogs, null, { keepOpen: true })
+			])
+		];
 	}
 
 	if (state.id === 'subscription') {
-		return actionRow([
-			linkButton(_('填写订阅'), L.url('admin/services/localclash/subscription'), 'cbi-button-apply')
-		]);
+		return bootstrapSetupPanel(true);
 	}
 
 	if (state.id === 'runtime_stopped') {
@@ -920,6 +1022,11 @@ return view.extend({
 				'.localclash-overview .localclash-hero{padding:1rem 1.25rem}',
 				'.localclash-overview .localclash-hero h3{margin-top:0}',
 				'.localclash-overview .localclash-hero p{max-width:58rem;margin:.5rem 0 0 0;line-height:1.55}',
+				'.localclash-overview .localclash-setup-panel{margin-top:1rem}',
+				'.localclash-view .localclash-textarea{box-sizing:border-box;width:calc(100% - 2rem);min-height:9rem;margin:1rem;padding:1rem;font-family:monospace;line-height:1.45;resize:vertical}',
+				'.localclash-view .localclash-bootstrap-options{display:flex;flex-wrap:wrap;gap:1rem;margin:.75rem 1rem 0 1rem;align-items:center}',
+				'.localclash-view .localclash-check-option{display:inline-flex;gap:.45rem;align-items:center;margin:0;line-height:1.4}',
+				'.localclash-view .localclash-check-option input{margin:0}',
 				'.localclash-view .localclash-muted{color:#667085;line-height:1.55}',
 				'.localclash-view .localclash-status-table{display:inline-table;max-width:100%}',
 				'.localclash-view .localclash-status-table th{width:auto;white-space:nowrap;padding-right:2rem}',

@@ -684,9 +684,16 @@ dashboard_installed() {
 	[ "$installed" = "true" ]
 }
 
+subscription_files_configured() {
+	[ -s "$STATE_DIR/localclash-subscriptions.json" ] && [ -s "$STATE_DIR/subscription.gob" ]
+}
+
 subscription_configured() {
 	local tmp configured merged
-	core_installed || return 1
+	if ! core_installed; then
+		subscription_files_configured
+		return $?
+	fi
 	tmp="/tmp/localclash-subscription-status.$$.json"
 	if ! call_core subscription status --json > "$tmp" 2>/dev/null; then
 		rm -f "$tmp"
@@ -1080,6 +1087,24 @@ subscription_get() {
 	ok '"configured":true,"urls":['"$urls"'],"count":'"$count"
 }
 
+subscription_save_refresh_file() {
+	local input tmpdir
+	input="$1"
+	tmpdir="$2"
+
+	log_line "订阅设置：正在保存订阅源"
+	if ! call_core subscription set --input "$input" --json > "$tmpdir/set.json"; then
+		cat "$tmpdir/set.json"
+		return 1
+	fi
+
+	log_line "订阅设置：正在刷新订阅"
+	if ! run_with_heartbeat "订阅设置：正在刷新订阅" "$tmpdir/refresh.json" call_core subscription refresh --json; then
+		cat "$tmpdir/refresh.json"
+		return 1
+	fi
+}
+
 subscription_setup_file() {
 	local input tmpdir
 	input="$1"
@@ -1088,16 +1113,7 @@ subscription_setup_file() {
 		return 1
 	}
 
-	log_line "订阅设置：正在保存订阅源"
-	if ! call_core subscription set --input "$input" --json > "$tmpdir/set.json"; then
-		cat "$tmpdir/set.json"
-		rm -rf "$tmpdir"
-		return 1
-	fi
-
-	log_line "订阅设置：正在刷新订阅"
-	if ! run_with_heartbeat "订阅设置：正在刷新订阅" "$tmpdir/refresh.json" call_core subscription refresh --json; then
-		cat "$tmpdir/refresh.json"
+	if ! subscription_save_refresh_file "$input" "$tmpdir"; then
 		rm -rf "$tmpdir"
 		return 1
 	fi
@@ -1112,6 +1128,29 @@ subscription_setup_file() {
 	rm -rf "$tmpdir"
 	log_line "订阅设置：已完成"
 	ok '"changed":true,"summary":"订阅已保存、刷新，并已生成配置。","next_actions":["准备好后启动运行时。"]'
+}
+
+write_bootstrap_subscription_input() {
+	local payload output urls_file count url
+	payload="$1"
+	output="$2"
+	urls_file="$output.urls"
+	count=0
+
+	jsonfilter -s "$payload" -e '@.urls[*]' > "$urls_file" 2>/dev/null || true
+	printf '{"version":1,"urls":[' > "$output"
+	while IFS= read -r url; do
+		[ -n "$url" ] || continue
+		if [ "$count" -gt 0 ]; then
+			printf ',' >> "$output"
+		fi
+		printf '"%s"' "$(json_escape "$url")" >> "$output"
+		count=$((count + 1))
+	done < "$urls_file"
+	printf ']}\n' >> "$output"
+	rm -f "$urls_file"
+
+	[ "$count" -gt 0 ]
 }
 
 subscription_setup() {
@@ -1308,15 +1347,17 @@ task_status() {
 }
 
 start_bootstrap_default() {
-	local result rc bg_pid
+	local payload result rc bg_pid
 	clear_stale_lock
 	if [ -d "$LOCK_DIR" ]; then
 		printf '{"ok":true,"started":false,"running":true,"summary":"另一个 localClash 任务正在运行。"}\n'
 		return 0
 	fi
+	payload="$(strip_ubus_rpc_session "$(cat)")"
 	rm -f "$TASK_STATUS" "$TASK_RESULT" "$TASK_INPUT" "$TASK_PID"
 	: > "$LOG"
-	write_task_running "初始化任务正在运行。"
+	write_versioned_payload "$payload" > "$TASK_INPUT"
+	write_task_running "初始化和运行时启动任务正在运行。"
 	log_line "默认初始化：已加入后台任务队列"
 	(
 		result="$("$0" call bootstrap_default_run 2>>"$LOG")"
@@ -1326,15 +1367,44 @@ start_bootstrap_default() {
 		fi
 		printf '%s\n' "$result" > "$TASK_RESULT"
 		printf '{"ok":true,"running":false,"done":true,"exit_code":%s,"result":%s}\n' "$rc" "$result" > "$TASK_STATUS"
-		rm -f "$TASK_PID"
+		rm -f "$TASK_INPUT" "$TASK_PID"
 	) >/dev/null 2>&1 &
 	bg_pid="$!"
 	write_task_pid "$bg_pid"
-	ok '"started":true,"running":true,"summary":"初始化任务已启动。"'
+	ok '"started":true,"running":true,"summary":"初始化和运行时启动任务已启动。"'
 }
 
 bootstrap_default_run() {
-	local tmpdir mihomo_attempt
+	local tmpdir mihomo_attempt payload selected_core selected_template subscription_input subscription_changed subscription_ready runtime_started runtime_result
+	payload='{"version":1}'
+	selected_core="meta"
+	selected_template="localclash-default"
+	subscription_changed=false
+	subscription_ready=false
+	runtime_started=false
+
+	if [ -f "$TASK_INPUT" ]; then
+		payload="$(cat "$TASK_INPUT" 2>/dev/null || printf '{"version":1}')"
+	fi
+	selected_core="$(jsonfilter -s "$payload" -e '@.core' 2>/dev/null || true)"
+	selected_template="$(jsonfilter -s "$payload" -e '@.template' 2>/dev/null || true)"
+	[ -n "$selected_core" ] || selected_core="meta"
+	[ -n "$selected_template" ] || selected_template="localclash-default"
+	case "$selected_core" in
+		meta|smart) ;;
+		*)
+			fail "invalid_bootstrap_core" "初始化核心类型必须是 meta 或 smart。"
+			return 1
+			;;
+	esac
+	case "$selected_template" in
+		minimal|localclash-default) ;;
+		*)
+			fail "invalid_bootstrap_template" "初始化配置模板必须是 minimal 或 localclash-default。"
+			return 1
+			;;
+	esac
+
 	log_line "默认初始化：开始路由器默认设置"
 	tmpdir="$(mktemp -d /tmp/localclash-default.XXXXXX)" || {
 		log_line "默认初始化：临时目录创建失败"
@@ -1342,11 +1412,21 @@ bootstrap_default_run() {
 		return 1
 	}
 
-	log_line "默认初始化：正在检查并更新 localClash 核心"
-	if ! bootstrap_core > "$tmpdir/core.json"; then
-		cat "$tmpdir/core.json"
-		rm -rf "$tmpdir"
-		return 1
+	if core_installed; then
+		log_line "默认初始化：localClash 核心已安装，跳过核心下载"
+		if ! service_start >/dev/null; then
+			rm -rf "$tmpdir"
+			log_line "默认初始化：MCP 服务启动失败"
+			fail "service_start_failed" "localClash 核心已安装，但 MCP 服务无法启动。"
+			return 1
+		fi
+	else
+		log_line "默认初始化：正在安装 localClash 核心"
+		if ! bootstrap_core > "$tmpdir/core.json"; then
+			cat "$tmpdir/core.json"
+			rm -rf "$tmpdir"
+			return 1
+		fi
 	fi
 
 	if ! base_assets_installed; then
@@ -1358,6 +1438,19 @@ bootstrap_default_run() {
 		fi
 	else
 		log_line "默认初始化：基础文件已安装"
+	fi
+
+	subscription_input="$tmpdir/subscription.json"
+	if write_bootstrap_subscription_input "$payload" "$subscription_input"; then
+		log_line "默认初始化：正在保存并刷新订阅"
+		if ! subscription_save_refresh_file "$subscription_input" "$tmpdir"; then
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		subscription_changed=true
+	else
+		rm -f "$subscription_input"
+		log_line "默认初始化：未收到新的订阅输入"
 	fi
 
 	if mihomo_core_installed; then
@@ -1390,22 +1483,35 @@ bootstrap_default_run() {
 		fi
 	fi
 
-	cat > "$tmpdir/template.json" <<'JSON'
+	cat > "$tmpdir/template.json" <<JSON
 {
   "version": 1,
-  "template": "localclash-default",
+  "template": "$selected_template",
   "runtime_profile": "router",
-  "core": "meta",
+  "core": "$selected_core",
   "allow_overwrite_modified": false
 }
 JSON
 
-	log_line "默认初始化：正在应用 router/meta 默认配置"
+	log_line "默认初始化：正在应用 router/$selected_core/$selected_template 默认配置"
 	if ! call_core config apply-template --input "$tmpdir/template.json" --json > "$tmpdir/template-result.json"; then
 		log_line "默认初始化：默认配置应用失败"
 		cat "$tmpdir/template-result.json"
 		rm -rf "$tmpdir"
 		return 1
+	fi
+
+	if [ "$subscription_changed" = true ] || subscription_configured; then
+		subscription_ready=true
+		log_line "默认初始化：正在生成 Mihomo 配置"
+		if ! run_with_heartbeat "默认初始化：正在生成 Mihomo 配置" "$tmpdir/render.json" call_core config render --json; then
+			log_line "默认初始化：配置生成失败"
+			cat "$tmpdir/render.json"
+			rm -rf "$tmpdir"
+			return 1
+		fi
+	else
+		log_line "默认初始化：订阅尚未配置，跳过配置生成"
 	fi
 
 	if ! service_start >/dev/null; then
@@ -1414,9 +1520,26 @@ JSON
 		fail "service_start_failed" "默认配置已应用，但 MCP 服务无法启动。"
 		return 1
 	fi
+
+	if [ "$subscription_ready" = true ]; then
+		log_line "默认初始化：正在启动运行时并应用网络接管"
+		if ! runtime_start_takeover_run > "$tmpdir/runtime-start.json"; then
+			log_line "默认初始化：运行时启动和网络接管失败"
+			cat "$tmpdir/runtime-start.json"
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		runtime_started=true
+		runtime_result="$(cat "$tmpdir/runtime-start.json")"
+	fi
+
 	rm -rf "$tmpdir"
 	log_line "默认初始化：已完成路由器默认设置"
-	ok '"changed":true,"summary":"已应用路由器默认设置。","profile":{"runtime_profile":"router","core":"meta","template":"localclash-default"}'
+	if [ "$runtime_started" = true ]; then
+		printf '{"ok":true,"changed":true,"summary":"已应用路由器默认设置，运行时已启动。","subscription_changed":%s,"profile":{"runtime_profile":"router","core":"%s","template":"%s"},"runtime_start":%s}\n' "$subscription_changed" "$selected_core" "$selected_template" "$runtime_result"
+	else
+		ok '"changed":true,"summary":"已应用路由器默认设置。","subscription_changed":'"$subscription_changed"',"profile":{"runtime_profile":"router","core":"'"$selected_core"'","template":"'"$selected_template"'"}'
+	fi
 }
 
 start_runtime_takeover() {
@@ -1541,7 +1664,7 @@ case "$method" in
   "bootstrap_core": {},
   "bootstrap_core_async": {},
   "bootstrap_assets": {},
-  "bootstrap_default": {},
+  "bootstrap_default": { "urls": [], "core": "meta", "template": "localclash-default" },
   "task_status": {},
   "task_cancel": {},
   "bootstrap_task_status": {},
