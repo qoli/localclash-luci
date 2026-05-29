@@ -583,6 +583,18 @@ function takeoverStatusCell(takeover, id) {
 	return E('td', { 'id': id }, [ takeoverState(takeover) ]);
 }
 
+function taskStatusText(task) {
+	if (!task)
+		return _('无正在执行任务');
+	if (task.running === true)
+		return task.summary || _('任务正在执行');
+	if (task.done === true && task.result && task.result.ok === false)
+		return formatText(_('上次失败：%s'), task.result.message || task.result.code || _('未知错误'));
+	if (task.done === true)
+		return _('上次任务已完成');
+	return _('无正在执行任务');
+}
+
 function refreshTakeoverStatus() {
 	return callTakeoverStatus().then(function(takeover) {
 		var text = takeoverState(takeover);
@@ -639,7 +651,7 @@ function refreshOverviewStatus() {
 		setText('localclash-overview-state-title', state.title);
 		replaceContent('localclash-overview-state-message', message);
 		replaceContent('localclash-overview-actions', primaryActions(state));
-		replaceContent('localclash-overview-diagnostics-body', diagnosticTable(data, takeover));
+		replaceContent('localclash-overview-diagnostics-body', diagnosticTable(data, takeover, task));
 		return refreshTakeoverStatus();
 	});
 }
@@ -683,14 +695,6 @@ function classify(data, takeover, task) {
 			title: _('初始化未完成'),
 			message: formatText(_('缺少 %s。一键初始化会先检查并更新 localClash 核心，然后应用「预设配置（路由器配置 / meta 核心 / default 预设）」。'), missing.join(' / ')),
 			missing: missing
-		};
-	}
-
-	if (task && task.done === true && task.result && task.result.ok === false) {
-		return {
-			id: 'task_failed',
-			title: _('上次任务未完成'),
-			message: task.result.message || _('任务没有完成，请查看日志后重试。')
 		};
 	}
 
@@ -744,13 +748,6 @@ function primaryActions(state) {
 		]);
 	}
 
-	if (state.id === 'task_failed') {
-		return actionRow([
-			commandButton(_('查看失败原因'), callBootstrapLogs, null, { keepOpen: true }),
-			liveTaskButton(_('重试一键初始化'), callBootstrapDefault, 'cbi-button-apply')
-		]);
-	}
-
 	if (state.id === 'bootstrap') {
 		return actionRow([
 			liveTaskButton(_('一键初始化'), callBootstrapDefault, 'cbi-button-apply'),
@@ -784,7 +781,7 @@ function primaryActions(state) {
 	]);
 }
 
-function diagnosticTable(data, takeover) {
+function diagnosticTable(data, takeover, task) {
 	var core = data.core || {};
 	var baseAssets = data.base_assets || {};
 	var runtimeProfile = data.runtime_profile || {};
@@ -808,6 +805,7 @@ function diagnosticTable(data, takeover) {
 			row(_('Dashboard 面板'), core.installed ? (componentInstalled(status, [ 'dashboard', 'ui' ]) ? _('已安装') : _('缺失')) : _('缺失')),
 			row(_('订阅'), subscriptionConfigured(status) ? _('已配置') : _('缺失')),
 			row(_('Mihomo 运行时运行中'), runtime.running !== undefined ? runtime.running : runtimeRunning(status)),
+			row(_('最近任务'), taskStatusText(task)),
 			E('tr', {}, [
 				E('th', { 'scope': 'row' }, [ _('网络接管') ]),
 				takeoverStatusCell(takeover, 'localclash-overview-takeover-status')
@@ -837,6 +835,7 @@ function diagnosticLoadingTable() {
 			row(_('Dashboard 面板'), pending),
 			row(_('订阅'), pending),
 			row(_('Mihomo 运行时运行中'), pending),
+			row(_('最近任务'), pending),
 			row(_('网络接管'), _('检查中…')),
 			row(_('MCP 服务已安装'), pending),
 			row(_('MCP 服务运行中'), pending),
