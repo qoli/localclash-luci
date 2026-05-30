@@ -93,6 +93,7 @@ localClash 分成两部分：
 ## 7. 更多文档
 
 - 产品边界：[docs/openwrt-luci.md](docs/openwrt-luci.md)
+- ucode 改写提案：[docs/ucode-rewrite-adaptation.md](docs/ucode-rewrite-adaptation.md)
 - 真机测试：[docs/real-router-safe-test.md](docs/real-router-safe-test.md)
 - 发布流程：[docs/github-release-runbook.md](docs/github-release-runbook.md)
 
