@@ -515,6 +515,29 @@ function commandButton(label, handler, extraClass, options) {
 	}, [ label ]);
 }
 
+function defaultDashboardURL() {
+	var host = window.location.hostname || '';
+
+	if (!host && window.location.host)
+		host = window.location.host.replace(/:\d+$/, '');
+	if (!host)
+		host = '192.168.1.1';
+	if (host.charAt(0) !== '[' && host.indexOf(':') !== -1)
+		host = '[' + host + ']';
+
+	return 'http://' + host + ':9090/ui';
+}
+
+function dashboardButton(extraClass) {
+	return E('a', {
+		'class': 'btn cbi-button localclash-button ' + (extraClass || ''),
+		'href': defaultDashboardURL(),
+		'target': '_blank',
+		'rel': 'noopener noreferrer',
+		'role': 'button'
+	}, [ _('打开 Dashboard') ]);
+}
+
 function actionRow(buttons) {
 	return E('div', { 'class': 'localclash-actions' }, buttons);
 }
@@ -584,6 +607,7 @@ return view.extend({
 				commandButton(_('停止 MCP 服务'), callServiceStop, 'cbi-button-reset')
 			])),
 			section(_('运行时'), actionRow([
+				dashboardButton('cbi-button-action'),
 				commandButton(_('启动'), callRuntimeStart, 'cbi-button-apply'),
 				commandButton(_('重启'), callRuntimeRestart),
 				commandButton(_('停止'), callRuntimeStop, 'cbi-button-reset')
