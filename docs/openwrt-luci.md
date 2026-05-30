@@ -597,10 +597,9 @@ Component behavior must follow current component code:
 - `components.dashboard = installed_or_latest` maps to `dashboard.Download` with
   the existing default repo, asset, and output directory.
 - `components.localclash = installed_or_latest` is handled by the package
-  bootstrap helper when the localClash binary is missing. The Go core cannot
-  update itself before it exists; if self-update is implemented after
-  installation, it must use the same release-manifest rule as the bootstrap
-  helper.
+  bootstrap helper for both missing and already installed binaries. It uses the
+  trusted release manifest and atomic replace semantics so LuCI initialization
+  starts from the latest localClash core.
 
 Runtime behavior must follow current runtime code:
 
@@ -652,8 +651,9 @@ otherwise.
   defaults: repo `Zephyruso/zashboard`, asset `dist.zip`, output
   `.runtime/mihomo/ui/zashboard`, and force replace semantics for update.
 - `component update localclash --json`: handled by the package bootstrap helper
-  when the Go core is missing. If implemented inside the Go core later, it must
-  use a trusted localClash release manifest and atomic replace semantics.
+  for missing and already installed Go cores. If implemented inside the Go core
+  later, it must use a trusted localClash release manifest and atomic replace
+  semantics.
 - `config status --json`: maps to the existing config status behavior in MCP and
   local config inspection. It reads `localclash-intent.json`, `localclash-packs.gob`,
   `generated/mihomo.yaml`, subscription state, and runtime profile state.
@@ -743,19 +743,21 @@ once it exists.
 The LuCI page is supported by the product command tree as follows:
 
 - First-run setup: overview accepts subscription URLs, Smart/minimal choices,
-  then calls the helper `bootstrap_default` task. The helper temporarily writes
-  the subscription URLs to `/tmp`, passes them to `subscription set`/refresh,
-  applies the selected template/core, renders config when a subscription is
-  available, starts Mihomo, applies router takeover, and removes the temporary
-  task input after completion. When the core, Mihomo, dashboard, or base assets
-  are already installed, the helper should skip those update/download steps
-  instead of blocking the first-run task on redundant network work.
+  then calls the helper `bootstrap_default` task. The helper first installs or
+  updates the localClash core from the release manifest so initialization starts
+  from the latest product code. It then temporarily writes the subscription URLs
+  to `/tmp`, passes them to `subscription set`/refresh, applies the selected
+  template/core, renders config when a subscription is available, starts Mihomo,
+  applies router takeover, and removes the temporary task input after
+  completion. Mihomo and dashboard downloads may still be skipped when already
+  installed.
 - Service status report: `status`, plus focused `component status`,
   `runtime status`, and `takeover status` when a section needs live refresh.
 - Required components: `component update localclash`, `component update mihomo`,
-  and `component update dashboard`. When the localClash core is missing, the
-  package bootstrap helper handles `localclash` installation because the binary
-  cannot call itself yet.
+  and `component update dashboard`. The package bootstrap helper handles
+  `localclash` installation or update because the binary cannot call itself
+  before it exists, and LuCI initialization must still refresh already installed
+  cores from the release manifest.
 - Runtime configuration dropdown: `apply` with desired state, or
   `config apply-template` for a focused template change.
 - Core flavor selector: `apply` or `config apply-template` with the selected
@@ -886,7 +888,8 @@ Method contracts:
   background task is marked complete. The helper must not log or return full
   URLs.
 - `component_update`: input `{ "component": "localclash|mihomo|dashboard" }`.
-  `localclash` uses bootstrap install when the core is missing; other values call
+  `localclash` uses the bootstrap helper to install or update from the latest
+  release manifest; other values call
   `localclash component update <component> --json`.
 - `apply`: input is the LuCI desired state without `version`. The helper adds
   `version: 1`, writes a temporary JSON file, calls

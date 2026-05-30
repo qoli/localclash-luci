@@ -1412,21 +1412,11 @@ bootstrap_default_run() {
 		return 1
 	}
 
-	if core_installed; then
-		log_line "默认初始化：localClash 核心已安装，跳过核心下载"
-		if ! service_start >/dev/null; then
-			rm -rf "$tmpdir"
-			log_line "默认初始化：MCP 服务启动失败"
-			fail "service_start_failed" "localClash 核心已安装，但 MCP 服务无法启动。"
-			return 1
-		fi
-	else
-		log_line "默认初始化：正在安装 localClash 核心"
-		if ! bootstrap_core > "$tmpdir/core.json"; then
-			cat "$tmpdir/core.json"
-			rm -rf "$tmpdir"
-			return 1
-		fi
+	log_line "默认初始化：第一步更新 localClash 核心"
+	if ! bootstrap_core > "$tmpdir/core.json"; then
+		cat "$tmpdir/core.json"
+		rm -rf "$tmpdir"
+		return 1
 	fi
 
 	if ! base_assets_installed; then
