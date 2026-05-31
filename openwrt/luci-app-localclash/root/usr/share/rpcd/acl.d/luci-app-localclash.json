@@ -23,6 +23,7 @@
           "runtime_restart",
           "runtime_stop",
           "takeover_apply",
+          "takeover_restore",
           "takeover_stop",
           "reset",
           "service_start",

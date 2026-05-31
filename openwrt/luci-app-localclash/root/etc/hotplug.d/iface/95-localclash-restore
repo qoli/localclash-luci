@@ -1,0 +1,26 @@
+#!/bin/sh
+
+case "$ACTION" in
+	ifup|ifupdate) ;;
+	*) exit 0 ;;
+esac
+
+HELPER="${LOCALCLASH_HELPER:-/usr/libexec/rpcd/localclash}"
+[ -x "$HELPER" ] || exit 0
+
+STAMP="/tmp/localclash-restore-hotplug.stamp"
+NOW="$(date +%s 2>/dev/null || printf '0\n')"
+LAST="$(cat "$STAMP" 2>/dev/null || printf '0\n')"
+case "$NOW:$LAST" in
+	*[!0-9:]*|:*) LAST=0 ;;
+esac
+
+if [ "$NOW" -gt 0 ] && [ "$LAST" -gt 0 ] && [ $((NOW - LAST)) -lt "${LOCALCLASH_RESTORE_DEBOUNCE:-20}" ]; then
+	exit 0
+fi
+printf '%s\n' "$NOW" > "$STAMP" 2>/dev/null || true
+
+(
+	sleep "${LOCALCLASH_RESTORE_DELAY:-8}"
+	"$HELPER" call takeover_restore >/dev/null 2>&1
+) &

@@ -19,6 +19,8 @@ GITHUB_RAW_MIRRORS="${LOCALCLASH_GITHUB_RAW_MIRRORS:-https://gh-proxy.com/https:
 FETCH_TIMEOUT="${LOCALCLASH_FETCH_TIMEOUT:-20}"
 TASK_STEP_TIMEOUT="${LOCALCLASH_TASK_STEP_TIMEOUT:-240}"
 TAKEOVER_SKIP_FILE="${LOCALCLASH_TAKEOVER_SKIP_FILE:-/tmp/localclash-skip-takeover}"
+TAKEOVER_INTENT_FILE="${LOCALCLASH_TAKEOVER_INTENT_FILE:-$STATE_DIR/takeover-enabled}"
+TAKEOVER_STATE_STATUS="${LOCALCLASH_TAKEOVER_STATE_STATUS:-/tmp/localclash/router-takeover/status}"
 
 json_escape() {
 	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
@@ -40,6 +42,27 @@ log_line() {
 
 takeover_skip_enabled() {
 	[ "${LOCALCLASH_TAKEOVER_SKIP:-0}" = "1" ] || [ -f "$TAKEOVER_SKIP_FILE" ]
+}
+
+takeover_intent_enabled() {
+	[ -f "$TAKEOVER_INTENT_FILE" ]
+}
+
+takeover_runtime_state_enabled() {
+	grep -qx 'applied' "$TAKEOVER_STATE_STATUS" 2>/dev/null
+}
+
+takeover_restore_requested() {
+	takeover_intent_enabled || takeover_runtime_state_enabled
+}
+
+takeover_intent_enable() {
+	mkdir -p "$STATE_DIR" 2>/dev/null || true
+	printf 'enabled\n' > "$TAKEOVER_INTENT_FILE" 2>/dev/null || true
+}
+
+takeover_intent_disable() {
+	rm -f "$TAKEOVER_INTENT_FILE" 2>/dev/null || true
 }
 
 now_epoch() {
@@ -596,7 +619,18 @@ call_core() {
 }
 
 runtime_stop() {
-	call_core runtime stop --json
+	local tmp rc
+	tmp="/tmp/localclash-runtime-stop.$$.json"
+	if call_core runtime stop --json > "$tmp"; then
+		takeover_intent_disable
+		cat "$tmp"
+		rm -f "$tmp"
+		return 0
+	fi
+	rc=$?
+	cat "$tmp" 2>/dev/null || true
+	rm -f "$tmp"
+	return "$rc"
 }
 
 runtime_start() {
@@ -1606,17 +1640,118 @@ runtime_start_takeover_run() {
 	fi
 
 	log_line "运行时接管：已完成"
+	takeover_intent_enable
 	printf '{"ok":true,"changed":true,"summary":"运行时已启动，网络接管已应用。","runtime":%s,"takeover":%s}\n' "$(cat "$tmpdir/runtime.json")" "$(cat "$tmpdir/takeover.json")"
 	rm -rf "$tmpdir"
 }
 
 takeover_apply() {
+	local tmp rc
 	if takeover_skip_enabled; then
 		fail "takeover_skipped_for_test" "测试模式已启用，已阻止网络接管。删除 /tmp/localclash-skip-takeover 后才允许应用网络接管。"
 		return 1
 	fi
 
-	call_core takeover apply --json
+	tmp="/tmp/localclash-takeover-apply.$$.json"
+	if call_core takeover apply --json > "$tmp"; then
+		takeover_intent_enable
+		cat "$tmp"
+		rm -f "$tmp"
+		return 0
+	fi
+	rc=$?
+	cat "$tmp" 2>/dev/null || true
+	rm -f "$tmp"
+	return "$rc"
+}
+
+takeover_stop() {
+	local tmp rc
+	tmp="/tmp/localclash-takeover-stop.$$.json"
+	if call_core takeover stop --json > "$tmp"; then
+		takeover_intent_disable
+		cat "$tmp"
+		rm -f "$tmp"
+		return 0
+	fi
+	rc=$?
+	cat "$tmp" 2>/dev/null || true
+	rm -f "$tmp"
+	return "$rc"
+}
+
+takeover_restore_run() {
+	local tmpdir effective runtime_running profile_mode rc
+	if takeover_skip_enabled; then
+		log_line "网络接管恢复：测试模式已启用，跳过"
+		ok '"changed":false,"skipped":true,"summary":"测试模式已启用，跳过网络接管恢复。"'
+		return 0
+	fi
+	if ! takeover_restore_requested; then
+		log_line "网络接管恢复：没有接管意图，跳过"
+		ok '"changed":false,"skipped":true,"summary":"没有已保存的网络接管意图，跳过恢复。"'
+		return 0
+	fi
+
+	tmpdir="$(mktemp -d /tmp/localclash-restore.XXXXXX)" || {
+		fail "tmpdir_failed" "无法创建网络接管恢复临时目录。"
+		return 1
+	}
+
+	log_line "网络接管恢复：检查当前状态"
+	if ! call_core takeover status --json > "$tmpdir/status.json"; then
+		rc=$?
+		log_line "网络接管恢复：状态检查失败"
+		cat "$tmpdir/status.json" 2>/dev/null || true
+		rm -rf "$tmpdir"
+		return "$rc"
+	fi
+
+	effective="$(jsonfilter -i "$tmpdir/status.json" -e '@.status.effective' 2>/dev/null || true)"
+	runtime_running="$(jsonfilter -i "$tmpdir/status.json" -e '@.status.runtime_running' 2>/dev/null || true)"
+	profile_mode="$(jsonfilter -i "$tmpdir/status.json" -e '@.status.profile_mode' 2>/dev/null || true)"
+
+	if [ "$effective" = "true" ]; then
+		log_line "网络接管恢复：当前已生效"
+		takeover_intent_enable
+		printf '{"ok":true,"changed":false,"summary":"网络接管当前已生效。","status":%s}\n' "$(cat "$tmpdir/status.json")"
+		rm -rf "$tmpdir"
+		return 0
+	fi
+
+	if [ "$profile_mode" != "router" ]; then
+		log_line "网络接管恢复：当前不是 router profile，跳过"
+		printf '{"ok":true,"changed":false,"skipped":true,"summary":"当前不是 router profile，跳过网络接管恢复。","status":%s}\n' "$(cat "$tmpdir/status.json")"
+		rm -rf "$tmpdir"
+		return 0
+	fi
+
+	if [ "$runtime_running" = "true" ]; then
+		log_line "网络接管恢复：运行时已运行，重新应用接管"
+		if ! call_core takeover apply --json > "$tmpdir/apply.json"; then
+			rc=$?
+			log_line "网络接管恢复：重新应用接管失败"
+			cat "$tmpdir/apply.json" 2>/dev/null || true
+			rm -rf "$tmpdir"
+			return "$rc"
+		fi
+		takeover_intent_enable
+		printf '{"ok":true,"changed":true,"summary":"网络接管已重新应用。","status":%s,"takeover":%s}\n' "$(cat "$tmpdir/status.json")" "$(cat "$tmpdir/apply.json")"
+		rm -rf "$tmpdir"
+		return 0
+	fi
+
+	if takeover_intent_enabled; then
+		log_line "网络接管恢复：运行时未运行，按已保存意图启动运行时并应用接管"
+		runtime_start_takeover_run
+		rc=$?
+		rm -rf "$tmpdir"
+		return "$rc"
+	fi
+
+	log_line "网络接管恢复：运行时未运行，仅存在本次启动临时状态，跳过"
+	printf '{"ok":true,"changed":false,"skipped":true,"summary":"运行时未运行，且没有持久接管意图，跳过恢复。","status":%s}\n' "$(cat "$tmpdir/status.json")"
+	rm -rf "$tmpdir"
 }
 
 method="${1:-}"
@@ -1645,6 +1780,7 @@ case "$method" in
   "runtime_stop": {},
   "takeover_status": {},
   "takeover_apply": {},
+  "takeover_restore": {},
   "takeover_stop": {},
   "reset": {},
   "service_start": {},
@@ -1683,7 +1819,8 @@ JSON
 	runtime_stop) runtime_stop ;;
 	takeover_status) call_core takeover status --json ;;
 	takeover_apply) takeover_apply ;;
-	takeover_stop) call_core takeover stop --json ;;
+	takeover_restore) with_lock takeover_restore_run ;;
+	takeover_stop) takeover_stop ;;
 	reset) with_lock reset ;;
 	service_status) service_status ;;
 	service_ensure) service_ensure ;;
