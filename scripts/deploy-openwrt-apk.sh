@@ -39,7 +39,7 @@ docker run --rm \
 		apk --allow-untrusted verify '/work/${apk_rel}'
 		apk adbdump '/work/${apk_rel}' | grep -q 'name: ${pkg_name}'
 		apk adbdump '/work/${apk_rel}' | grep -q 'version: ${apk_version}'
-		apk adbdump '/work/${apk_rel}' | grep -q 'arch: all'
+		apk adbdump '/work/${apk_rel}' | grep -q 'arch: noarch'
 		apk --cache=no --allow-untrusted manifest '/work/${apk_rel}' | grep -q '  usr/libexec/rpcd/localclash$'
 		apk --cache=no --allow-untrusted manifest '/work/${apk_rel}' | grep -q '  usr/share/luci/menu.d/luci-app-localclash.json$'
 		apk --cache=no --allow-untrusted manifest '/work/${apk_rel}' | grep -q '  usr/share/rpcd/acl.d/luci-app-localclash.json$'

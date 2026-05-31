@@ -47,7 +47,7 @@ docker run --rm \
 			--info 'name:${pkg_name}' \
 			--info 'version:${apk_version}' \
 			--info 'description:LuCI support for localClash.' \
-			--info 'arch:all' \
+			--info 'arch:noarch' \
 			--info 'license:${pkg_license}' \
 			--info 'origin:localclash-luci' \
 			--info 'url:https://github.com/qoli/localclash-luci' \
