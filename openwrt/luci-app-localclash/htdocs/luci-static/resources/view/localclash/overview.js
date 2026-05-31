@@ -64,6 +64,18 @@ var callTakeoverStop = rpc.declare({
 	expect: { '': {} }
 });
 
+var callBootRestoreEnable = rpc.declare({
+	object: 'localclash',
+	method: 'boot_restore_enable',
+	expect: { '': {} }
+});
+
+var callBootRestoreDisable = rpc.declare({
+	object: 'localclash',
+	method: 'boot_restore_disable',
+	expect: { '': {} }
+});
+
 var callMcpHelp = rpc.declare({
 	object: 'localclash',
 	method: 'mcp_help',
@@ -719,6 +731,31 @@ function taskStatusText(task) {
 	return _('无正在执行任务');
 }
 
+function bootRestoreSummary(bootRestore) {
+	if (bootRestore && bootRestore.enabled === true)
+		return _('已启用');
+	if (bootRestore && bootRestore.legacy_marker_present === true)
+		return _('未启用（检测到旧接管标记，已不会自动沿用）');
+	return _('未启用');
+}
+
+function bootRestorePanel(bootRestore) {
+	var enabled = bootRestore && bootRestore.enabled === true;
+
+	return E('div', { 'class': 'localclash-boot-restore' }, [
+		E('p', { 'class': 'localclash-muted' }, [
+			_('启用后，路由器重启时会自动启动 localClash runtime 并恢复网络接管。关闭时，重启不会恢复接管；同次开机内的 firewall reload 仍会依本次接管记录自动修复。')
+		]),
+		E('p', {}, [
+			E('strong', {}, [ _('目前状态：') ]),
+			bootRestoreSummary(bootRestore)
+		]),
+		actionRow([
+			commandButton(enabled ? _('关闭开机自动恢复') : _('开机自动恢复'), enabled ? callBootRestoreDisable : callBootRestoreEnable, enabled ? 'cbi-button-reset' : 'cbi-button-apply')
+		])
+	]);
+}
+
 function refreshTakeoverStatus() {
 	return callTakeoverStatus().then(function(takeover) {
 		var text = takeoverState(takeover);
@@ -776,6 +813,7 @@ function refreshOverviewStatus() {
 		replaceContent('localclash-overview-state-message', message);
 		replaceContent('localclash-overview-actions', primaryActions(state));
 		updateBootstrapStartButton();
+		replaceContent('localclash-overview-boot-restore-body', bootRestorePanel(data.boot_auto_restore || {}));
 		replaceContent('localclash-overview-diagnostics-body', diagnosticTable(data, takeover, task));
 		return refreshTakeoverStatus();
 	});
@@ -931,6 +969,7 @@ function diagnosticTable(data, takeover, task) {
 			row(_('Dashboard 面板'), core.installed ? (componentInstalled(status, [ 'dashboard', 'ui' ]) ? _('已安装') : _('缺失')) : _('缺失')),
 			row(_('订阅'), subscriptionConfigured(status) ? _('已配置') : _('缺失')),
 			row(_('Mihomo 运行时运行中'), runtime.running !== undefined ? runtime.running : runtimeRunning(status)),
+			row(_('开机自动恢复'), bootRestoreSummary(data.boot_auto_restore || {})),
 			row(_('最近任务'), taskStatusText(task)),
 			E('tr', {}, [
 				E('th', { 'scope': 'row' }, [ _('网络接管') ]),
@@ -961,6 +1000,7 @@ function diagnosticLoadingTable() {
 			row(_('Dashboard 面板'), pending),
 			row(_('订阅'), pending),
 			row(_('Mihomo 运行时运行中'), pending),
+			row(_('开机自动恢复'), pending),
 			row(_('最近任务'), pending),
 			row(_('网络接管'), _('检查中…')),
 			row(_('MCP 服务已安装'), pending),
@@ -1070,6 +1110,9 @@ return view.extend({
 					primaryActions(state)
 				])
 			]), 'localclash-next-step'),
+			section(_('开机自动恢复'), E('div', { 'id': 'localclash-overview-boot-restore-body' }, [
+				bootRestorePanel({})
+			]), 'localclash-boot-restore-section'),
 			section(_('状态'), E('div', { 'id': 'localclash-overview-diagnostics-body' }, [
 				diagnosticLoadingTable()
 			]), 'localclash-diagnostics'),

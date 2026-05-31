@@ -94,6 +94,18 @@ var callTakeoverStop = rpc.declare({
 	expect: { '': {} }
 });
 
+var callBootRestoreEnable = rpc.declare({
+	object: 'localclash',
+	method: 'boot_restore_enable',
+	expect: { '': {} }
+});
+
+var callBootRestoreDisable = rpc.declare({
+	object: 'localclash',
+	method: 'boot_restore_disable',
+	expect: { '': {} }
+});
+
 var callReset = rpc.declare({
 	object: 'localclash',
 	method: 'reset',
@@ -241,6 +253,7 @@ function refreshStatus() {
 		setCellText('localclash-advanced-mcp-running', service.running);
 		setCellText('localclash-advanced-mcp-endpoint', mcp.endpoint);
 		setCellText('localclash-advanced-runtime-running', runtime.running);
+		setCellText('localclash-advanced-boot-restore', bootRestoreSummary(data.boot_auto_restore || {}));
 	}).catch(function(err) {
 		setCellText('localclash-advanced-core-installed', err.message || String(err));
 	});
@@ -542,6 +555,26 @@ function actionRow(buttons) {
 	return E('div', { 'class': 'localclash-actions' }, buttons);
 }
 
+function bootRestoreSummary(bootRestore) {
+	if (bootRestore && bootRestore.enabled === true)
+		return _('已启用');
+	if (bootRestore && bootRestore.legacy_marker_present === true)
+		return _('未启用（检测到旧接管标记，已不会自动沿用）');
+	return _('未启用');
+}
+
+function bootRestoreControls() {
+	return E('div', {}, [
+		E('p', { 'class': 'localclash-muted' }, [
+			_('启用后，路由器重启时会自动启动 localClash runtime 并恢复网络接管。关闭时，重启不会恢复接管；同次开机内的 firewall reload 仍会依本次接管记录自动修复。')
+		]),
+		actionRow([
+			commandButton(_('开机自动恢复'), callBootRestoreEnable, 'cbi-button-apply'),
+			commandButton(_('关闭开机自动恢复'), callBootRestoreDisable, 'cbi-button-reset')
+		])
+	]);
+}
+
 return view.extend({
 	load: function() {
 		return {};
@@ -564,6 +597,7 @@ return view.extend({
 				'.localclash-view .localclash-button.localclash-busy{cursor:wait;opacity:.72}',
 				'.localclash-view .localclash-danger{border-color:#c44;background:#d94b4b;color:#fff}',
 				'.localclash-view + .cbi-page-actions,.localclash-view ~ .cbi-page-actions,.cbi-page-actions{display:none!important}',
+				'.localclash-view .localclash-muted{color:#667085;line-height:1.55}',
 				'.localclash-view .localclash-status-table{display:inline-table;max-width:100%}',
 				'.localclash-view .localclash-status-table th{width:auto;white-space:nowrap;padding-right:2rem}',
 				'.localclash-view .localclash-status-table td{width:auto;word-break:break-word}',
@@ -588,6 +622,7 @@ return view.extend({
 						row(_('MCP 服务运行中'), pending, 'localclash-advanced-mcp-running'),
 						row(_('MCP 端点'), pending, 'localclash-advanced-mcp-endpoint'),
 						row(_('Mihomo 运行时运行中'), pending, 'localclash-advanced-runtime-running'),
+						row(_('开机自动恢复'), pending, 'localclash-advanced-boot-restore'),
 						E('tr', {}, [
 							E('th', { 'scope': 'row' }, [ _('网络接管') ]),
 							E('td', { 'id': 'localclash-advanced-takeover-status' }, [ takeoverSummary(takeover) ])
@@ -621,6 +656,7 @@ return view.extend({
 				commandButton(_('应用接管'), callTakeoverApply, 'cbi-button-apply'),
 				commandButton(_('停止接管'), callTakeoverStop, 'cbi-button-reset')
 			])),
+			section(_('开机自动恢复'), bootRestoreControls()),
 			section(_('维护'), actionRow([
 				commandButton(_('配置复位'), callConfigReset, 'cbi-button-reset'),
 				commandButton(_('完整重置 localClash'), callReset, 'localclash-danger', {

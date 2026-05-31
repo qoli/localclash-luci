@@ -19,8 +19,10 @@ GITHUB_RAW_MIRRORS="${LOCALCLASH_GITHUB_RAW_MIRRORS:-https://gh-proxy.com/https:
 FETCH_TIMEOUT="${LOCALCLASH_FETCH_TIMEOUT:-20}"
 TASK_STEP_TIMEOUT="${LOCALCLASH_TASK_STEP_TIMEOUT:-240}"
 TAKEOVER_SKIP_FILE="${LOCALCLASH_TAKEOVER_SKIP_FILE:-/tmp/localclash-skip-takeover}"
-TAKEOVER_INTENT_FILE="${LOCALCLASH_TAKEOVER_INTENT_FILE:-$STATE_DIR/takeover-enabled}"
+TAKEOVER_REPAIR_TICKET="${LOCALCLASH_TAKEOVER_REPAIR_TICKET:-/tmp/localclash/router-takeover/repair-ticket}"
 TAKEOVER_STATE_STATUS="${LOCALCLASH_TAKEOVER_STATE_STATUS:-/tmp/localclash/router-takeover/status}"
+BOOT_AUTO_RESTORE_FILE="${LOCALCLASH_BOOT_AUTO_RESTORE_FILE:-$STATE_DIR/boot-auto-restore-enabled}"
+LEGACY_TAKEOVER_INTENT_FILE="${LOCALCLASH_LEGACY_TAKEOVER_INTENT_FILE:-$STATE_DIR/takeover-enabled}"
 
 json_escape() {
 	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
@@ -44,8 +46,8 @@ takeover_skip_enabled() {
 	[ "${LOCALCLASH_TAKEOVER_SKIP:-0}" = "1" ] || [ -f "$TAKEOVER_SKIP_FILE" ]
 }
 
-takeover_intent_enabled() {
-	[ -f "$TAKEOVER_INTENT_FILE" ]
+takeover_repair_ticket_enabled() {
+	[ -f "$TAKEOVER_REPAIR_TICKET" ]
 }
 
 takeover_runtime_state_enabled() {
@@ -53,16 +55,52 @@ takeover_runtime_state_enabled() {
 }
 
 takeover_restore_requested() {
-	takeover_intent_enabled || takeover_runtime_state_enabled
+	takeover_repair_ticket_enabled || takeover_runtime_state_enabled
 }
 
-takeover_intent_enable() {
+takeover_repair_ticket_enable() {
+	mkdir -p "$(dirname "$TAKEOVER_REPAIR_TICKET")" 2>/dev/null || true
+	printf 'applied\n' > "$TAKEOVER_REPAIR_TICKET" 2>/dev/null || true
+}
+
+takeover_repair_ticket_disable() {
+	rm -f "$TAKEOVER_REPAIR_TICKET" "$TAKEOVER_STATE_STATUS" 2>/dev/null || true
+}
+
+boot_auto_restore_enabled() {
+	[ -f "$BOOT_AUTO_RESTORE_FILE" ]
+}
+
+legacy_takeover_marker_present() {
+	[ -f "$LEGACY_TAKEOVER_INTENT_FILE" ]
+}
+
+boot_restore_json() {
+	local enabled legacy
+	enabled=false
+	legacy=false
+	boot_auto_restore_enabled && enabled=true
+	legacy_takeover_marker_present && legacy=true
+	printf '"boot_auto_restore":{"enabled":%s,"path":"%s","legacy_marker_present":%s,"legacy_path":"%s"}' "$enabled" "$(json_escape "$BOOT_AUTO_RESTORE_FILE")" "$legacy" "$(json_escape "$LEGACY_TAKEOVER_INTENT_FILE")"
+}
+
+boot_restore_status() {
+	ok "$(boot_restore_json)"
+}
+
+boot_restore_enable() {
 	mkdir -p "$STATE_DIR" 2>/dev/null || true
-	printf 'enabled\n' > "$TAKEOVER_INTENT_FILE" 2>/dev/null || true
+	printf 'enabled\n' > "$BOOT_AUTO_RESTORE_FILE" 2>/dev/null || {
+		fail "boot_restore_enable_failed" "无法启用开机自动恢复。"
+		return 1
+	}
+	rm -f "$LEGACY_TAKEOVER_INTENT_FILE" 2>/dev/null || true
+	ok '"changed":true,"summary":"开机自动恢复已启用。",'"$(boot_restore_json)"
 }
 
-takeover_intent_disable() {
-	rm -f "$TAKEOVER_INTENT_FILE" 2>/dev/null || true
+boot_restore_disable() {
+	rm -f "$BOOT_AUTO_RESTORE_FILE" "$LEGACY_TAKEOVER_INTENT_FILE" 2>/dev/null || true
+	ok '"changed":true,"summary":"开机自动恢复已关闭。",'"$(boot_restore_json)"
 }
 
 now_epoch() {
@@ -235,9 +273,9 @@ run_with_heartbeat() {
 		sleep 5
 		if kill -0 "$pid" 2>/dev/null; then
 			elapsed=$((elapsed + 5))
-			log_line "$label：仍在执行（${elapsed}s）"
+			log_line "${label}：仍在执行（${elapsed}s）"
 			if [ "$TASK_STEP_TIMEOUT" -gt 0 ] && [ "$elapsed" -ge "$TASK_STEP_TIMEOUT" ]; then
-				log_line "$label：超过 ${TASK_STEP_TIMEOUT}s，已停止等待"
+				log_line "${label}：超过 ${TASK_STEP_TIMEOUT}s，已停止等待"
 				kill_process_tree -TERM "$pid"
 				sleep 2
 				kill_process_tree -KILL "$pid"
@@ -285,7 +323,7 @@ fetch_with_watchdog() {
 			sleep 5
 			if kill -0 "$pid" 2>/dev/null; then
 				elapsed=$((elapsed + 5))
-				log_line "下载：等待 $label（${elapsed}s）"
+				log_line "下载：等待 ${label}（${elapsed}s）"
 				if [ "$elapsed" -ge "$FETCH_TIMEOUT" ]; then
 					kill "$pid" 2>/dev/null || exit 0
 					sleep 2
@@ -622,7 +660,7 @@ runtime_stop() {
 	local tmp rc
 	tmp="/tmp/localclash-runtime-stop.$$.json"
 	if call_core runtime stop --json > "$tmp"; then
-		takeover_intent_disable
+		takeover_repair_ticket_disable
 		cat "$tmp"
 		rm -f "$tmp"
 		return 0
@@ -900,6 +938,7 @@ USE_PROCD=1
 CORE="$CORE"
 WORKDIR="$STATE_DIR"
 MCP_ADDR="$MCP_ADDR"
+HELPER="/usr/libexec/rpcd/localclash"
 
 start_service() {
 	if [ ! -x "\$CORE" ]; then
@@ -907,10 +946,15 @@ start_service() {
 		return 1
 	fi
 	mkdir -p "\$WORKDIR"
-	procd_open_instance
+	procd_open_instance mcp
 	procd_set_param command /bin/sh -c 'mkdir -p "\$1" && WORKDIR_REAL="\$(cd "\$1" && pwd -P)" && cd / && LOCALCLASH_WORKDIR="\$WORKDIR_REAL" exec "\$2" mcp serve --addr "\$3" --path /mcp' localclash-mcp "\$WORKDIR" "\$CORE" "\$MCP_ADDR"
 	procd_set_param respawn
 	procd_close_instance
+	if [ -x "\$HELPER" ]; then
+		procd_open_instance boot_restore
+		procd_set_param command /bin/sh -c 'sleep "\${LOCALCLASH_BOOT_RESTORE_DELAY:-20}"; exec "\$1" call boot_restore_run' localclash-boot-restore "\$HELPER"
+		procd_close_instance
+	fi
 }
 EOF
 	chmod 755 "$SERVICE"
@@ -943,7 +987,7 @@ service_start() {
 }
 
 status() {
-	local core_ok mihomo_ok dashboard_ok subscription_ok runtime_ok summary runtime_profile base_assets
+	local core_ok mihomo_ok dashboard_ok subscription_ok runtime_ok summary runtime_profile base_assets boot_restore
 	core_ok="$(core_installed && echo true || echo false)"
 	mihomo_ok="$(mihomo_core_installed && echo true || echo false)"
 	dashboard_ok="$(dashboard_installed && echo true || echo false)"
@@ -951,8 +995,9 @@ status() {
 	runtime_ok="$(runtime_running && echo true || echo false)"
 	runtime_profile="$(runtime_profile_body)"
 	base_assets="$(base_assets_body)"
+	boot_restore="$(boot_restore_json)"
 	summary='"components":{"mihomo":{"installed":'"$mihomo_ok"'},"dashboard":{"installed":'"$dashboard_ok"'}},"subscription":{"configured":'"$subscription_ok"'},"runtime":{"running":'"$runtime_ok"'}'
-	printf '{"ok":true,"core":{"installed":%s,"path":"%s"},%s,%s,"mcp_service":{%s},"status":{"ok":true,"changed":false,"summary":"localClash LuCI 状态摘要。",%s,"status":{%s}}}\n' "$core_ok" "$CORE" "$base_assets" "$runtime_profile" "$(service_body)" "$summary" "$summary"
+	printf '{"ok":true,"core":{"installed":%s,"path":"%s"},%s,%s,%s,"mcp_service":{%s},"status":{"ok":true,"changed":false,"summary":"localClash LuCI 状态摘要。",%s,"status":{%s}}}\n' "$core_ok" "$CORE" "$base_assets" "$runtime_profile" "$boot_restore" "$(service_body)" "$summary" "$summary"
 }
 
 component_update() {
@@ -1297,7 +1342,7 @@ bootstrap_core() {
 		fail "manifest_asset_missing" "Release 清单中没有匹配此路由器的 Linux 二进制文件。"
 		return 1
 	fi
-	log_line "核心初始化：正在下载 localClash 核心 $asset_version（$arch）"
+	log_line "核心初始化：正在下载 localClash 核心 ${asset_version}（${arch}）"
 	if ! fetch_url_verified "$asset_url" "$binary" "$asset_sha"; then
 		rm -rf "$tmpdir"
 		log_line "核心初始化：核心下载失败"
@@ -1327,7 +1372,7 @@ bootstrap_core() {
 		fail "service_start_failed" "localClash 核心已安装，但 MCP 服务无法启动。"
 		return 1
 	fi
-	log_line "已安装 localClash 核心 $asset_version（$arch）"
+	log_line "已安装 localClash 核心 ${asset_version}（${arch}）"
 	ok "\"changed\":true,\"summary\":\"localClash 核心已安装。\",\"core\":{\"installed\":true,\"path\":\"$CORE\",\"version\":\"$(json_escape "$asset_version")\",\"arch\":\"$arch\"}"
 }
 
@@ -1640,7 +1685,7 @@ runtime_start_takeover_run() {
 	fi
 
 	log_line "运行时接管：已完成"
-	takeover_intent_enable
+	takeover_repair_ticket_enable
 	printf '{"ok":true,"changed":true,"summary":"运行时已启动，网络接管已应用。","runtime":%s,"takeover":%s}\n' "$(cat "$tmpdir/runtime.json")" "$(cat "$tmpdir/takeover.json")"
 	rm -rf "$tmpdir"
 }
@@ -1654,7 +1699,7 @@ takeover_apply() {
 
 	tmp="/tmp/localclash-takeover-apply.$$.json"
 	if call_core takeover apply --json > "$tmp"; then
-		takeover_intent_enable
+		takeover_repair_ticket_enable
 		cat "$tmp"
 		rm -f "$tmp"
 		return 0
@@ -1669,7 +1714,7 @@ takeover_stop() {
 	local tmp rc
 	tmp="/tmp/localclash-takeover-stop.$$.json"
 	if call_core takeover stop --json > "$tmp"; then
-		takeover_intent_disable
+		takeover_repair_ticket_disable
 		cat "$tmp"
 		rm -f "$tmp"
 		return 0
@@ -1688,8 +1733,8 @@ takeover_restore_run() {
 		return 0
 	fi
 	if ! takeover_restore_requested; then
-		log_line "网络接管恢复：没有接管意图，跳过"
-		ok '"changed":false,"skipped":true,"summary":"没有已保存的网络接管意图，跳过恢复。"'
+		log_line "网络接管恢复：没有本次开机修复票据，跳过"
+		ok '"changed":false,"skipped":true,"summary":"没有本次开机网络接管修复票据，跳过恢复。"'
 		return 0
 	fi
 
@@ -1713,7 +1758,7 @@ takeover_restore_run() {
 
 	if [ "$effective" = "true" ]; then
 		log_line "网络接管恢复：当前已生效"
-		takeover_intent_enable
+		takeover_repair_ticket_enable
 		printf '{"ok":true,"changed":false,"summary":"网络接管当前已生效。","status":%s}\n' "$(cat "$tmpdir/status.json")"
 		rm -rf "$tmpdir"
 		return 0
@@ -1735,23 +1780,30 @@ takeover_restore_run() {
 			rm -rf "$tmpdir"
 			return "$rc"
 		fi
-		takeover_intent_enable
+		takeover_repair_ticket_enable
 		printf '{"ok":true,"changed":true,"summary":"网络接管已重新应用。","status":%s,"takeover":%s}\n' "$(cat "$tmpdir/status.json")" "$(cat "$tmpdir/apply.json")"
 		rm -rf "$tmpdir"
 		return 0
 	fi
 
-	if takeover_intent_enabled; then
-		log_line "网络接管恢复：运行时未运行，按已保存意图启动运行时并应用接管"
-		runtime_start_takeover_run
-		rc=$?
-		rm -rf "$tmpdir"
-		return "$rc"
-	fi
-
-	log_line "网络接管恢复：运行时未运行，仅存在本次启动临时状态，跳过"
-	printf '{"ok":true,"changed":false,"skipped":true,"summary":"运行时未运行，且没有持久接管意图，跳过恢复。","status":%s}\n' "$(cat "$tmpdir/status.json")"
+	log_line "网络接管恢复：运行时未运行，本次开机修复不会启动运行时"
+	printf '{"ok":true,"changed":false,"skipped":true,"summary":"运行时未运行，本次开机修复不会启动运行时。","status":%s}\n' "$(cat "$tmpdir/status.json")"
 	rm -rf "$tmpdir"
+}
+
+boot_restore_run() {
+	if ! boot_auto_restore_enabled; then
+		log_line "开机自动恢复：未启用，跳过"
+		ok '"changed":false,"skipped":true,"summary":"开机自动恢复未启用。",'"$(boot_restore_json)"
+		return 0
+	fi
+	if takeover_skip_enabled; then
+		log_line "开机自动恢复：测试模式已启用，跳过"
+		ok '"changed":false,"skipped":true,"summary":"测试模式已启用，跳过开机自动恢复。",'"$(boot_restore_json)"
+		return 0
+	fi
+	log_line "开机自动恢复：开始"
+	runtime_start_takeover_run
 }
 
 method="${1:-}"
@@ -1778,6 +1830,10 @@ case "$method" in
   "runtime_start_takeover": {},
   "runtime_restart": {},
   "runtime_stop": {},
+  "boot_restore_status": {},
+  "boot_restore_enable": {},
+  "boot_restore_disable": {},
+  "boot_restore_run": {},
   "takeover_status": {},
   "takeover_apply": {},
   "takeover_restore": {},
@@ -1817,6 +1873,10 @@ JSON
 	runtime_start_takeover_run) with_lock runtime_start_takeover_run ;;
 	runtime_restart) runtime_restart ;;
 	runtime_stop) runtime_stop ;;
+	boot_restore_status) boot_restore_status ;;
+	boot_restore_enable) with_lock boot_restore_enable ;;
+	boot_restore_disable) with_lock boot_restore_disable ;;
+	boot_restore_run) with_lock boot_restore_run ;;
 	takeover_status) call_core takeover status --json ;;
 	takeover_apply) takeover_apply ;;
 	takeover_restore) with_lock takeover_restore_run ;;
