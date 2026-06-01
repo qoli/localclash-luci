@@ -1132,38 +1132,51 @@ subscription_set() {
 }
 
 subscription_get() {
-	local tmp configured urls count url
+	local tmp configured uris urls count uri uris_file urls_file
+	uris=""
 	urls=""
 	count=0
 
 	if ! core_installed; then
-		ok '"configured":false,"urls":[],"count":0'
+		ok '"configured":false,"uris":[],"urls":[],"count":0'
 		return 0
 	fi
 
 	tmp="/tmp/localclash-subscription-get.$$.json"
 	if ! call_core subscription get --json > "$tmp" 2>/dev/null; then
 		rm -f "$tmp"
-		ok '"configured":false,"urls":[],"count":0'
+		ok '"configured":false,"uris":[],"urls":[],"count":0'
 		return 0
 	fi
 	configured="$(jsonfilter -i "$tmp" -e '@.status.configured' 2>/dev/null || printf false)"
 	if [ "$configured" != "true" ]; then
 		rm -f "$tmp"
-		ok '"configured":false,"urls":[],"count":0'
+		ok '"configured":false,"uris":[],"urls":[],"count":0'
 		return 0
 	fi
 
-	for url in $(jsonfilter -i "$tmp" -e '@.status.urls[*]' 2>/dev/null); do
+	uris_file="$tmp.uris"
+	urls_file="$tmp.urls"
+	jsonfilter -i "$tmp" -e '@.status.uris[*]' > "$uris_file" 2>/dev/null || true
+	while IFS= read -r uri; do
+		[ -n "$uri" ] || continue
 		if [ "$count" -gt 0 ]; then
+			uris="$uris,"
+		fi
+		uris="$uris\"$(json_escape "$uri")\""
+		count=$((count + 1))
+	done < "$uris_file"
+	jsonfilter -i "$tmp" -e '@.status.urls[*]' > "$urls_file" 2>/dev/null || true
+	while IFS= read -r uri; do
+		[ -n "$uri" ] || continue
+		if [ -n "$urls" ]; then
 			urls="$urls,"
 		fi
-		urls="$urls\"$(json_escape "$url")\""
-		count=$((count + 1))
-	done
-	rm -f "$tmp"
+		urls="$urls\"$(json_escape "$uri")\""
+	done < "$urls_file"
+	rm -f "$tmp" "$uris_file" "$urls_file"
 
-	ok '"configured":true,"urls":['"$urls"'],"count":'"$count"
+	ok '"configured":true,"uris":['"$uris"'],"urls":['"$urls"'],"count":'"$count"
 }
 
 subscription_save_refresh_file() {
@@ -1210,24 +1223,27 @@ subscription_setup_file() {
 }
 
 write_bootstrap_subscription_input() {
-	local payload output urls_file count url
+	local payload output uris_file count uri
 	payload="$1"
 	output="$2"
-	urls_file="$output.urls"
+	uris_file="$output.uris"
 	count=0
 
-	jsonfilter -s "$payload" -e '@.urls[*]' > "$urls_file" 2>/dev/null || true
-	printf '{"version":1,"urls":[' > "$output"
-	while IFS= read -r url; do
-		[ -n "$url" ] || continue
+	jsonfilter -s "$payload" -e '@.uris[*]' > "$uris_file" 2>/dev/null || true
+	if [ ! -s "$uris_file" ]; then
+		jsonfilter -s "$payload" -e '@.urls[*]' > "$uris_file" 2>/dev/null || true
+	fi
+	printf '{"version":1,"uris":[' > "$output"
+	while IFS= read -r uri; do
+		[ -n "$uri" ] || continue
 		if [ "$count" -gt 0 ]; then
 			printf ',' >> "$output"
 		fi
-		printf '"%s"' "$(json_escape "$url")" >> "$output"
+		printf '"%s"' "$(json_escape "$uri")" >> "$output"
 		count=$((count + 1))
-	done < "$urls_file"
+	done < "$uris_file"
 	printf ']}\n' >> "$output"
-	rm -f "$urls_file"
+	rm -f "$uris_file"
 
 	[ "$count" -gt 0 ]
 }
@@ -1817,9 +1833,9 @@ case "$method" in
 {
 	  "status": {},
 	  "subscription_get": {},
-	  "subscription_set": { "urls": [] },
-  "subscription_setup": { "urls": [] },
-  "subscription_setup_async": { "urls": [] },
+	  "subscription_set": { "uris": [] },
+  "subscription_setup": { "uris": [] },
+  "subscription_setup_async": { "uris": [] },
   "subscription_refresh": {},
   "component_update": { "component": "localclash" },
   "component_update_async": { "component": "localclash" },
@@ -1846,7 +1862,7 @@ case "$method" in
   "bootstrap_core": {},
   "bootstrap_core_async": {},
   "bootstrap_assets": {},
-  "bootstrap_default": { "urls": [], "core": "meta", "template": "localclash-default" },
+  "bootstrap_default": { "uris": [], "core": "meta", "template": "localclash-default" },
   "task_status": {},
   "task_cancel": {},
   "bootstrap_task_status": {},

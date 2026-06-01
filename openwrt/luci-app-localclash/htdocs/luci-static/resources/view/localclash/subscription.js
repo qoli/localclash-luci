@@ -12,7 +12,7 @@ var callSubscriptionGet = rpc.declare({
 var callSubscriptionSetupAsync = rpc.declare({
 	object: 'localclash',
 	method: 'subscription_setup_async',
-	params: [ 'urls' ],
+	params: [ 'uris' ],
 	expect: { '': {} }
 });
 
@@ -198,7 +198,7 @@ function actionRow(buttons) {
 	return E('div', { 'class': 'localclash-actions' }, buttons);
 }
 
-function subscriptionUrls() {
+function subscriptionUris() {
 	var textarea = document.getElementById('localclash-subscription-urls');
 	var value = textarea ? textarea.value : '';
 
@@ -208,12 +208,12 @@ function subscriptionUrls() {
 }
 
 function requireSubscriptionUrls() {
-	var urls = subscriptionUrls();
+	var uris = subscriptionUris();
 
-	if (!urls.length)
-		throw new Error(_('请至少输入一个订阅 URL。'));
+	if (!uris.length)
+		throw new Error(_('请至少输入一个订阅 URI。'));
 
-	return urls;
+	return uris;
 }
 
 function deferAfterPaint(fn, delay) {
@@ -244,10 +244,10 @@ function setSubscriptionLoadStatus(text, isError) {
 function refreshSubscriptionInput() {
 	return callSubscriptionGet().then(function(subscription) {
 		var textarea = document.getElementById('localclash-subscription-urls');
-		var savedUrls = subscription && Array.isArray(subscription.urls) ? subscription.urls.join('\n') : '';
+		var savedUris = subscription && Array.isArray(subscription.uris) ? subscription.uris.join('\n') : '';
 
 		if (textarea && textarea.getAttribute('data-dirty') !== 'true')
-			textarea.value = savedUrls;
+			textarea.value = savedUris;
 
 		setSubscriptionLoadStatus(savedUrls ? _('订阅内容已加载。') : _('尚未保存订阅。'));
 	}).catch(function(err) {
@@ -287,7 +287,7 @@ return view.extend({
 					E('textarea', {
 						'id': 'localclash-subscription-urls',
 						'class': 'cbi-input-textarea localclash-textarea',
-						'placeholder': _('每行一条订阅 URL'),
+						'placeholder': _('每行一条订阅 URI 或节点 URI'),
 						'input': function(ev) {
 							ev.currentTarget.setAttribute('data-dirty', 'true');
 							setSubscriptionLoadStatus(_('正在编辑，已暂停覆盖订阅内容。'));

@@ -127,10 +127,10 @@ textarea:
 
 ```text
 https://example.com/sub-1
-https://example.com/sub-2
+vless://uuid@example.com:443?security=tls&type=tcp#Node
 ```
 
-Each non-empty line is one subscription URL. The dialog should provide one
+Each non-empty line is one subscription URI or MVP proxy URI. The dialog should provide one
 primary action:
 
 - `Save and Apply Subscription`: stores sources, downloads them, updates the
@@ -441,18 +441,20 @@ Current implementation anchors:
 
 This command stores subscription sources. It does not refresh them.
 
-The current internal subscription model uses `subscriptions.Source{ID, URL}` and
-requires an `id` for artifact paths and source-aware node resolution. LuCI should
-not expose that internal id. The product CLI must accept URL-only input, then
-derive internal source ids before calling the existing subscription service.
+The current internal subscription model uses `subscriptions.Source{ID, Type,
+URI, URIs}` and requires an `id` for artifact paths and source-aware node
+resolution. LuCI should not expose that internal id. The product CLI accepts a
+URI list, then derives internal source ids before calling the subscription
+service.
 
 Schema:
 
 ```json
 {
   "version": 1,
-  "urls": [
-    "https://example.com/sub"
+  "uris": [
+    "https://example.com/sub",
+    "vless://uuid@example.com:443?security=tls&type=tcp#Node"
   ]
 }
 ```
@@ -460,23 +462,23 @@ Schema:
 Fields:
 
 - `version`: required integer, must be `1`.
-- `urls`: required array, at least one item. Each item must be an absolute
-  `http` or `https` URL. Empty strings are invalid after trimming.
+- `uris`: required array, at least one item. Each item must be either an
+  absolute `http` or `https` remote subscription URI, or an MVP proxy URI.
+  Empty strings are invalid after trimming.
 
 Behavior:
 
 - The command replaces the complete subscription source list. This matches the
   LuCI textarea model.
-- The product CLI maps URLs to internal source ids before calling the existing
+- The product CLI maps URIs to internal source ids before calling the existing
   subscription configure code. IDs are implementation details.
-- ID generation must be deterministic for a given ordered URL list. A simple V1
-  rule is `sub-1`, `sub-2`, ... by trimmed line order.
+- ID generation must be deterministic for a given ordered URI list.
 - The generated ids must obey the current internal validation rule: only letters,
   digits, underscore, and hyphen.
-- The command must reject duplicate URLs after trimming.
+- The command deduplicates duplicate URI strings without decoding proxy fields.
 
-The command must not echo full subscription URLs in normal JSON output. Return
-generated source ids and redacted URL summaries only.
+The command must not echo full subscription URIs in normal JSON output. Return
+generated source ids and redacted URI summaries only.
 
 ### `config apply-template --input config-request.json`
 
@@ -537,8 +539,9 @@ Schema:
   "version": 1,
   "mode": "preview",
   "subscriptions": {
-    "urls": [
-      "https://example.com/sub"
+    "uris": [
+      "https://example.com/sub",
+      "vless://uuid@example.com:443?security=tls&type=tcp#Node"
     ],
     "refresh": true
   },
@@ -567,8 +570,8 @@ Fields:
   without mutating runtime state. `execute` applies the confirmed desired state.
 - `subscriptions`: optional object. If omitted, leave subscription config and
   artifacts unchanged.
-- `subscriptions.urls`: optional array with the same item schema as
-  `subscription set`. If present, URLs replace the complete stored source list
+- `subscriptions.uris`: optional array with the same item schema as
+  `subscription set`. If present, URIs replace the complete stored source list
   before refresh.
 - `subscriptions.refresh`: optional boolean, default `false`. If `true`, refresh
   stored sources after any source update.
@@ -742,10 +745,10 @@ once it exists.
 
 The LuCI page is supported by the product command tree as follows:
 
-- First-run setup: overview accepts subscription URLs, Smart/minimal choices,
+- First-run setup: overview accepts subscription URIs, Smart/minimal choices,
   then calls the helper `bootstrap_default` task. The helper first installs or
   updates the localClash core from the release manifest so initialization starts
-  from the latest product code. It then temporarily writes the subscription URLs
+  from the latest product code. It then temporarily writes the subscription URIs
   to `/tmp`, passes them to `subscription set`/refresh, applies the selected
   template/core, renders config when a subscription is available, starts Mihomo,
   applies router takeover, and removes the temporary task input after
@@ -873,15 +876,15 @@ Method contracts:
   calls `service_status`, and returns a combined LuCI page status. When the core
   is missing, returns bootstrap-only status with `core.installed=false` plus MCP
   service status or service repair guidance from the helper layer.
-- `subscription_set`: input `{ "urls": ["https://..."] }`. Writes a temporary
-  JSON input file with `{ "version": 1, "urls": [...] }`, calls
+- `subscription_set`: input `{ "uris": ["https://...", "vless://..."] }`. Writes a temporary
+  JSON input file with `{ "version": 1, "uris": [...] }`, calls
   `localclash subscription set --input <file> --json`, then removes the temp
   file.
 - `subscription_refresh`: no input. Calls
   `localclash subscription refresh --json`.
-- `bootstrap_default`: optional input `{ "urls": ["https://..."], "core":
+- `bootstrap_default`: optional input `{ "uris": ["https://...", "vless://..."], "core":
   "meta|smart", "template": "localclash-default|minimal" }`. It installs or
-  updates the localClash core, base assets, Mihomo, and dashboard; when URLs are
+  updates the localClash core, base assets, Mihomo, and dashboard; when URIs are
   present, it saves and refreshes them before applying `router` runtime profile
   with the selected core/template. If a subscription is available after this
   step, it renders config, starts Mihomo, and applies router takeover before the
@@ -1197,7 +1200,7 @@ The first implementation is complete only when all of these are true:
 
 - Product CLI command tree exists and passes unit tests.
 - Product CLI stdout is valid JSON for both success and errors.
-- `subscription set` accepts URL-only input and maps to internal source IDs.
+- `subscription set` accepts URI-list input and maps to internal source IDs.
 - Component update commands work with current code defaults.
 - `config apply-template` writes existing `localconfig.Config` and runtime
   profile state.

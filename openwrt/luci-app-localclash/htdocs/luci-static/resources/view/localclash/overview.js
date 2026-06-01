@@ -18,7 +18,7 @@ var callTakeoverStatus = rpc.declare({
 var callBootstrapDefault = rpc.declare({
 	object: 'localclash',
 	method: 'bootstrap_default',
-	params: [ 'urls', 'core', 'template' ],
+	params: [ 'uris', 'core', 'template' ],
 	expect: { '': {} }
 });
 
@@ -481,7 +481,7 @@ function actionRow(buttons) {
 	return E('div', { 'class': 'localclash-actions' }, buttons);
 }
 
-function subscriptionUrls() {
+function subscriptionUris() {
 	var textarea = document.getElementById('localclash-overview-subscription-urls');
 	var value = textarea ? textarea.value : '';
 
@@ -508,7 +508,7 @@ function updateBootstrapStartButton() {
 		return;
 
 	requiresSubscription = button.getAttribute('data-subscription-required') === 'true';
-	if (requiresSubscription && !subscriptionUrls().length) {
+	if (requiresSubscription && !subscriptionUris().length) {
 		button.disabled = true;
 		button.textContent = _('请填写订阅');
 	}
@@ -519,12 +519,12 @@ function updateBootstrapStartButton() {
 }
 
 function startBootstrapFromOverview(requiresSubscription) {
-	var urls = subscriptionUrls();
+	var uris = subscriptionUris();
 
-	if (requiresSubscription && !urls.length)
-		throw new Error(_('请至少输入一个订阅 URL。'));
+	if (requiresSubscription && !uris.length)
+		throw new Error(_('请至少输入一个订阅 URI。'));
 
-	return callBootstrapDefault(urls, selectedBootstrapCore(), selectedBootstrapTemplate());
+	return callBootstrapDefault(uris, selectedBootstrapCore(), selectedBootstrapTemplate());
 }
 
 function bootstrapStartButton(requiresSubscription) {
@@ -568,7 +568,7 @@ function bootstrapSetupPanel(requiresSubscription) {
 		body.push(E('textarea', {
 			'id': 'localclash-overview-subscription-urls',
 			'class': 'cbi-input-textarea localclash-textarea',
-			'placeholder': _('每行一条订阅 URL'),
+			'placeholder': _('每行一条订阅 URI 或节点 URI'),
 			'input': updateBootstrapStartButton
 		}, []));
 	}
