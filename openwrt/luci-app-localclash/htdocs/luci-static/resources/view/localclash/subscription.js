@@ -249,7 +249,7 @@ function refreshSubscriptionInput() {
 		if (textarea && textarea.getAttribute('data-dirty') !== 'true')
 			textarea.value = savedUris;
 
-		setSubscriptionLoadStatus(savedUrls ? _('订阅内容已加载。') : _('尚未保存订阅。'));
+		setSubscriptionLoadStatus(savedUris ? _('订阅内容已加载。') : _('尚未保存订阅。'));
 	}).catch(function(err) {
 		setSubscriptionLoadStatus(formatText(_('订阅读取失败：%s'), err.message || String(err)), true);
 	});
