@@ -280,6 +280,24 @@ http://192.168.6.1:8765/mcp
 Claude Code 可以先执行：
 claude mcp add --transport http localclash http://192.168.6.1:8765/mcp
 
+OpenCode 可以先执行交互式添加：
+opencode mcp add
+
+添加时选择 remote MCP server，名称填写 localclash，URL 填写：
+http://192.168.6.1:8765/mcp
+
+也可以手动在 opencode.json 中加入：
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "localclash": {
+      "type": "remote",
+      "url": "http://192.168.6.1:8765/mcp",
+      "enabled": true
+    }
+  }
+}
+
 连接完成并刷新会话后，先调用 localClash tools_list，再调用
 environment_inspect。之后根据 safety_level 决定是否只读检查、写配置，或
 等待我确认后再执行运行时和网络接管操作。

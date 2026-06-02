@@ -338,6 +338,26 @@ MCP endpoint: http://192.168.6.1:8765/mcp
 For Claude Code, run:
 claude mcp add --transport http localclash http://192.168.6.1:8765/mcp
 
+For OpenCode, run the guided MCP setup:
+opencode mcp add
+
+Choose a remote MCP server, name it localclash, and use:
+http://192.168.6.1:8765/mcp
+
+Or add it manually to opencode.json:
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "localclash": {
+      "type": "remote",
+      "url": "http://192.168.6.1:8765/mcp",
+      "enabled": true
+    }
+  }
+}
+
+When prompting OpenCode, explicitly say: use localclash.
+
 After MCP is configured, refresh or restart the current Agent session until the
 localClash MCP tools are visible. Then call localClash tools_list first, followed
 by environment_inspect. Use the reported safety_level before making changes:
