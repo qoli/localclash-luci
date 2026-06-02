@@ -128,6 +128,26 @@ function statusText(value) {
 	return String(value);
 }
 
+function replaceContent(id, content) {
+	var node = document.getElementById(id);
+	var items = Array.isArray(content) ? content : [ content ];
+
+	if (!node)
+		return;
+
+	while (node.firstChild)
+		node.removeChild(node.firstChild);
+
+	items.forEach(function(item) {
+		if (item === null || item === undefined)
+			return;
+		if (typeof item === 'string')
+			node.appendChild(document.createTextNode(item));
+		else
+			node.appendChild(item);
+	});
+}
+
 function coreFlavorText(value) {
 	if (value === 'meta')
 		return 'Meta';
@@ -158,20 +178,6 @@ function defaultPatchStatusText(baseAssets) {
 	if (baseAssets.default_patch_count)
 		return formatText(_('缺失（清单 %s 个）'), baseAssets.default_patch_count || 0);
 	return _('缺失');
-}
-
-function row(label, value, id) {
-	return E('tr', {}, [
-		E('th', { 'scope': 'row' }, [ label ]),
-		E('td', id ? { 'id': id } : {}, [ statusText(value) ])
-	]);
-}
-
-function setCellText(id, value) {
-	var cell = document.getElementById(id);
-
-	if (cell)
-		cell.textContent = statusText(value);
 }
 
 function deferAfterPaint(fn, delay) {
@@ -218,44 +224,213 @@ function takeoverSummary(takeover) {
 	return statusText(takeover);
 }
 
-function refreshTakeoverStatus() {
-	return callTakeoverStatus().then(function(takeover) {
-		var cell = document.getElementById('localclash-advanced-takeover-status');
+function productStatus(data) {
+	var status = data && data.status ? data.status : {};
 
-		if (cell)
-			cell.textContent = takeoverSummary(takeover);
-	}).catch(function(err) {
-		var cell = document.getElementById('localclash-advanced-takeover-status');
+	if (status.status)
+		return status.status;
+	return status;
+}
 
-		if (cell)
-			cell.textContent = err.message || String(err);
-	});
+function boolState(value, trueText, falseText) {
+	if (value === true)
+		return trueText || _('是');
+	if (value === false)
+		return falseText || _('否');
+	return '-';
+}
+
+function detailList(items) {
+	return items.filter(function(item) {
+		return item !== null && item !== undefined && item !== '';
+	}).map(statusText).join(' · ');
+}
+
+function statusWithDetails(summary, details) {
+	var detail = detailList(details || []);
+
+	if (!detail)
+		return statusText(summary);
+	return statusText(summary) + ' · ' + detail;
+}
+
+function componentInstalled(status, name) {
+	var components = status.components || {};
+	var component = components[name] || {};
+
+	return component.installed === true;
+}
+
+function subscriptionConfigured(status) {
+	var subscription = status.subscription || {};
+
+	return subscription.configured === true;
+}
+
+function runtimeRunning(status) {
+	var runtime = status.runtime || {};
+
+	return runtime.running === true;
+}
+
+function luciPackageSummary(data) {
+	var luciPackage = data.luci_package || {};
+
+	if (luciPackage.version)
+		return statusWithDetails(luciPackage.version, [
+			luciPackage.manager ? 'manager=' + luciPackage.manager : null,
+			luciPackage.latest_url
+		]);
+	if (luciPackage.installed === false)
+		return _('缺失');
+	return statusWithDetails(_('已安装'), [
+		luciPackage.manager ? 'manager=' + luciPackage.manager : null
+	]);
+}
+
+function takeoverDetails(takeover) {
+	var status = takeover && takeover.status ? takeover.status : {};
+
+	if (!status || typeof status !== 'object')
+		return [];
+
+	return [
+		status.profile_mode ? 'profile=' + status.profile_mode : null,
+		status.runtime_running !== undefined ? 'runtime=' + status.runtime_running : null,
+		status.tun_device ? 'tun=' + status.tun_device : null,
+		status.dns_port ? 'dns=' + status.dns_port : null,
+		status.redir_port ? 'redir=' + status.redir_port : null
+	];
+}
+
+function statusRow(item, value) {
+	return E('tr', { 'class': 'tr cbi-rowstyle-1' }, [
+		E('td', { 'class': 'td', 'data-title': _('项目') }, [ item ]),
+		E('td', { 'class': 'td', 'data-title': _('目前状态') }, [ statusText(value) ])
+	]);
+}
+
+function advancedStatusTable(data, takeover) {
+	var core = data.core || {};
+	var baseAssets = data.base_assets || {};
+	var runtimeProfile = data.runtime_profile || {};
+	var service = (data.mcp_service && data.mcp_service.service) || {};
+	var mcp = (data.mcp_service && data.mcp_service.mcp) || {};
+	var status = productStatus(data);
+	var bootRestore = data.boot_auto_restore || {};
+
+	return E('table', { 'class': 'table cbi-section-table localclash-status-table' }, [
+		E('tbody', {}, [
+			E('tr', { 'class': 'tr' }, [
+				E('th', { 'class': 'th' }, [ _('项目') ]),
+				E('th', { 'class': 'th' }, [ _('目前状态') ])
+			]),
+			statusRow(_('localClash 核心'), statusWithDetails(core.installed ? _('已安装') : _('缺失'), [
+				core.path
+			])),
+			statusRow(_('LuCI 界面'), luciPackageSummary(data)),
+			statusRow(_('基础文件'), statusWithDetails(baseAssets.installed ? _('已安装') : _('缺失'), [
+				baseAssets.path,
+				baseAssets.missing ? 'missing=' + baseAssets.missing : null
+			])),
+			statusRow(_('默认配置'), statusWithDetails(defaultTemplateText(baseAssets.default_template), [
+				defaultPatchStatusText(baseAssets),
+				baseAssets.policy ? 'policy=' + baseAssets.policy : null,
+				baseAssets.rule_source_dir ? 'rules=' + baseAssets.rule_source_dir : null
+			])),
+			statusRow(_('Runtime Profile'), statusWithDetails(boolState(runtimeProfile.exists, _('已配置'), _('缺失')), [
+				runtimeProfile.mode ? 'mode=' + runtimeProfile.mode : null,
+				runtimeProfile.runtime_source ? 'source=' + runtimeProfile.runtime_source : null,
+				runtimeProfile.path
+			])),
+			statusRow(_('用户 Profile'), statusWithDetails(boolState(runtimeProfile.user_profile_exists, _('存在'), _('不存在')), [
+				runtimeProfile.user_profile_path
+			])),
+			statusRow(_('Mihomo 核心'), statusWithDetails(componentInstalled(status, 'mihomo') ? _('已安装') : _('缺失'), [
+				runtimeProfile.core ? 'type=' + coreFlavorText(runtimeProfile.core) : null,
+				runtimeProfile.core_path
+			])),
+			statusRow(_('Dashboard'), statusWithDetails(componentInstalled(status, 'dashboard') ? _('已安装') : _('缺失'), [
+				defaultDashboardURL()
+			])),
+			statusRow(_('订阅'), subscriptionConfigured(status) ? _('已配置') : _('缺失')),
+			statusRow(_('Mihomo 运行时'), runtimeRunning(status) ? _('运行中') : _('未运行')),
+			statusRow(_('网络接管'), statusWithDetails(takeoverSummary(takeover), takeoverDetails(takeover))),
+			statusRow(_('MCP 服务'), statusWithDetails(boolState(service.running, _('运行中'), _('未运行')), [
+				service.installed !== undefined ? 'installed=' + service.installed : null,
+				service.enabled !== undefined ? 'enabled=' + service.enabled : null,
+				service.pid ? 'pid=' + service.pid : null
+			])),
+			statusRow(_('MCP 端点'), statusWithDetails(mcp.endpoint, [
+				mcp.health_endpoint,
+				mcp.healthy !== undefined ? 'healthy=' + mcp.healthy : null,
+				mcp.last_error ? 'error=' + mcp.last_error : null
+			])),
+			statusRow(_('开机自动恢复'), statusWithDetails(bootRestoreSummary(bootRestore), [
+				bootRestore.path,
+				bootRestore.legacy_marker_present ? 'legacy=' + bootRestore.legacy_path : null
+			]))
+		])
+	]);
+}
+
+function advancedStatusLoadingTable() {
+	var pending = _('加载中…');
+	var rows = [
+		'localClash 核心',
+		'LuCI 界面',
+		'基础文件',
+		'默认配置',
+		'Runtime Profile',
+		'用户 Profile',
+		'Mihomo 核心',
+		'Dashboard',
+		'订阅',
+		'Mihomo 运行时',
+		'网络接管',
+		'MCP 服务',
+		'MCP 端点',
+		'开机自动恢复'
+	];
+
+	return E('table', { 'class': 'table cbi-section-table localclash-status-table' }, [
+		E('tbody', {}, [
+			E('tr', { 'class': 'tr' }, [
+				E('th', { 'class': 'th' }, [ _('项目') ]),
+				E('th', { 'class': 'th' }, [ _('目前状态') ])
+			])
+		].concat(rows.map(function(item) {
+			return statusRow(_(item), pending);
+		})))
+	]);
+}
+
+function advancedStatusErrorTable(message) {
+	return E('table', { 'class': 'table cbi-section-table localclash-status-table' }, [
+		E('tbody', {}, [
+			E('tr', { 'class': 'tr' }, [
+				E('th', { 'class': 'th' }, [ _('项目') ]),
+				E('th', { 'class': 'th' }, [ _('目前状态') ])
+			]),
+			statusRow(_('状态'), _('读取失败')),
+			statusRow(_('错误'), message || '-')
+		])
+	]);
 }
 
 function refreshStatus() {
-	return callStatus().then(function(data) {
-		var core = data.core || {};
-		var baseAssets = data.base_assets || {};
-		var runtimeProfile = data.runtime_profile || {};
-		var service = (data.mcp_service && data.mcp_service.service) || {};
-		var mcp = (data.mcp_service && data.mcp_service.mcp) || {};
-		var runtime = (data.status && data.status.runtime) || {};
+	return Promise.all([
+		callStatus().catch(function(err) {
+			return { ok: false, error: err.message || String(err) };
+		}),
+		callTakeoverStatus().catch(function(err) {
+			return { ok: false, message: err.message || String(err) };
+		})
+	]).then(function(results) {
+		var data = results[0] || {};
+		var takeover = results[1] || {};
 
-		setCellText('localclash-advanced-core-installed', core.installed ? _('已安装') : _('缺失'));
-		setCellText('localclash-advanced-core-path', core.path);
-		setCellText('localclash-advanced-assets-installed', baseAssets.installed ? _('已安装') : _('缺失'));
-		setCellText('localclash-advanced-assets-path', baseAssets.path);
-		setCellText('localclash-advanced-default-template', defaultTemplateText(baseAssets.default_template));
-		setCellText('localclash-advanced-default-patches', defaultPatchStatusText(baseAssets));
-		setCellText('localclash-advanced-core-flavor', coreFlavorText(runtimeProfile.core));
-		setCellText('localclash-advanced-mihomo-path', runtimeProfile.core_path);
-		setCellText('localclash-advanced-mcp-installed', service.installed);
-		setCellText('localclash-advanced-mcp-running', service.running);
-		setCellText('localclash-advanced-mcp-endpoint', mcp.endpoint);
-		setCellText('localclash-advanced-runtime-running', runtime.running);
-		setCellText('localclash-advanced-boot-restore', bootRestoreSummary(data.boot_auto_restore || {}));
-	}).catch(function(err) {
-		setCellText('localclash-advanced-core-installed', err.message || String(err));
+		replaceContent('localclash-advanced-status-body', data.ok === false && data.error ? advancedStatusErrorTable(data.error) : advancedStatusTable(data, takeover));
 	});
 }
 
@@ -581,11 +756,7 @@ return view.extend({
 	},
 
 	render: function(data) {
-		var takeover = { pending: true };
-		var pending = _('加载中…');
-
 		deferAfterPaint(refreshStatus, 600);
-		deferAfterPaint(refreshTakeoverStatus, 1000);
 
 		return E('div', { 'class': 'cbi-map localclash-view' }, [
 			E('style', {}, [ [
@@ -598,37 +769,20 @@ return view.extend({
 				'.localclash-view .localclash-danger{border-color:#c44;background:#d94b4b;color:#fff}',
 				'.localclash-view + .cbi-page-actions,.localclash-view ~ .cbi-page-actions,.cbi-page-actions{display:none!important}',
 				'.localclash-view .localclash-muted{color:#667085;line-height:1.55}',
-				'.localclash-view .localclash-status-table{display:inline-table;max-width:100%}',
-				'.localclash-view .localclash-status-table th{width:auto;white-space:nowrap;padding-right:2rem}',
-				'.localclash-view .localclash-status-table td{width:auto;word-break:break-word}',
+				'.localclash-view .localclash-status-table{width:100%;max-width:100%}',
+				'.localclash-view .localclash-status-table th,.localclash-view .localclash-status-table td{vertical-align:top}',
+				'.localclash-view .localclash-status-table td:first-child{width:13rem;white-space:nowrap}',
+				'.localclash-view .localclash-status-table td:last-child{word-break:break-word}',
 				'.localclash-result{box-sizing:border-box;width:100%;min-width:0;max-width:100%;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word}',
 				'.localclash-task-status{margin:.25rem 0 1rem 0;line-height:1.45}',
 				'.localclash-task-log{box-sizing:border-box;width:100%;min-width:0;max-width:100%;max-height:48vh;overflow:auto;margin:0 0 1rem 0;padding:1rem;background:#111827;color:#d1d5db;border-radius:6px;white-space:pre-wrap;word-break:break-word}',
 				'.localclash-task-result:empty{display:none}',
-				'@media (max-width: 700px){.localclash-view .localclash-button{width:100%;min-width:0}.localclash-view .localclash-status-table{display:table;width:100%}.localclash-task-log{min-width:0;max-width:100%;max-height:42vh;font-size:12px}.localclash-result{max-width:100%}}'
+				'@media (max-width: 700px){.localclash-view .localclash-button{width:100%;min-width:0}.localclash-view .localclash-status-table td:first-child{width:auto;white-space:normal}.localclash-task-log{min-width:0;max-width:100%;max-height:42vh;font-size:12px}.localclash-result{max-width:100%}}'
 			].join('\n') ]),
 			E('h2', {}, [ _('localClash') ]),
-			section(_('状态'), E('table', { 'class': 'table localclash-status-table' }, [
-					E('tbody', {}, [
-						row(_('localClash 核心'), pending, 'localclash-advanced-core-installed'),
-						row(_('核心路径'), pending, 'localclash-advanced-core-path'),
-						row(_('基础文件'), pending, 'localclash-advanced-assets-installed'),
-						row(_('基础文件路径'), pending, 'localclash-advanced-assets-path'),
-						row(_('默认配置模板'), pending, 'localclash-advanced-default-template'),
-						row(_('默认 Patch 文件'), pending, 'localclash-advanced-default-patches'),
-						row(_('Mihomo 核心类型'), pending, 'localclash-advanced-core-flavor'),
-						row(_('Mihomo 核心路径'), pending, 'localclash-advanced-mihomo-path'),
-						row(_('MCP 服务已安装'), pending, 'localclash-advanced-mcp-installed'),
-						row(_('MCP 服务运行中'), pending, 'localclash-advanced-mcp-running'),
-						row(_('MCP 端点'), pending, 'localclash-advanced-mcp-endpoint'),
-						row(_('Mihomo 运行时运行中'), pending, 'localclash-advanced-runtime-running'),
-						row(_('开机自动恢复'), pending, 'localclash-advanced-boot-restore'),
-						E('tr', {}, [
-							E('th', { 'scope': 'row' }, [ _('网络接管') ]),
-							E('td', { 'id': 'localclash-advanced-takeover-status' }, [ takeoverSummary(takeover) ])
-						])
-					])
-				])),
+			section(_('状态'), E('div', { 'id': 'localclash-advanced-status-body' }, [
+				advancedStatusLoadingTable()
+			])),
 			section(_('初始化'), E('div', {}, [
 				E('p', {}, [ _('从 GitHub 发布清单安装或更新 localClash 核心和基础文件，然后确保 MCP 服务脚本存在。') ]),
 				actionRow([
