@@ -302,17 +302,28 @@ luci_update() {
 			return 0
 		fi
 	fi
-	log_line "LuCI 更新：正在下载 ${tag:-latest} 安装包"
-	if ! fetch_url "$asset_url" "$package" || ! fetch_url "$sha_url" "$sha_file"; then
+	log_line "LuCI 更新：正在下载 ${tag:-latest} 校验文件"
+	if ! fetch_url_direct_first "$sha_url" "$sha_file"; then
 		rm -rf "$tmpdir"
-		fail "luci_package_download_failed" "无法下载 LuCI 安装包或校验文件。"
+		fail "luci_package_download_failed" "无法下载 LuCI 安装包校验文件。"
 		return 1
 	fi
 	expected="$(awk '{print $1; exit}' "$sha_file" 2>/dev/null)"
-	actual="$(sha256sum "$package" 2>/dev/null | awk '{print $1; exit}')"
-	if [ -z "$expected" ] || [ -z "$actual" ] || [ "$expected" != "$actual" ]; then
+	if [ -z "$expected" ]; then
 		rm -rf "$tmpdir"
-		fail "luci_package_checksum_failed" "LuCI 安装包 sha256 校验失败。"
+		fail "luci_package_checksum_failed" "LuCI 安装包校验文件为空或格式错误。"
+		return 1
+	fi
+	log_line "LuCI 更新：正在下载 ${tag:-latest} 安装包"
+	if ! fetch_url_verified_direct_first "$asset_url" "$package" "$expected"; then
+		rm -rf "$tmpdir"
+		fail_with_details "luci_package_checksum_failed" "LuCI 安装包下载失败或 sha256 校验失败，可能是 GitHub 镜像尚未同步最新 Release。" '"expected_sha":"'"$(json_escape "$expected")"'","target_version":"'"$(json_escape "$asset_version")"'"'
+		return 1
+	fi
+	actual="$(sha256sum "$package" 2>/dev/null | awk '{print $1; exit}')"
+	if [ -z "$actual" ] || [ "$expected" != "$actual" ]; then
+		rm -rf "$tmpdir"
+		fail_with_details "luci_package_checksum_failed" "LuCI 安装包 sha256 校验失败。" '"expected_sha":"'"$(json_escape "$expected")"'","actual_sha":"'"$(json_escape "$actual")"'","target_version":"'"$(json_escape "$asset_version")"'"'
 		return 1
 	fi
 	log_line "LuCI 更新：sha256 校验通过，正在安装"
@@ -799,6 +810,32 @@ fetch_url() {
 	return 1
 }
 
+fetch_url_direct_first() {
+	local url output tmp candidate
+	url="$1"
+	output="$2"
+	tmp="$output.download.$$"
+	rm -f "$tmp"
+	log_line "下载：尝试 $url"
+	if fetch_single_url "$url" "$tmp"; then
+		mv "$tmp" "$output"
+		return 0
+	fi
+	rm -f "$tmp"
+	for candidate in $(github_download_candidates "$url"); do
+		[ "$candidate" = "$url" ] && continue
+		log_line "下载：尝试 $candidate"
+		if fetch_single_url "$candidate" "$tmp"; then
+			mv "$tmp" "$output"
+			note_github_candidate_success "$url" "$candidate"
+			return 0
+		fi
+		note_github_candidate_failure "$url" "$candidate"
+		rm -f "$tmp"
+	done
+	return 1
+}
+
 fetch_manifest() {
 	local url output tmp candidate
 	url="$1"
@@ -814,6 +851,43 @@ fetch_manifest() {
 				return 0
 			fi
 			log_line "下载：$candidate 返回的 Release 清单无效"
+			note_github_candidate_failure "$url" "$candidate"
+		else
+			note_github_candidate_failure "$url" "$candidate"
+		fi
+		rm -f "$tmp"
+	done
+	return 1
+}
+
+fetch_url_verified_direct_first() {
+	local url output expected_sha tmp candidate actual_sha
+	url="$1"
+	output="$2"
+	expected_sha="$3"
+	tmp="$output.download.$$"
+	rm -f "$tmp"
+	log_line "下载：尝试 $url"
+	if fetch_single_url "$url" "$tmp"; then
+		actual_sha="$(sha256sum "$tmp" | cut -d ' ' -f 1)"
+		if [ "$actual_sha" = "$expected_sha" ]; then
+			mv "$tmp" "$output"
+			return 0
+		fi
+		log_line "下载：$url 校验和不匹配"
+	fi
+	rm -f "$tmp"
+	for candidate in $(github_download_candidates "$url"); do
+		[ "$candidate" = "$url" ] && continue
+		log_line "下载：尝试 $candidate"
+		if fetch_single_url "$candidate" "$tmp"; then
+			actual_sha="$(sha256sum "$tmp" | cut -d ' ' -f 1)"
+			if [ "$actual_sha" = "$expected_sha" ]; then
+				mv "$tmp" "$output"
+				note_github_candidate_success "$url" "$candidate"
+				return 0
+			fi
+			log_line "下载：$candidate 校验和不匹配"
 			note_github_candidate_failure "$url" "$candidate"
 		else
 			note_github_candidate_failure "$url" "$candidate"
