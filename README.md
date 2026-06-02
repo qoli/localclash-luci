@@ -4,6 +4,11 @@
 
 ![localClash LuCI 欢迎页面](docs/assets/readme-welcome.png)
 
+> [!TIP]
+> ☕ localClash 是独立维护的开源项目。如果它帮你省了配置 Mihomo 和接管路由器网络的时间，欢迎支持项目继续维护。
+>
+> [![支持 localClash](https://img.shields.io/badge/支持-localClash-f97316?style=for-the-badge)](https://github.com/qoli/localClash/blob/main/SUPPORT.md)
+
 最简单的流程是：
 
 ```text
@@ -150,11 +155,11 @@ localClash 分成两部分：
 
 更多问题见 [常见问题](docs/faq.md)。
 
-## 支持项目
+## 支持 localClash
 
-如果 localClash 帮你省了时间，也可以请作者喝杯咖啡：
+如果 localClash 帮你省了配置 Mihomo 和接管路由器网络的时间，可以请作者喝杯咖啡，支持项目继续维护：
 
-[【支持 localClash】](https://github.com/qoli/localClash/blob/main/SUPPORT.md)
+[![支持 localClash](https://img.shields.io/badge/支持-localClash-f97316?style=for-the-badge)](https://github.com/qoli/localClash/blob/main/SUPPORT.md)
 
 ## 更多文档
 
