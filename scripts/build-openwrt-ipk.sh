@@ -63,12 +63,13 @@ docker run --rm \
 		tmp_dir=/tmp/localclash-ipk
 		rm -rf \"\$tmp_dir\"
 		mkdir -p \"\$tmp_dir\"
-		printf 'CONTROL\n' > \"\$tmp_dir/tar-excludes\"
+		printf 'CONTROL\n./CONTROL\n' > \"\$tmp_dir/tar-excludes\"
 		tar -X \"\$tmp_dir/tar-excludes\" --format=gnu --numeric-owner --owner=0 --group=0 --sort=name --mtime='@${source_date_epoch}' -cpf - -C /work/.build/ipk/pkg . | gzip -n > \"\$tmp_dir/data.tar.gz\"
 		installed_size=\"\$(gzip -dc \"\$tmp_dir/data.tar.gz\" | wc -c)\"
 		printf 'Installed-Size: %s\n' \"\$installed_size\" >> /work/.build/ipk/pkg/CONTROL/control
 		tar --format=gnu --numeric-owner --owner=0 --group=0 --sort=name --mtime='@${source_date_epoch}' -cpf - -C /work/.build/ipk/pkg/CONTROL . | gzip -n > \"\$tmp_dir/control.tar.gz\"
 		printf '2.0\n' > \"\$tmp_dir/debian-binary\"
+		rm -f '/work/dist/${ipk_name}'
 		tar --format=gnu --numeric-owner --owner=0 --group=0 --sort=name --mtime='@${source_date_epoch}' -cpf - -C \"\$tmp_dir\" ./debian-binary ./data.tar.gz ./control.tar.gz | gzip -n > '/work/dist/${ipk_name}'
 	"
 

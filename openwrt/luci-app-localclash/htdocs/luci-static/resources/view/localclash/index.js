@@ -812,7 +812,7 @@ return view.extend({
 				liveTaskButton(_('更新 localClash'), function() { return callComponentUpdateAsync('localclash'); }),
 				liveTaskButton(_('更新 Mihomo'), function() { return callComponentUpdateAsync('mihomo'); }),
 				liveTaskButton(_('更新 Dashboard'), function() { return callComponentUpdateAsync('dashboard'); }),
-				liveTaskButton(_('更新 LuCI'), callLuciUpdate, 'cbi-button-action')
+					liveTaskButton(_('检查 LuCI 更新'), callLuciUpdate, 'cbi-button-action')
 			])),
 			section(_('网络接管'), actionRow([
 				commandButton(_('应用接管'), callTakeoverApply, 'cbi-button-apply'),

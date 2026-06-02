@@ -940,7 +940,7 @@ function summaryTable(data, takeover, task, state) {
 				commandButton(_('切换'), bootRestoreEnabled ? callBootRestoreDisable : callBootRestoreEnable, bootRestoreEnabled ? 'cbi-button-reset' : 'cbi-button-apply')
 			]),
 			summaryActionRow(_('LuCI 界面'), luciPackageSummary(data), [
-				liveTaskButton(_('更新'), callLuciUpdate, 'cbi-button-action')
+				liveTaskButton(_('检查更新'), callLuciUpdate, 'cbi-button-action')
 			])
 		])
 	]);

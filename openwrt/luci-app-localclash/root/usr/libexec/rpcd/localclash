@@ -39,6 +39,13 @@ fail() {
 	printf '{"ok":false,"code":"%s","message":"%s","details":{},"next_actions":[]}\n' "$code" "$message"
 }
 
+fail_with_details() {
+	code="$(json_escape "$1")"
+	message="$(json_escape "$2")"
+	details="$3"
+	printf '{"ok":false,"code":"%s","message":"%s","details":{%s},"next_actions":[]}\n' "$code" "$message" "$details"
+}
+
 log_line() {
 	printf '%s %s\n' "$(date -Iseconds 2>/dev/null || date)" "$*" >> "$LOG"
 }
@@ -90,18 +97,13 @@ boot_restore_status() {
 }
 
 luci_package_json() {
-	local installed manager version status
+	local installed manager version
 	installed=false
 	manager=unknown
 	version=""
-	if command -v opkg >/dev/null 2>&1; then
-		manager=opkg
-		status="$(opkg status luci-app-localclash 2>/dev/null || true)"
-		version="$(printf '%s\n' "$status" | awk -F': ' '/^Version: / { print $2; exit }')"
-		[ -n "$version" ] && installed=true
-	elif command -v apk >/dev/null 2>&1; then
-		manager=apk
-		version="$(apk list -I luci-app-localclash 2>/dev/null | sed -n 's/^luci-app-localclash-\([^ ]*\) .*/\1/p' | head -n 1)"
+	manager="$(luci_package_manager 2>/dev/null || printf 'unknown\n')"
+	if [ "$manager" != "unknown" ]; then
+		version="$(luci_installed_package_version "$manager")"
 		[ -n "$version" ] && installed=true
 	fi
 	printf '"luci_package":{"installed":%s,"name":"luci-app-localclash","version":"%s","manager":"%s","latest_url":"https://github.com/qoli/localclash-luci/releases/latest","release_api":"%s"}' "$installed" "$(json_escape "$version")" "$(json_escape "$manager")" "$(json_escape "$LUCI_RELEASE_API")"
@@ -119,6 +121,20 @@ luci_package_manager() {
 	return 1
 }
 
+luci_installed_package_version() {
+	local manager status
+	manager="$1"
+	case "$manager" in
+		opkg)
+			status="$(opkg status luci-app-localclash 2>/dev/null || true)"
+			printf '%s\n' "$status" | awk -F': ' '/^Version: / { print $2; exit }'
+			;;
+		apk)
+			apk list -I luci-app-localclash 2>/dev/null | sed -n 's/^luci-app-localclash-\([^ ]*\) .*/\1/p' | head -n 1
+			;;
+	esac
+}
+
 luci_update_asset_url() {
 	local release manager asset_regex
 	release="$1"
@@ -129,6 +145,21 @@ luci_update_asset_url() {
 		*) return 1 ;;
 	esac
 	jsonfilter -i "$release" -e '@.assets[*].browser_download_url' 2>/dev/null | grep -E "$asset_regex" | grep -v '[.]sha256$' | head -n 1
+}
+
+luci_update_asset_version() {
+	local manager asset_url name
+	manager="$1"
+	asset_url="$2"
+	name="${asset_url##*/}"
+	case "$manager" in
+		opkg)
+			printf '%s\n' "$name" | sed -n 's/^luci-app-localclash_\(.*\)_all[.]ipk$/\1/p'
+			;;
+		apk)
+			printf '%s\n' "$name" | sed -n 's/^luci-app-localclash-\(.*\)[.]apk$/\1/p'
+			;;
+	esac
 }
 
 luci_update_sha_url() {
@@ -143,13 +174,55 @@ luci_update_sha_url() {
 	jsonfilter -i "$release" -e '@.assets[*].browser_download_url' 2>/dev/null | grep -E "$asset_regex" | head -n 1
 }
 
+luci_version_relation() {
+	local manager current target relation
+	manager="$1"
+	current="$2"
+	target="$3"
+	case "$manager" in
+		opkg)
+			if opkg compare-versions "$current" = "$target"; then
+				printf 'equal\n'
+				return 0
+			fi
+			if opkg compare-versions "$target" '>' "$current"; then
+				printf 'target_newer\n'
+				return 0
+			fi
+			if opkg compare-versions "$target" '<' "$current"; then
+				printf 'target_older\n'
+				return 0
+			fi
+			return 1
+			;;
+		apk)
+			relation="$(apk version -t "$target" "$current" 2>/dev/null)" || return 1
+			case "$relation" in
+				=) printf 'equal\n' ;;
+				'>') printf 'target_newer\n' ;;
+				'<') printf 'target_older\n' ;;
+				*) return 1 ;;
+			esac
+			;;
+		*) return 1 ;;
+	esac
+}
+
+luci_install_log_excerpt() {
+	local output
+	output="$1"
+	if [ -f "$output" ]; then
+		tail -n 40 "$output" 2>/dev/null | sed 's/\\/\\\\/g; s/"/\\"/g; s/$/\\n/' | tr -d '\n'
+	fi
+}
+
 luci_update_install_package() {
 	local manager package output rc
 	manager="$1"
 	package="$2"
 	output="$3"
 	case "$manager" in
-		opkg) opkg install --force-reinstall "$package" > "$output" 2>&1 ;;
+		opkg) opkg --force-reinstall install "$package" > "$output" 2>&1 ;;
 		apk) apk add --allow-untrusted --force-overwrite "$package" > "$output" 2>&1 ;;
 		*) return 1 ;;
 	esac
@@ -171,7 +244,7 @@ luci_schedule_service_reload() {
 }
 
 luci_update() {
-	local manager tmpdir release asset_url sha_url package sha_file expected actual install_log tag rc
+	local manager tmpdir release asset_url asset_version current_version version_relation sha_url package sha_file expected actual install_log tag rc install_excerpt
 	log_line "LuCI 更新：开始"
 	if ! command -v jsonfilter >/dev/null 2>&1; then
 		fail "jsonfilter_missing" "需要 jsonfilter 解析 localclash-luci Release 信息。"
@@ -203,6 +276,32 @@ luci_update() {
 		fail "luci_release_asset_missing" "最新 Release 中没有匹配当前包管理器的 LuCI 安装包。"
 		return 1
 	fi
+	asset_version="$(luci_update_asset_version "$manager" "$asset_url")"
+	if [ -z "$asset_version" ]; then
+		rm -rf "$tmpdir"
+		fail "luci_release_version_missing" "无法从最新 Release 安装包名称中识别 LuCI 版本。"
+		return 1
+	fi
+	current_version="$(luci_installed_package_version "$manager")"
+	if [ -n "$current_version" ]; then
+		version_relation="$(luci_version_relation "$manager" "$current_version" "$asset_version")" || {
+			rm -rf "$tmpdir"
+			fail_with_details "luci_version_compare_failed" "无法比较当前 LuCI 版本和最新 Release 版本。" '"package_manager":"'"$(json_escape "$manager")"'","current_version":"'"$(json_escape "$current_version")"'","target_version":"'"$(json_escape "$asset_version")"'"'
+			return 1
+		}
+		if [ "$version_relation" = "equal" ]; then
+			rm -rf "$tmpdir"
+			log_line "LuCI 更新：当前版本 $current_version 已是最新"
+			ok '"changed":false,"summary":"LuCI 界面已是最新版本。","current_version":"'"$(json_escape "$current_version")"'","latest_version":"'"$(json_escape "$asset_version")"'",'"$(luci_package_json)"
+			return 0
+		fi
+		if [ "$version_relation" = "target_older" ]; then
+			rm -rf "$tmpdir"
+			log_line "LuCI 更新：当前版本 $current_version 高于最新 Release $asset_version"
+			ok '"changed":false,"summary":"当前 LuCI 界面版本高于最新 Release，未执行降级。","current_version":"'"$(json_escape "$current_version")"'","latest_version":"'"$(json_escape "$asset_version")"'",'"$(luci_package_json)"
+			return 0
+		fi
+	fi
 	log_line "LuCI 更新：正在下载 ${tag:-latest} 安装包"
 	if ! fetch_url "$asset_url" "$package" || ! fetch_url "$sha_url" "$sha_file"; then
 		rm -rf "$tmpdir"
@@ -220,9 +319,16 @@ luci_update() {
 	luci_update_install_package "$manager" "$package" "$install_log"
 	rc=$?
 	if [ "$rc" -ne 0 ]; then
+		install_excerpt="$(luci_install_log_excerpt "$install_log")"
 		log_line "LuCI 更新：安装失败"
+		if [ -n "$install_excerpt" ]; then
+			log_line "LuCI 更新：安装输出摘要"
+			tail -n 40 "$install_log" 2>/dev/null | while IFS= read -r line; do
+				log_line "LuCI 更新：$line"
+			done
+		fi
 		rm -rf "$tmpdir"
-		fail "luci_package_install_failed" "LuCI 安装包安装失败，请查看任务日志。"
+		fail_with_details "luci_package_install_failed" "LuCI 安装包安装失败，安装器输出已记录在任务日志中。" '"install_output":"'"$install_excerpt"'","package_manager":"'"$(json_escape "$manager")"'","target_version":"'"$(json_escape "$asset_version")"'","current_version":"'"$(json_escape "$current_version")"'"'
 		return "$rc"
 	fi
 	luci_clear_cache
