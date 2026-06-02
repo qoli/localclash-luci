@@ -57,6 +57,12 @@ var callRuntimeStart = rpc.declare({
 	expect: { '': {} }
 });
 
+var callRuntimeStartTakeover = rpc.declare({
+	object: 'localclash',
+	method: 'runtime_start_takeover',
+	expect: { '': {} }
+});
+
 var callRuntimeRestart = rpc.declare({
 	object: 'localclash',
 	method: 'runtime_restart',
@@ -106,15 +112,15 @@ var callBootRestoreDisable = rpc.declare({
 	expect: { '': {} }
 });
 
-var callReset = rpc.declare({
+var callLuciUpdate = rpc.declare({
 	object: 'localclash',
-	method: 'reset',
+	method: 'luci_update_async',
 	expect: { '': {} }
 });
 
-var callConfigReset = rpc.declare({
+var callReset = rpc.declare({
 	object: 'localclash',
-	method: 'config_reset',
+	method: 'reset',
 	expect: { '': {} }
 });
 
@@ -798,13 +804,15 @@ return view.extend({
 			section(_('运行时'), actionRow([
 				dashboardButton('cbi-button-action'),
 				commandButton(_('启动'), callRuntimeStart, 'cbi-button-apply'),
+				liveTaskButton(_('启动并接管'), callRuntimeStartTakeover, 'cbi-button-apply'),
 				commandButton(_('重启'), callRuntimeRestart),
 				commandButton(_('停止'), callRuntimeStop, 'cbi-button-reset')
 			])),
 			section(_('组件'), actionRow([
 				liveTaskButton(_('更新 localClash'), function() { return callComponentUpdateAsync('localclash'); }),
 				liveTaskButton(_('更新 Mihomo'), function() { return callComponentUpdateAsync('mihomo'); }),
-				liveTaskButton(_('更新 Dashboard'), function() { return callComponentUpdateAsync('dashboard'); })
+				liveTaskButton(_('更新 Dashboard'), function() { return callComponentUpdateAsync('dashboard'); }),
+				liveTaskButton(_('更新 LuCI'), callLuciUpdate, 'cbi-button-action')
 			])),
 			section(_('网络接管'), actionRow([
 				commandButton(_('应用接管'), callTakeoverApply, 'cbi-button-apply'),
@@ -812,7 +820,6 @@ return view.extend({
 			])),
 			section(_('开机自动恢复'), bootRestoreControls()),
 			section(_('维护'), actionRow([
-				commandButton(_('配置复位'), callConfigReset, 'cbi-button-reset'),
 				commandButton(_('完整重置 localClash'), callReset, 'localclash-danger', {
 					confirm: _('完整重置会删除 localClash 工作目录，包括运行状态、订阅、配置、生成文件和已下载资源。继续？')
 				})

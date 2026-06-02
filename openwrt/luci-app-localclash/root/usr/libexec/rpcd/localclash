@@ -1484,14 +1484,6 @@ config_render() {
 	call_core config render --json
 }
 
-config_reset() {
-	if runtime_running; then
-		fail "runtime_running" "Mihomo 运行时正在运行，请先停止运行时再执行配置复位。"
-		return 1
-	fi
-	call_core reset --json
-}
-
 reset() {
 	if runtime_running; then
 		fail "runtime_running" "Mihomo 运行时正在运行，请先停止运行时再执行完整重置。"
@@ -2019,7 +2011,6 @@ case "$method" in
   "luci_update_async": {},
   "apply": {},
   "config_render": {},
-  "config_reset": {},
   "runtime_start": {},
   "runtime_start_takeover": {},
   "runtime_restart": {},
@@ -2063,7 +2054,6 @@ JSON
 	luci_update_run) luci_update_run ;;
 	apply) with_lock apply_state ;;
 	config_render) with_lock config_render ;;
-	config_reset) with_lock config_reset ;;
 	runtime_start) runtime_start ;;
 	runtime_start_takeover) start_runtime_takeover ;;
 	runtime_start_takeover_run) with_lock runtime_start_takeover_run ;;
