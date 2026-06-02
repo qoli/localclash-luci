@@ -13,6 +13,7 @@ MIRROR_CACHE_DIR="/tmp/localclash-mirror-cache"
 MCP_ADDR="${LOCALCLASH_MCP_ADDR:-0.0.0.0:8765}"
 MCP_HELP="/usr/share/localclash/mcp-help.txt"
 MANIFEST_URL="${LOCALCLASH_RELEASE_MANIFEST:-https://github.com/qoli/localClash/releases/latest/download/localclash-release-manifest.json}"
+LUCI_RELEASE_API="${LOCALCLASH_LUCI_RELEASE_API:-https://api.github.com/repos/qoli/localclash-luci/releases/latest}"
 GITHUB_MIRROR="${LOCALCLASH_GITHUB_MIRROR:-auto}"
 GITHUB_RELEASE_MIRRORS="${LOCALCLASH_GITHUB_RELEASE_MIRRORS:-https://gh-proxy.com/https://github.com https://ghproxy.imciel.com/https://github.com https://gitproxy.mrhjx.cn/https://github.com https://gh.jasonzeng.dev/https://github.com https://gh.monlor.com/https://github.com https://gh.noki.icu/https://github.com https://ghfast.top/https://github.com}"
 GITHUB_RAW_MIRRORS="${LOCALCLASH_GITHUB_RAW_MIRRORS:-https://gh-proxy.com/https://raw.githubusercontent.com https://ghproxy.imciel.com/https://raw.githubusercontent.com https://gitproxy.mrhjx.cn/https://raw.githubusercontent.com https://gh.jasonzeng.dev/https://raw.githubusercontent.com https://gh.monlor.com/https://raw.githubusercontent.com https://gh.noki.icu/https://raw.githubusercontent.com https://ghfast.top/https://raw.githubusercontent.com https://fastly.jsdelivr.net/gh}"
@@ -86,6 +87,148 @@ boot_restore_json() {
 
 boot_restore_status() {
 	ok "$(boot_restore_json)"
+}
+
+luci_package_json() {
+	local installed manager version status
+	installed=false
+	manager=unknown
+	version=""
+	if command -v opkg >/dev/null 2>&1; then
+		manager=opkg
+		status="$(opkg status luci-app-localclash 2>/dev/null || true)"
+		version="$(printf '%s\n' "$status" | awk -F': ' '/^Version: / { print $2; exit }')"
+		[ -n "$version" ] && installed=true
+	elif command -v apk >/dev/null 2>&1; then
+		manager=apk
+		version="$(apk list -I luci-app-localclash 2>/dev/null | sed -n 's/^luci-app-localclash-\([^ ]*\) .*/\1/p' | head -n 1)"
+		[ -n "$version" ] && installed=true
+	fi
+	printf '"luci_package":{"installed":%s,"name":"luci-app-localclash","version":"%s","manager":"%s","latest_url":"https://github.com/qoli/localclash-luci/releases/latest","release_api":"%s"}' "$installed" "$(json_escape "$version")" "$(json_escape "$manager")" "$(json_escape "$LUCI_RELEASE_API")"
+}
+
+luci_package_manager() {
+	if command -v opkg >/dev/null 2>&1; then
+		printf 'opkg\n'
+		return 0
+	fi
+	if command -v apk >/dev/null 2>&1; then
+		printf 'apk\n'
+		return 0
+	fi
+	return 1
+}
+
+luci_update_asset_url() {
+	local release manager asset_regex
+	release="$1"
+	manager="$2"
+	case "$manager" in
+		opkg) asset_regex='luci-app-localclash_[^/]*_all[.]ipk$' ;;
+		apk) asset_regex='luci-app-localclash-[^/]*[.]apk$' ;;
+		*) return 1 ;;
+	esac
+	jsonfilter -i "$release" -e '@.assets[*].browser_download_url' 2>/dev/null | grep -E "$asset_regex" | grep -v '[.]sha256$' | head -n 1
+}
+
+luci_update_sha_url() {
+	local release manager asset_regex
+	release="$1"
+	manager="$2"
+	case "$manager" in
+		opkg) asset_regex='luci-app-localclash_[^/]*_all[.]ipk[.]sha256$' ;;
+		apk) asset_regex='luci-app-localclash-[^/]*[.]apk[.]sha256$' ;;
+		*) return 1 ;;
+	esac
+	jsonfilter -i "$release" -e '@.assets[*].browser_download_url' 2>/dev/null | grep -E "$asset_regex" | head -n 1
+}
+
+luci_update_install_package() {
+	local manager package output rc
+	manager="$1"
+	package="$2"
+	output="$3"
+	case "$manager" in
+		opkg) opkg install --force-reinstall "$package" > "$output" 2>&1 ;;
+		apk) apk add --allow-untrusted --force-overwrite "$package" > "$output" 2>&1 ;;
+		*) return 1 ;;
+	esac
+	rc=$?
+	return "$rc"
+}
+
+luci_clear_cache() {
+	rm -f /tmp/luci-indexcache.*.json 2>/dev/null || true
+	rm -rf /tmp/luci-modulecache /tmp/luci-templatecache 2>/dev/null || true
+}
+
+luci_schedule_service_reload() {
+	(
+		sleep 2
+		/etc/init.d/rpcd restart >/dev/null 2>&1 || true
+		/etc/init.d/uhttpd restart >/dev/null 2>&1 || true
+	) >/dev/null 2>&1 &
+}
+
+luci_update() {
+	local manager tmpdir release asset_url sha_url package sha_file expected actual install_log tag rc
+	log_line "LuCI 更新：开始"
+	if ! command -v jsonfilter >/dev/null 2>&1; then
+		fail "jsonfilter_missing" "需要 jsonfilter 解析 localclash-luci Release 信息。"
+		return 1
+	fi
+	manager="$(luci_package_manager)" || {
+		fail "package_manager_missing" "未检测到 opkg 或 apk，无法自动更新 LuCI。"
+		return 1
+	}
+	tmpdir="$(mktemp -d /tmp/localclash-luci-update.XXXXXX)" || {
+		fail "tmpdir_failed" "无法创建 LuCI 更新临时目录。"
+		return 1
+	}
+	release="$tmpdir/latest.json"
+	package="$tmpdir/luci-app-localclash.pkg"
+	sha_file="$tmpdir/luci-app-localclash.sha256"
+	install_log="$tmpdir/install.log"
+	log_line "LuCI 更新：正在读取最新 Release"
+	if ! fetch_url "$LUCI_RELEASE_API" "$release"; then
+		rm -rf "$tmpdir"
+		fail "luci_release_download_failed" "无法读取 localclash-luci 最新 Release。"
+		return 1
+	fi
+	tag="$(jsonfilter -i "$release" -e '@.tag_name' 2>/dev/null)"
+	asset_url="$(luci_update_asset_url "$release" "$manager")"
+	sha_url="$(luci_update_sha_url "$release" "$manager")"
+	if [ -z "$asset_url" ] || [ -z "$sha_url" ]; then
+		rm -rf "$tmpdir"
+		fail "luci_release_asset_missing" "最新 Release 中没有匹配当前包管理器的 LuCI 安装包。"
+		return 1
+	fi
+	log_line "LuCI 更新：正在下载 ${tag:-latest} 安装包"
+	if ! fetch_url "$asset_url" "$package" || ! fetch_url "$sha_url" "$sha_file"; then
+		rm -rf "$tmpdir"
+		fail "luci_package_download_failed" "无法下载 LuCI 安装包或校验文件。"
+		return 1
+	fi
+	expected="$(awk '{print $1; exit}' "$sha_file" 2>/dev/null)"
+	actual="$(sha256sum "$package" 2>/dev/null | awk '{print $1; exit}')"
+	if [ -z "$expected" ] || [ -z "$actual" ] || [ "$expected" != "$actual" ]; then
+		rm -rf "$tmpdir"
+		fail "luci_package_checksum_failed" "LuCI 安装包 sha256 校验失败。"
+		return 1
+	fi
+	log_line "LuCI 更新：sha256 校验通过，正在安装"
+	luci_update_install_package "$manager" "$package" "$install_log"
+	rc=$?
+	if [ "$rc" -ne 0 ]; then
+		log_line "LuCI 更新：安装失败"
+		rm -rf "$tmpdir"
+		fail "luci_package_install_failed" "LuCI 安装包安装失败，请查看任务日志。"
+		return "$rc"
+	fi
+	luci_clear_cache
+	rm -rf "$tmpdir"
+	log_line "LuCI 更新：已完成"
+	ok '"changed":true,"summary":"LuCI 界面已更新，请刷新浏览器页面。",'"$(luci_package_json)"
 }
 
 boot_restore_enable() {
@@ -987,7 +1130,7 @@ service_start() {
 }
 
 status() {
-	local core_ok mihomo_ok dashboard_ok subscription_ok runtime_ok summary runtime_profile base_assets boot_restore
+	local core_ok mihomo_ok dashboard_ok subscription_ok runtime_ok summary runtime_profile base_assets boot_restore luci_package
 	core_ok="$(core_installed && echo true || echo false)"
 	mihomo_ok="$(mihomo_core_installed && echo true || echo false)"
 	dashboard_ok="$(dashboard_installed && echo true || echo false)"
@@ -996,8 +1139,9 @@ status() {
 	runtime_profile="$(runtime_profile_body)"
 	base_assets="$(base_assets_body)"
 	boot_restore="$(boot_restore_json)"
+	luci_package="$(luci_package_json)"
 	summary='"components":{"mihomo":{"installed":'"$mihomo_ok"'},"dashboard":{"installed":'"$dashboard_ok"'}},"subscription":{"configured":'"$subscription_ok"'},"runtime":{"running":'"$runtime_ok"'}'
-	printf '{"ok":true,"core":{"installed":%s,"path":"%s"},%s,%s,%s,"mcp_service":{%s},"status":{"ok":true,"changed":false,"summary":"localClash LuCI 状态摘要。",%s,"status":{%s}}}\n' "$core_ok" "$CORE" "$base_assets" "$runtime_profile" "$boot_restore" "$(service_body)" "$summary" "$summary"
+	printf '{"ok":true,"core":{"installed":%s,"path":"%s"},%s,%s,%s,%s,"mcp_service":{%s},"status":{"ok":true,"changed":false,"summary":"localClash LuCI 状态摘要。",%s,"status":{%s}}}\n' "$core_ok" "$CORE" "$base_assets" "$runtime_profile" "$boot_restore" "$luci_package" "$(service_body)" "$summary" "$summary"
 }
 
 component_update() {
@@ -1090,6 +1234,39 @@ component_update_run() {
 		return 1
 	fi
 	with_lock component_update < "$TASK_INPUT"
+}
+
+start_luci_update() {
+	local result rc bg_pid
+	clear_stale_lock
+	if [ -d "$LOCK_DIR" ]; then
+		printf '{"ok":true,"started":false,"running":true,"summary":"另一个 localClash 任务正在运行。"}\n'
+		return 0
+	fi
+	rm -f "$TASK_STATUS" "$TASK_RESULT" "$TASK_INPUT" "$TASK_PID"
+	: > "$LOG"
+	write_task_running "LuCI 界面更新任务正在运行。"
+	log_line "LuCI 更新：已加入后台任务队列"
+	(
+		result="$("$0" call luci_update_run 2>>"$LOG")"
+		rc=$?
+		if [ -z "$result" ]; then
+			result='{"ok":false,"code":"empty_task_result","message":"LuCI 更新任务没有产生 JSON 结果。","details":{},"next_actions":[]}'
+		fi
+		printf '%s\n' "$result" > "$TASK_RESULT"
+		printf '{"ok":true,"running":false,"done":true,"exit_code":%s,"result":%s}\n' "$rc" "$result" > "$TASK_STATUS"
+		rm -f "$TASK_PID"
+		if [ "$rc" -eq 0 ]; then
+			luci_schedule_service_reload
+		fi
+	) >/dev/null 2>&1 &
+	bg_pid="$!"
+	write_task_pid "$bg_pid"
+	ok '"started":true,"running":true,"summary":"LuCI 界面更新任务已启动。"'
+}
+
+luci_update_run() {
+	with_lock luci_update
 }
 
 input_to_core_file() {
@@ -1839,6 +2016,7 @@ case "$method" in
   "subscription_refresh": {},
   "component_update": { "component": "localclash" },
   "component_update_async": { "component": "localclash" },
+  "luci_update_async": {},
   "apply": {},
   "config_render": {},
   "config_reset": {},
@@ -1881,6 +2059,8 @@ JSON
 	component_update) with_lock component_update ;;
 	component_update_async) start_component_update ;;
 	component_update_run) component_update_run ;;
+	luci_update_async) start_luci_update ;;
+	luci_update_run) luci_update_run ;;
 	apply) with_lock apply_state ;;
 	config_render) with_lock config_render ;;
 	config_reset) with_lock config_reset ;;

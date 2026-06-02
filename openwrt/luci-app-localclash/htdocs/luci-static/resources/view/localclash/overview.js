@@ -82,6 +82,12 @@ var callBootRestoreDisable = rpc.declare({
 	expect: { '': {} }
 });
 
+var callLuciUpdate = rpc.declare({
+	object: 'localclash',
+	method: 'luci_update_async',
+	expect: { '': {} }
+});
+
 var callMcpHelp = rpc.declare({
 	object: 'localclash',
 	method: 'mcp_help',
@@ -96,13 +102,6 @@ function statusText(value) {
 		return value ? _('是') : _('否');
 
 	return String(value);
-}
-
-function luciStatusRow(label, value, id) {
-	return E('tr', { 'class': 'tr' }, [
-		E('td', { 'class': 'td left', 'width': '33%' }, [ label ]),
-		E('td', id ? { 'class': 'td left', 'id': id } : { 'class': 'td left' }, [ statusText(value) ])
-	]);
 }
 
 function replaceContent(id, content) {
@@ -689,25 +688,6 @@ function bootRestoreSummary(bootRestore) {
 	return _('未启用');
 }
 
-function bootRestorePanel(bootRestore) {
-	var enabled = bootRestore && bootRestore.enabled === true;
-
-	return E('table', { 'class': 'table cbi-section-table localclash-boot-restore-table' }, [
-		E('tbody', {}, [
-			E('tr', { 'class': 'tr table-titles' }, [
-				E('th', { 'class': 'th' }, [ _('目前状态') ]),
-				E('th', { 'class': 'th cbi-section-actions' }, [])
-			]),
-			E('tr', { 'class': 'tr cbi-rowstyle-1' }, [
-				E('td', { 'class': 'td', 'data-title': _('目前状态') }, [ bootRestoreSummary(bootRestore) ]),
-				E('td', { 'class': 'td cbi-section-actions' }, [
-					commandButton(_('切换'), enabled ? callBootRestoreDisable : callBootRestoreEnable, enabled ? 'cbi-button-reset' : 'cbi-button-apply')
-				])
-			])
-		])
-	]);
-}
-
 function refreshTakeoverStatus() {
 	return callTakeoverStatus().then(function(takeover) {
 		var text = takeoverState(takeover);
@@ -758,8 +738,7 @@ function refreshOverviewStatus() {
 
 		replaceContent('localclash-overview-actions', primaryActions(state));
 		updateBootstrapStartButton();
-		replaceContent('localclash-overview-boot-restore-body', bootRestorePanel(data.boot_auto_restore || {}));
-		replaceContent('localclash-overview-summary-body', data.ok === false && data.error ? summaryErrorTable(data.error) : summaryTable(data, takeover, task));
+		replaceContent('localclash-overview-summary-body', data.ok === false && data.error ? summaryErrorTable(data.error) : summaryTable(data, takeover, task, state));
 		return refreshTakeoverStatus();
 	});
 }
@@ -870,28 +849,10 @@ function primaryActions(state) {
 	}
 
 	if (state.id === 'runtime_stopped') {
-		return actionRow([
-			liveTaskButton(_('启动运行时并接管路由器流量'), callRuntimeStartTakeover, 'cbi-button-apply')
-		]);
+		return [];
 	}
 
-	return [
-		actionRow([
-			commandButton(_('重启运行时'), callRuntimeRestart, 'cbi-button-apply'),
-			commandButton(_('停止运行时'), function() {
-				return callTakeoverStop().catch(function(err) {
-					return { ok: false, ignored: true, message: err.message || String(err) };
-				}).then(function(takeover) {
-					return callRuntimeStop().then(function(runtime) {
-						return { ok: true, takeover: takeover, runtime: runtime };
-					});
-				});
-			}, 'cbi-button-reset')
-		]),
-		actionRow([
-			dashboardButton('cbi-button-action')
-		])
-	];
+	return [];
 }
 
 function mihomoSummary(data, status) {
@@ -906,17 +867,81 @@ function mihomoSummary(data, status) {
 	return _('缺失');
 }
 
-function summaryTable(data, takeover, task) {
-	var status = productStatus(data);
+function tableActionCell(actions) {
+	return E('td', { 'class': 'td cbi-section-actions' }, actions || []);
+}
 
-	return E('table', { 'class': 'table localclash-summary-table' }, [
+function summaryActionRow(item, status, actions) {
+	return E('tr', { 'class': 'tr cbi-rowstyle-1' }, [
+		E('td', { 'class': 'td', 'data-title': _('项目') }, [ item ]),
+		E('td', { 'class': 'td', 'data-title': _('目前状态') }, [ statusText(status) ]),
+		tableActionCell(actions)
+	]);
+}
+
+function runtimeStopButton() {
+	return commandButton(_('停止'), function() {
+		return callTakeoverStop().catch(function(err) {
+			return { ok: false, ignored: true, message: err.message || String(err) };
+		}).then(function(takeover) {
+			return callRuntimeStop().then(function(runtime) {
+				return { ok: true, takeover: takeover, runtime: runtime };
+			});
+		});
+	}, 'cbi-button-reset');
+}
+
+function runtimeActions(state) {
+	if (state && state.id === 'running')
+		return [
+			commandButton(_('重启'), callRuntimeRestart, 'cbi-button-apply'),
+			runtimeStopButton()
+		];
+	if (state && state.id === 'runtime_stopped')
+		return [
+			liveTaskButton(_('启动并接管'), callRuntimeStartTakeover, 'cbi-button-apply')
+		];
+	return [];
+}
+
+function luciPackageSummary(data) {
+	var luciPackage = data.luci_package || {};
+
+	if (luciPackage.version)
+		return luciPackage.version;
+	if (luciPackage.installed === false)
+		return _('缺失');
+	return _('已安装');
+}
+
+function summaryTable(data, takeover, task, state) {
+	var status = productStatus(data);
+	var bootRestore = data.boot_auto_restore || {};
+	var bootRestoreEnabled = bootRestore && bootRestore.enabled === true;
+
+	return E('table', { 'class': 'table cbi-section-table localclash-summary-table' }, [
 		E('tbody', {}, [
-			luciStatusRow(_('Mihomo 核心'), mihomoSummary(data, status)),
 			E('tr', { 'class': 'tr' }, [
-				E('td', { 'class': 'td left', 'width': '33%' }, [ _('网络接管') ]),
-				E('td', { 'class': 'td left', 'id': 'localclash-overview-takeover-status' }, [ takeoverState(takeover) ])
+				E('th', { 'class': 'th' }, [ _('项目') ]),
+				E('th', { 'class': 'th' }, [ _('目前状态') ]),
+				E('th', { 'class': 'th cbi-section-actions' }, [])
 			]),
-			luciStatusRow(_('订阅'), subscriptionConfigured(status) ? _('已配置') : _('缺失'))
+			summaryActionRow(_('Mihomo 核心'), mihomoSummary(data, status), runtimeActions(state)),
+			E('tr', { 'class': 'tr cbi-rowstyle-1' }, [
+				E('td', { 'class': 'td', 'data-title': _('项目') }, [ _('网络接管') ]),
+				E('td', { 'class': 'td', 'data-title': _('目前状态'), 'id': 'localclash-overview-takeover-status' }, [ takeoverState(takeover) ]),
+				tableActionCell([])
+			]),
+			summaryActionRow(_('Dashboard'), defaultDashboardURL(), [
+				dashboardButton('cbi-button-action')
+			]),
+			summaryActionRow(_('订阅'), subscriptionConfigured(status) ? _('已配置') : _('缺失'), []),
+			summaryActionRow(_('开机自动恢复'), bootRestoreSummary(bootRestore), [
+				commandButton(_('切换'), bootRestoreEnabled ? callBootRestoreDisable : callBootRestoreEnable, bootRestoreEnabled ? 'cbi-button-reset' : 'cbi-button-apply')
+			]),
+			summaryActionRow(_('LuCI 界面'), luciPackageSummary(data), [
+				liveTaskButton(_('更新'), callLuciUpdate, 'cbi-button-action')
+			])
 		])
 	]);
 }
@@ -924,20 +949,37 @@ function summaryTable(data, takeover, task) {
 function summaryLoadingTable() {
 	var pending = _('加载中…');
 
-	return E('table', { 'class': 'table localclash-summary-table' }, [
+	return E('table', { 'class': 'table cbi-section-table localclash-summary-table' }, [
 		E('tbody', {}, [
-			luciStatusRow(_('Mihomo 核心'), pending),
-			luciStatusRow(_('网络接管'), _('检查中…'), 'localclash-overview-takeover-status'),
-			luciStatusRow(_('订阅'), pending)
+			E('tr', { 'class': 'tr' }, [
+				E('th', { 'class': 'th' }, [ _('项目') ]),
+				E('th', { 'class': 'th' }, [ _('目前状态') ]),
+				E('th', { 'class': 'th cbi-section-actions' }, [])
+			]),
+			summaryActionRow(_('Mihomo 核心'), pending, []),
+			E('tr', { 'class': 'tr cbi-rowstyle-1' }, [
+				E('td', { 'class': 'td', 'data-title': _('项目') }, [ _('网络接管') ]),
+				E('td', { 'class': 'td', 'data-title': _('目前状态'), 'id': 'localclash-overview-takeover-status' }, [ _('检查中…') ]),
+				tableActionCell([])
+			]),
+			summaryActionRow(_('Dashboard'), defaultDashboardURL(), []),
+			summaryActionRow(_('订阅'), pending, []),
+			summaryActionRow(_('开机自动恢复'), pending, []),
+			summaryActionRow(_('LuCI 界面'), pending, [])
 		])
 	]);
 }
 
 function summaryErrorTable(message) {
-	return E('table', { 'class': 'table localclash-summary-table' }, [
+	return E('table', { 'class': 'table cbi-section-table localclash-summary-table' }, [
 		E('tbody', {}, [
-			luciStatusRow(_('状态'), _('读取失败')),
-			luciStatusRow(_('错误'), message || '-')
+			E('tr', { 'class': 'tr' }, [
+				E('th', { 'class': 'th' }, [ _('项目') ]),
+				E('th', { 'class': 'th' }, [ _('目前状态') ]),
+				E('th', { 'class': 'th cbi-section-actions' }, [])
+			]),
+			summaryActionRow(_('状态'), _('读取失败'), []),
+			summaryActionRow(_('错误'), message || '-', [])
 		])
 	]);
 }
@@ -1024,27 +1066,24 @@ return view.extend({
 				'.localclash-view .localclash-check-option input{margin:0}',
 				'.localclash-view .localclash-muted{color:#667085;line-height:1.55}',
 				'.localclash-view .localclash-copybox{box-sizing:border-box;width:calc(100% - 2rem);min-height:16rem;margin:1rem;padding:1rem;font-family:monospace;line-height:1.45;resize:vertical}',
+				'.localclash-summary-table .cbi-section-actions{white-space:nowrap;text-align:right}',
+				'.localclash-summary-table .localclash-button{min-width:4.25rem;min-height:2.25rem;margin:.125rem;padding:.45rem .7rem;white-space:nowrap}',
 				'.localclash-result{box-sizing:border-box;width:100%;min-width:0;max-width:100%;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word}',
 				'.localclash-task-status{margin:.25rem 0 1rem 0;line-height:1.45}',
 				'.localclash-task-log{box-sizing:border-box;width:100%;min-width:0;max-width:100%;max-height:48vh;overflow:auto;margin:0 0 1rem 0;padding:1rem;background:#111827;color:#d1d5db;border-radius:6px;white-space:pre-wrap;word-break:break-word}',
 				'.localclash-task-result:empty{display:none}',
-				'@media (max-width: 700px){.localclash-view .localclash-button{width:100%;min-width:0}.localclash-task-log{min-width:0;max-width:100%;max-height:42vh;font-size:12px}.localclash-result{max-width:100%}}'
+				'@media (max-width: 700px){.localclash-view .localclash-button{width:100%;min-width:0}.localclash-summary-table .localclash-button{width:auto;min-width:4.25rem}.localclash-task-log{min-width:0;max-width:100%;max-height:42vh;font-size:12px}.localclash-result{max-width:100%}}'
 			].join('\n') ]),
 			E('h2', {}, [ _('localClash') ]),
 			E('div', { 'class': 'cbi-map-descr' }, [
 				_('localClash 用于管理路由器上的 Mihomo 运行时、订阅配置、Dashboard 和网络接管。')
 			]),
-			section(_('摘要状态'), E('div', { 'id': 'localclash-overview-summary-body' }, [
+			section(_('摘要'), E('div', { 'id': 'localclash-overview-summary-body' }, [
 				summaryLoadingTable()
 			]), 'localclash-summary'),
-			E('div', { 'class': 'cbi-section localclash-section localclash-action-section' }, [
-				E('div', { 'id': 'localclash-overview-actions' }, [
-					primaryActions(state)
-				])
+			E('div', { 'id': 'localclash-overview-actions' }, [
+				primaryActions(state)
 			]),
-			section(_('开机自动恢复'), E('div', { 'id': 'localclash-overview-boot-restore-body' }, [
-				bootRestorePanel({})
-			]), 'cbi-tblsection localclash-boot-restore-section'),
 			mcpGuidance({ loading: true })
 		]);
 	}

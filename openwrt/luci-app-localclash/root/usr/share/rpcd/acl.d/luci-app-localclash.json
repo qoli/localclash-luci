@@ -15,6 +15,7 @@
           "subscription_refresh",
           "component_update",
           "component_update_async",
+          "luci_update_async",
           "apply",
           "config_render",
           "config_reset",
