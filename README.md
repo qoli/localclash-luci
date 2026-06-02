@@ -133,14 +133,26 @@
 
 ## 以后怎么更新
 
-localClash 分成两部分：
+localClash 现在可以在页面里分别更新 LuCI 界面、localClash 核心、Mihomo 核心和 Dashboard。
 
-- `localclash-luci`：OpenWrt 后台页面，也就是这里下载的 `.ipk` / `.apk`。
-- `localClash` 核心：真正负责订阅、配置、Mihomo 和路由器网络接管。
+日常更新时，先进入：
 
-只有这个仓库发布新的 LuCI 安装包时，才需要重新下载并安装 `.ipk` 或 `.apk`。
+```text
+服务 -> localClash
+```
 
-如果只是 localClash 核心更新，通常不用重新安装 LuCI。进入 `服务 -> localClash`，在页面里点击更新核心或重新初始化即可。
+在 `概览` 页的 `LuCI 界面` 一行点击 `检查更新`，可以更新 OpenWrt 后台页面。更新完成后刷新浏览器页面。
+
+如果要单独更新运行时组件，进入进阶页面：
+
+- 点 `安装 / 更新核心`：安装或刷新 localClash 核心和基础文件。
+- 点 `更新 localClash`：更新 localClash 运行时程序。
+- 点 `更新 Mihomo`：更新 Mihomo 核心。
+- 点 `更新 Dashboard`：更新 Dashboard 面板文件。
+
+如果只是更新这些组件，通常不需要重新下载 `.ipk` 或 `.apk`。只有页面里的 `检查更新` 不可用，或者你需要手动安装指定版本时，才回到 GitHub Release 重新下载 LuCI 安装包。
+
+重新初始化主要用于重新应用默认配置、刷新订阅并重新启动运行时。只是普通更新时，不需要反复点击 `开始初始化`。
 
 ## 常见问题
 
@@ -150,7 +162,7 @@ localClash 分成两部分：
 
 ### 点初始化前要不要先关掉 OpenClash 或 PassWall
 
-如果你当前就是靠 OpenClash、PassWall 或其他插件上网，建议先确认备用恢复办法。localClash 初始化最后会接管路由器网络，多个代理插件同时接管网络时容易互相影响。
+建议先关闭 OpenClash、PassWall 或其他会接管路由器网络的代理插件，再开始 localClash 初始化。这样可以避免多个插件同时修改防火墙、DNS 或透明代理规则，确保 localClash 能正常接管网络。
 
 ### 订阅地址填在哪里
 
