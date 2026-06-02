@@ -960,12 +960,14 @@ function mcpGuidanceBody(help) {
 		return E('p', { 'class': 'localclash-muted' }, [ _('正在加载 MCP 接入指令…') ]);
 
 	var text = (help && help.text) || '';
+	var rows = Math.max(10, text.split(/\r?\n/).length + 2);
 
 	return E('div', {}, [
 		E('p', { 'class': 'localclash-muted' }, [ _('将这段文字复制给 Agent，用于配置并安全接入路由器上的 localClash MCP。') ]),
 		E('textarea', {
 			'class': 'cbi-input-textarea localclash-copybox',
-			'readonly': 'readonly'
+			'readonly': 'readonly',
+			'rows': rows
 		}, [ text ]),
 		actionRow([
 			commandButton(_('复制 MCP 指令'), function() {
@@ -1021,7 +1023,7 @@ return view.extend({
 				'.localclash-view .localclash-check-option{display:inline-flex;gap:.45rem;align-items:center;margin:0;line-height:1.4}',
 				'.localclash-view .localclash-check-option input{margin:0}',
 				'.localclash-view .localclash-muted{color:#667085;line-height:1.55}',
-				'.localclash-view .localclash-copybox{box-sizing:border-box;width:calc(100% - 2rem);min-height:5.5rem;margin:1rem;padding:1rem;font-family:monospace;line-height:1.45;resize:vertical}',
+				'.localclash-view .localclash-copybox{box-sizing:border-box;width:calc(100% - 2rem);min-height:16rem;margin:1rem;padding:1rem;font-family:monospace;line-height:1.45;resize:vertical}',
 				'.localclash-result{box-sizing:border-box;width:100%;min-width:0;max-width:100%;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word}',
 				'.localclash-task-status{margin:.25rem 0 1rem 0;line-height:1.45}',
 				'.localclash-task-log{box-sizing:border-box;width:100%;min-width:0;max-width:100%;max-height:48vh;overflow:auto;margin:0 0 1rem 0;padding:1rem;background:#111827;color:#d1d5db;border-radius:6px;white-space:pre-wrap;word-break:break-word}',
