@@ -1072,8 +1072,21 @@ return view.extend({
 				'.localclash-task-status{margin:.25rem 0 1rem 0;line-height:1.45}',
 				'.localclash-task-log{box-sizing:border-box;width:100%;min-width:0;max-width:100%;max-height:48vh;overflow:auto;margin:0 0 1rem 0;padding:1rem;background:#111827;color:#d1d5db;border-radius:6px;white-space:pre-wrap;word-break:break-word}',
 				'.localclash-task-result:empty{display:none}',
-				'@media (max-width: 700px){.localclash-view .localclash-button{width:100%;min-width:0}.localclash-summary-table .localclash-button{width:auto;min-width:4.25rem}.localclash-task-log{min-width:0;max-width:100%;max-height:42vh;font-size:12px}.localclash-result{max-width:100%}}'
-			].join('\n') ]),
+					'@media (max-width: 700px){',
+					'.localclash-view .localclash-button{width:100%;min-width:0}',
+					'.localclash-summary-table,.localclash-summary-table tbody,.localclash-summary-table tr,.localclash-summary-table th,.localclash-summary-table td{display:block;width:auto!important;min-width:0}',
+					'.localclash-summary-table tr:first-child{display:none}',
+					'.localclash-summary-table tr{padding:.875rem 1rem}',
+					'.localclash-summary-table td{padding:0}',
+					'.localclash-summary-table td:nth-child(1){font-weight:700;margin-bottom:.25rem}',
+					'.localclash-summary-table td:nth-child(2){overflow-wrap:anywhere;word-break:break-word}',
+					'.localclash-summary-table td:nth-child(3){display:flex;flex-wrap:wrap;gap:.5rem;margin-top:.75rem;white-space:normal;text-align:left}',
+					'.localclash-summary-table td:nth-child(3):empty{display:none}',
+					'.localclash-summary-table .localclash-button{width:auto;min-width:0;min-height:2.75rem;flex:1 1 8rem;margin:0}',
+					'.localclash-task-log{min-width:0;max-width:100%;max-height:42vh;font-size:12px}',
+					'.localclash-result{max-width:100%}',
+					'}'
+				].join('\n') ]),
 			E('h2', {}, [ _('localClash') ]),
 			E('div', { 'class': 'cbi-map-descr' }, [
 				_('localClash 用于管理路由器上的 Mihomo 运行时、订阅配置、Dashboard 和网络接管。')
