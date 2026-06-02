@@ -13,6 +13,8 @@
 > ☕ localClash 是独立维护的开源项目。如果它帮你省了配置 Mihomo 和接管路由器网络的时间，欢迎支持项目继续维护。
 >
 > [![支持 localClash](https://img.shields.io/badge/支持-localClash-f97316?style=for-the-badge)](https://github.com/qoli/localClash/blob/main/SUPPORT.md)
+>
+> [支持 localClash](https://github.com/qoli/localClash/blob/main/SUPPORT.md)
 
 最简单的流程是：
 
@@ -165,6 +167,8 @@ localClash 分成两部分：
 如果 localClash 帮你省了配置 Mihomo 和接管路由器网络的时间，可以请作者喝杯咖啡，支持项目继续维护：
 
 [![支持 localClash](https://img.shields.io/badge/支持-localClash-f97316?style=for-the-badge)](https://github.com/qoli/localClash/blob/main/SUPPORT.md)
+
+[支持 localClash](https://github.com/qoli/localClash/blob/main/SUPPORT.md)
 
 ## 更多文档
 
