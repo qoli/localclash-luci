@@ -1,5 +1,10 @@
 # localclash-luci
 
+[![Release](https://img.shields.io/github/v/release/qoli/localclash-luci?style=flat-square&label=release)](https://github.com/qoli/localclash-luci/releases/latest)
+[![License](https://img.shields.io/github/license/qoli/localclash-luci?style=flat-square)](LICENSE)
+[![OpenWrt](https://img.shields.io/badge/OpenWrt-LuCI-00B5E2?style=flat-square)](https://openwrt.org/)
+[![Core](https://img.shields.io/badge/core-localClash-2563eb?style=flat-square)](https://github.com/qoli/localClash)
+
 `localclash-luci` 是 localClash 的 OpenWrt 后台页面。你不用写命令，也不用手动配置 Mihomo，只要在 OpenWrt 后台上传安装包、填入订阅地址，然后等待初始化完成。
 
 ![localClash LuCI 欢迎页面](docs/assets/readme-welcome.png)
