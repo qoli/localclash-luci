@@ -263,7 +263,10 @@ luci_update() {
 		return 1
 	}
 	release="$tmpdir/latest.json"
-	package="$tmpdir/luci-app-localclash.pkg"
+	case "$manager" in
+		opkg) package="$tmpdir/luci-app-localclash.ipk" ;;
+		apk) package="$tmpdir/luci-app-localclash.apk" ;;
+	esac
 	sha_file="$tmpdir/luci-app-localclash.sha256"
 	install_log="$tmpdir/install.log"
 	log_line "LuCI 更新：正在读取最新 Release"
