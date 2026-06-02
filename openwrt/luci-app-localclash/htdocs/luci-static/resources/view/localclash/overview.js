@@ -46,6 +46,12 @@ var callRuntimeStartTakeover = rpc.declare({
 	expect: { '': {} }
 });
 
+var callRuntimeRestart = rpc.declare({
+	object: 'localclash',
+	method: 'runtime_restart',
+	expect: { '': {} }
+});
+
 var callRuntimeStop = rpc.declare({
 	object: 'localclash',
 	method: 'runtime_stop',
@@ -92,50 +98,10 @@ function statusText(value) {
 	return String(value);
 }
 
-function coreFlavorText(value) {
-	if (value === 'meta')
-		return 'Meta';
-	if (value === 'smart')
-		return 'Smart';
-	return statusText(value);
-}
-
-function runtimeSourceText(value) {
-	if (value === 'builtin')
-		return _('内置模板');
-	if (value === 'user')
-		return _('用户配置');
-	return statusText(value);
-}
-
-function defaultTemplateText(value) {
-	if (value === 'patch_set')
-		return _('Patch 集合');
-	if (value === 'legacy')
-		return _('传统单文件');
-	if (value === 'missing')
-		return _('缺失');
-	if (value)
-		return _('已安装');
-	return statusText(value);
-}
-
-function defaultPatchStatusText(baseAssets) {
-	if (!baseAssets || !baseAssets.default_template)
-		return '-';
-	if (baseAssets.default_patches_installed && baseAssets.default_patch_count)
-		return formatText(_('已安装（%s 个）'), baseAssets.default_patch_count || 0);
-	if (baseAssets.default_patches_installed)
-		return _('已安装');
-	if (baseAssets.default_patch_count)
-		return formatText(_('缺失（清单 %s 个）'), baseAssets.default_patch_count || 0);
-	return _('缺失');
-}
-
-function row(label, value) {
-	return E('tr', {}, [
-		E('th', { 'scope': 'row' }, [ label ]),
-		E('td', {}, [ statusText(value) ])
+function luciStatusRow(label, value, id) {
+	return E('tr', { 'class': 'tr' }, [
+		E('td', { 'class': 'td left', 'width': '33%' }, [ label ]),
+		E('td', id ? { 'class': 'td left', 'id': id } : { 'class': 'td left' }, [ statusText(value) ])
 	]);
 }
 
@@ -715,22 +681,6 @@ function takeoverState(takeover) {
 	return state || '-';
 }
 
-function takeoverStatusCell(takeover, id) {
-	return E('td', { 'id': id }, [ takeoverState(takeover) ]);
-}
-
-function taskStatusText(task) {
-	if (!task)
-		return _('无正在执行任务');
-	if (task.running === true)
-		return task.summary || _('任务正在执行');
-	if (task.done === true && task.result && task.result.ok === false)
-		return formatText(_('上次失败：%s'), task.result.message || task.result.code || _('未知错误'));
-	if (task.done === true)
-		return _('上次任务已完成');
-	return _('无正在执行任务');
-}
-
 function bootRestoreSummary(bootRestore) {
 	if (bootRestore && bootRestore.enabled === true)
 		return _('已启用');
@@ -742,16 +692,18 @@ function bootRestoreSummary(bootRestore) {
 function bootRestorePanel(bootRestore) {
 	var enabled = bootRestore && bootRestore.enabled === true;
 
-	return E('div', { 'class': 'localclash-boot-restore' }, [
-		E('p', { 'class': 'localclash-muted' }, [
-			_('启用后，路由器重启时会自动启动 localClash runtime 并恢复网络接管。关闭时，重启不会恢复接管；同次开机内的 firewall reload 仍会依本次接管记录自动修复。')
-		]),
-		E('p', {}, [
-			E('strong', {}, [ _('目前状态：') ]),
-			bootRestoreSummary(bootRestore)
-		]),
-		actionRow([
-			commandButton(enabled ? _('关闭开机自动恢复') : _('开机自动恢复'), enabled ? callBootRestoreDisable : callBootRestoreEnable, enabled ? 'cbi-button-reset' : 'cbi-button-apply')
+	return E('table', { 'class': 'table cbi-section-table localclash-boot-restore-table' }, [
+		E('tbody', {}, [
+			E('tr', { 'class': 'tr table-titles' }, [
+				E('th', { 'class': 'th' }, [ _('目前状态') ]),
+				E('th', { 'class': 'th cbi-section-actions' }, [])
+			]),
+			E('tr', { 'class': 'tr cbi-rowstyle-1' }, [
+				E('td', { 'class': 'td', 'data-title': _('目前状态') }, [ bootRestoreSummary(bootRestore) ]),
+				E('td', { 'class': 'td cbi-section-actions' }, [
+					commandButton(_('切换'), enabled ? callBootRestoreDisable : callBootRestoreEnable, enabled ? 'cbi-button-reset' : 'cbi-button-apply')
+				])
+			])
 		])
 	]);
 }
@@ -792,7 +744,6 @@ function refreshOverviewStatus() {
 		var data = results[0] || {};
 		var task = results[1] || {};
 		var state;
-		var message;
 
 		if (data.ok === false && data.error) {
 			state = {
@@ -805,16 +756,10 @@ function refreshOverviewStatus() {
 			state = classify(data, takeover, task);
 		}
 
-		message = state.id === 'running'
-			? [ _('localClash 运行时正在运行。网络接管：'), E('span', { 'id': 'localclash-overview-takeover-hero' }, [ takeoverState(takeover) ]) ]
-			: [ state.message ];
-
-		setText('localclash-overview-state-title', state.title);
-		replaceContent('localclash-overview-state-message', message);
 		replaceContent('localclash-overview-actions', primaryActions(state));
 		updateBootstrapStartButton();
 		replaceContent('localclash-overview-boot-restore-body', bootRestorePanel(data.boot_auto_restore || {}));
-		replaceContent('localclash-overview-diagnostics-body', diagnosticTable(data, takeover, task));
+		replaceContent('localclash-overview-summary-body', data.ok === false && data.error ? summaryErrorTable(data.error) : summaryTable(data, takeover, task));
 		return refreshTakeoverStatus();
 	});
 }
@@ -930,82 +875,69 @@ function primaryActions(state) {
 		]);
 	}
 
-	return actionRow([
-		dashboardButton('cbi-button-action'),
-		commandButton(_('停止运行时'), function() {
-			return callTakeoverStop().catch(function(err) {
-				return { ok: false, ignored: true, message: err.message || String(err) };
-			}).then(function(takeover) {
-				return callRuntimeStop().then(function(runtime) {
-					return { ok: true, takeover: takeover, runtime: runtime };
+	return [
+		actionRow([
+			commandButton(_('重启运行时'), callRuntimeRestart, 'cbi-button-apply'),
+			commandButton(_('停止运行时'), function() {
+				return callTakeoverStop().catch(function(err) {
+					return { ok: false, ignored: true, message: err.message || String(err) };
+				}).then(function(takeover) {
+					return callRuntimeStop().then(function(runtime) {
+						return { ok: true, takeover: takeover, runtime: runtime };
+					});
 				});
-			});
-		}, 'cbi-button-reset'),
-		commandButton(_('运行时状态'), callStatus, null, { keepOpen: true })
-	]);
+			}, 'cbi-button-reset')
+		]),
+		actionRow([
+			dashboardButton('cbi-button-action')
+		])
+	];
 }
 
-function diagnosticTable(data, takeover, task) {
+function mihomoSummary(data, status) {
 	var core = data.core || {};
-	var baseAssets = data.base_assets || {};
-	var runtimeProfile = data.runtime_profile || {};
-	var service = (data.mcp_service && data.mcp_service.service) || {};
-	var mcp = (data.mcp_service && data.mcp_service.mcp) || {};
-	var status = productStatus(data);
-	var runtime = status.runtime || {};
 
-	return E('table', { 'class': 'table localclash-status-table' }, [
+	if (runtimeRunning(status))
+		return _('运行中');
+	if (!core.installed)
+		return _('缺失');
+	if (componentInstalled(status, [ 'mihomo' ]))
+		return _('已安装，未运行');
+	return _('缺失');
+}
+
+function summaryTable(data, takeover, task) {
+	var status = productStatus(data);
+
+	return E('table', { 'class': 'table localclash-summary-table' }, [
 		E('tbody', {}, [
-			row(_('localClash 核心'), core.installed ? _('已安装') : _('缺失')),
-			row(_('核心路径'), core.path),
-			row(_('基础文件'), baseAssets.installed ? _('已安装') : _('缺失')),
-			row(_('基础文件路径'), baseAssets.path),
-			row(_('默认配置模板'), defaultTemplateText(baseAssets.default_template)),
-			row(_('默认 Patch 文件'), defaultPatchStatusText(baseAssets)),
-			row(_('Mihomo 核心'), core.installed ? (componentInstalled(status, [ 'mihomo' ]) ? _('已安装') : _('缺失')) : _('缺失')),
-			row(_('Mihomo 核心类型'), coreFlavorText(runtimeProfile.core)),
-			row(_('运行时来源'), runtimeSourceText(runtimeProfile.runtime_source)),
-			row(_('Mihomo 核心路径'), runtimeProfile.core_path),
-			row(_('Dashboard 面板'), core.installed ? (componentInstalled(status, [ 'dashboard', 'ui' ]) ? _('已安装') : _('缺失')) : _('缺失')),
-			row(_('订阅'), subscriptionConfigured(status) ? _('已配置') : _('缺失')),
-			row(_('Mihomo 运行时运行中'), runtime.running !== undefined ? runtime.running : runtimeRunning(status)),
-			row(_('开机自动恢复'), bootRestoreSummary(data.boot_auto_restore || {})),
-			row(_('最近任务'), taskStatusText(task)),
-			E('tr', {}, [
-				E('th', { 'scope': 'row' }, [ _('网络接管') ]),
-				takeoverStatusCell(takeover, 'localclash-overview-takeover-status')
+			luciStatusRow(_('Mihomo 核心'), mihomoSummary(data, status)),
+			E('tr', { 'class': 'tr' }, [
+				E('td', { 'class': 'td left', 'width': '33%' }, [ _('网络接管') ]),
+				E('td', { 'class': 'td left', 'id': 'localclash-overview-takeover-status' }, [ takeoverState(takeover) ])
 			]),
-			row(_('MCP 服务已安装'), service.installed),
-			row(_('MCP 服务运行中'), service.running),
-			row(_('MCP 端点'), mcp.endpoint)
+			luciStatusRow(_('订阅'), subscriptionConfigured(status) ? _('已配置') : _('缺失'))
 		])
 	]);
 }
 
-function diagnosticLoadingTable() {
+function summaryLoadingTable() {
 	var pending = _('加载中…');
 
-	return E('table', { 'class': 'table localclash-status-table' }, [
+	return E('table', { 'class': 'table localclash-summary-table' }, [
 		E('tbody', {}, [
-			row(_('localClash 核心'), pending),
-			row(_('核心路径'), pending),
-			row(_('基础文件'), pending),
-			row(_('基础文件路径'), pending),
-			row(_('默认配置模板'), pending),
-			row(_('默认 Patch 文件'), pending),
-			row(_('Mihomo 核心'), pending),
-			row(_('Mihomo 核心类型'), pending),
-			row(_('运行时来源'), pending),
-			row(_('Mihomo 核心路径'), pending),
-			row(_('Dashboard 面板'), pending),
-			row(_('订阅'), pending),
-			row(_('Mihomo 运行时运行中'), pending),
-			row(_('开机自动恢复'), pending),
-			row(_('最近任务'), pending),
-			row(_('网络接管'), _('检查中…')),
-			row(_('MCP 服务已安装'), pending),
-			row(_('MCP 服务运行中'), pending),
-			row(_('MCP 端点'), pending)
+			luciStatusRow(_('Mihomo 核心'), pending),
+			luciStatusRow(_('网络接管'), _('检查中…'), 'localclash-overview-takeover-status'),
+			luciStatusRow(_('订阅'), pending)
+		])
+	]);
+}
+
+function summaryErrorTable(message) {
+	return E('table', { 'class': 'table localclash-summary-table' }, [
+		E('tbody', {}, [
+			luciStatusRow(_('状态'), _('读取失败')),
+			luciStatusRow(_('错误'), message || '-')
 		])
 	]);
 }
@@ -1028,12 +960,14 @@ function mcpGuidanceBody(help) {
 		return E('p', { 'class': 'localclash-muted' }, [ _('正在加载 MCP 接入指令…') ]);
 
 	var text = (help && help.text) || '';
+	var rows = Math.max(10, text.split(/\r?\n/).length + 2);
 
 	return E('div', {}, [
 		E('p', { 'class': 'localclash-muted' }, [ _('将这段文字复制给 Agent，用于配置并安全接入路由器上的 localClash MCP。') ]),
 		E('textarea', {
 			'class': 'cbi-input-textarea localclash-copybox',
-			'readonly': 'readonly'
+			'readonly': 'readonly',
+			'rows': rows
 		}, [ text ]),
 		actionRow([
 			commandButton(_('复制 MCP 指令'), function() {
@@ -1083,39 +1017,34 @@ return view.extend({
 				'.localclash-view .localclash-button:focus{outline:2px solid rgba(73,115,255,.35);outline-offset:2px}',
 				'.localclash-view .localclash-button:active{transform:translateY(1px)}',
 				'.localclash-view .localclash-button.localclash-busy{cursor:wait;opacity:.72}',
-				'.localclash-overview .localclash-hero{padding:1rem 1.25rem}',
-				'.localclash-overview .localclash-hero h3{margin-top:0}',
-				'.localclash-overview .localclash-hero p{max-width:58rem;margin:.5rem 0 0 0;line-height:1.55}',
 				'.localclash-overview .localclash-setup-panel{margin-top:1rem}',
 				'.localclash-view .localclash-textarea{box-sizing:border-box;width:calc(100% - 2rem);min-height:9rem;margin:1rem;padding:1rem;font-family:monospace;line-height:1.45;resize:vertical}',
 				'.localclash-view .localclash-bootstrap-options{display:flex;flex-wrap:wrap;gap:1rem;margin:.75rem 1rem 0 1rem;align-items:center}',
 				'.localclash-view .localclash-check-option{display:inline-flex;gap:.45rem;align-items:center;margin:0;line-height:1.4}',
 				'.localclash-view .localclash-check-option input{margin:0}',
 				'.localclash-view .localclash-muted{color:#667085;line-height:1.55}',
-				'.localclash-view .localclash-status-table{display:inline-table;max-width:100%}',
-				'.localclash-view .localclash-status-table th{width:auto;white-space:nowrap;padding-right:2rem}',
-				'.localclash-view .localclash-status-table td{width:auto;word-break:break-word}',
-				'.localclash-view .localclash-copybox{box-sizing:border-box;width:calc(100% - 2rem);min-height:5.5rem;margin:1rem;padding:1rem;font-family:monospace;line-height:1.45;resize:vertical}',
+				'.localclash-view .localclash-copybox{box-sizing:border-box;width:calc(100% - 2rem);min-height:16rem;margin:1rem;padding:1rem;font-family:monospace;line-height:1.45;resize:vertical}',
 				'.localclash-result{box-sizing:border-box;width:100%;min-width:0;max-width:100%;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word}',
 				'.localclash-task-status{margin:.25rem 0 1rem 0;line-height:1.45}',
 				'.localclash-task-log{box-sizing:border-box;width:100%;min-width:0;max-width:100%;max-height:48vh;overflow:auto;margin:0 0 1rem 0;padding:1rem;background:#111827;color:#d1d5db;border-radius:6px;white-space:pre-wrap;word-break:break-word}',
 				'.localclash-task-result:empty{display:none}',
-				'@media (max-width: 700px){.localclash-view .localclash-button{width:100%;min-width:0}.localclash-view .localclash-status-table{display:table;width:100%}.localclash-task-log{min-width:0;max-width:100%;max-height:42vh;font-size:12px}.localclash-result{max-width:100%}}'
+				'@media (max-width: 700px){.localclash-view .localclash-button{width:100%;min-width:0}.localclash-task-log{min-width:0;max-width:100%;max-height:42vh;font-size:12px}.localclash-result{max-width:100%}}'
 			].join('\n') ]),
 			E('h2', {}, [ _('localClash') ]),
-			section(_('概览'), E('div', { 'class': 'localclash-hero' }, [
-				E('h3', { 'id': 'localclash-overview-state-title' }, [ state.title ]),
-				E('p', { 'id': 'localclash-overview-state-message' }, [ state.message ]),
+			E('div', { 'class': 'cbi-map-descr' }, [
+				_('localClash 用于管理路由器上的 Mihomo 运行时、订阅配置、Dashboard 和网络接管。')
+			]),
+			section(_('摘要状态'), E('div', { 'id': 'localclash-overview-summary-body' }, [
+				summaryLoadingTable()
+			]), 'localclash-summary'),
+			E('div', { 'class': 'cbi-section localclash-section localclash-action-section' }, [
 				E('div', { 'id': 'localclash-overview-actions' }, [
 					primaryActions(state)
 				])
-			]), 'localclash-next-step'),
+			]),
 			section(_('开机自动恢复'), E('div', { 'id': 'localclash-overview-boot-restore-body' }, [
 				bootRestorePanel({})
-			]), 'localclash-boot-restore-section'),
-			section(_('状态'), E('div', { 'id': 'localclash-overview-diagnostics-body' }, [
-				diagnosticLoadingTable()
-			]), 'localclash-diagnostics'),
+			]), 'cbi-tblsection localclash-boot-restore-section'),
 			mcpGuidance({ loading: true })
 		]);
 	}
