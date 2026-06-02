@@ -1066,6 +1066,7 @@ return view.extend({
 				'.localclash-view .localclash-check-option input{margin:0}',
 				'.localclash-view .localclash-muted{color:#667085;line-height:1.55}',
 				'.localclash-view .localclash-copybox{box-sizing:border-box;width:calc(100% - 2rem);min-height:16rem;margin:1rem;padding:1rem;font-family:monospace;line-height:1.45;resize:vertical}',
+				'.localclash-summary-table tbody th,.localclash-status-table tbody th{text-align:left}',
 				'.localclash-summary-table .cbi-section-actions{white-space:nowrap;text-align:right}',
 				'.localclash-summary-table .localclash-button{min-width:4.25rem;min-height:2.25rem;margin:.125rem;padding:.45rem .7rem;white-space:nowrap}',
 				'.localclash-result{box-sizing:border-box;width:100%;min-width:0;max-width:100%;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word}',
