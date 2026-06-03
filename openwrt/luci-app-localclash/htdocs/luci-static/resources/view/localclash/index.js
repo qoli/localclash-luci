@@ -85,6 +85,20 @@ var callComponentUpdateAsync = rpc.declare({
 var callOneClickUpdate = rpc.declare({
 	object: 'localclash',
 	method: 'one_click_update',
+	params: [ 'sync_default_policy' ],
+	expect: { '': {} }
+});
+
+var callOneClickUpdatePreferences = rpc.declare({
+	object: 'localclash',
+	method: 'one_click_update_preferences',
+	expect: { '': {} }
+});
+
+var callOneClickUpdatePreferencesSet = rpc.declare({
+	object: 'localclash',
+	method: 'one_click_update_preferences_set',
+	params: [ 'sync_default_policy' ],
 	expect: { '': {} }
 });
 
@@ -781,6 +795,45 @@ function actionRow(buttons) {
 	return E('div', { 'class': 'localclash-actions' }, buttons);
 }
 
+function syncDefaultPolicyPreference(data) {
+	var preferences = data && data.preferences ? data.preferences : {};
+	var oneClickUpdate = preferences.one_click_update || {};
+
+	return oneClickUpdate.sync_default_policy !== false;
+}
+
+function oneClickUpdateControls(data) {
+	var checkboxId = 'localclash-sync-default-policy';
+	var checked = syncDefaultPolicyPreference(data);
+
+	return E('div', {}, [
+		E('p', {}, [ _('更新 LuCI、localClash 核心、Mihomo 核心和 Dashboard，刷新订阅并在最后恢复运行时和网络接管。') ]),
+		actionRow([
+			liveTaskButton(_('一键更新'), function() {
+				var checkbox = document.getElementById(checkboxId);
+				var syncDefaultPolicy = checkbox && checkbox.checked === true;
+				return callOneClickUpdatePreferencesSet(syncDefaultPolicy).then(function() {
+					return callOneClickUpdate(syncDefaultPolicy);
+				});
+			}, 'cbi-button-apply'),
+			E('label', { 'class': 'localclash-inline-check' }, [
+				E('input', {
+					'id': checkboxId,
+					'type': 'checkbox',
+					'checked': checked ? 'checked' : null,
+					'change': function(ev) {
+						callOneClickUpdatePreferencesSet(ev.target.checked === true).catch(showError);
+					}
+				}),
+				E('span', { 'class': 'localclash-inline-check-title' }, [ _('同步最新默认策略（推荐）') ]),
+				E('span', { 'class': 'localclash-inline-check-help' }, [
+					_('会更新内置默认规则；用户自定义规则会保留，手动改过的默认规则会被新版默认值覆盖。')
+				])
+			])
+		])
+	]);
+}
+
 function bootRestoreSummary(bootRestore) {
 	if (bootRestore && bootRestore.enabled === true)
 		return _('已启用');
@@ -803,7 +856,7 @@ function bootRestoreControls() {
 
 return view.extend({
 	load: function() {
-		return {};
+		return callOneClickUpdatePreferences();
 	},
 
 	render: function(data) {
@@ -814,6 +867,10 @@ return view.extend({
 				'.localclash-view .localclash-section{clear:both;margin-top:1.5rem;padding-bottom:.25rem}',
 				'.localclash-view .localclash-actions{display:flex;flex-wrap:wrap;gap:.625rem;align-items:center;margin:.875rem 0 0 0;padding:1rem}',
 				'.localclash-view .localclash-button{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;float:none;margin:0;min-width:8.5rem;min-height:2.75rem;padding:.7rem 1.05rem;line-height:1.2;text-align:center;white-space:normal}',
+				'.localclash-view .localclash-inline-check{display:inline-grid;grid-template-columns:auto auto;grid-template-areas:"box title" ". help";column-gap:.5rem;row-gap:.15rem;align-items:center;max-width:32rem;margin:0;line-height:1.35}',
+				'.localclash-view .localclash-inline-check input{grid-area:box;margin:0}',
+				'.localclash-view .localclash-inline-check-title{grid-area:title;font-weight:600}',
+				'.localclash-view .localclash-inline-check-help{grid-area:help;color:#667085;font-size:.92em}',
 				'.localclash-view .localclash-button:focus{outline:2px solid rgba(73,115,255,.35);outline-offset:2px}',
 				'.localclash-view .localclash-button:active{transform:translateY(1px)}',
 				'.localclash-view .localclash-button.localclash-busy{cursor:wait;opacity:.72}',
@@ -821,8 +878,10 @@ return view.extend({
 				'.localclash-view + .cbi-page-actions,.localclash-view ~ .cbi-page-actions,.cbi-page-actions{display:none!important}',
 				'.localclash-view .localclash-muted{color:#667085;line-height:1.55}',
 				'.localclash-view .localclash-status-table{width:100%;max-width:100%}',
-				'.localclash-view table.table th,.localclash-view table.table td{text-align:left}',
-				'.localclash-view table.table tr.cbi-rowstyle-1,.localclash-view table.table tr.cbi-rowstyle-1 > th,.localclash-view table.table tr.cbi-rowstyle-1 > td{background-color:rgba(0,0,0,.1)}',
+				'.localclash-view table.table th,.localclash-view table.table td{text-align:left;height:70px}',
+				'.localclash-view table.table tr.cbi-rowstyle-1,.localclash-view table.table tr.cbi-rowstyle-1 > th,.localclash-view table.table tr.cbi-rowstyle-1 > td{background-color:rgba(0,0,0,.07)}',
+				'.localclash-view table.table tr.cbi-rowstyle-1 > th:first-child,.localclash-view table.table tr.cbi-rowstyle-1 > td:first-child{border-top-left-radius:4px;border-bottom-left-radius:4px}',
+				'.localclash-view table.table tr.cbi-rowstyle-1 > th:last-child,.localclash-view table.table tr.cbi-rowstyle-1 > td:last-child{border-top-right-radius:4px;border-bottom-right-radius:4px}',
 				'.localclash-view .localclash-status-table th,.localclash-view .localclash-status-table td{vertical-align:top}',
 				'.localclash-view .localclash-status-table td:first-child{width:13rem;white-space:nowrap}',
 				'.localclash-view .localclash-status-table td:last-child{word-break:break-word}',
@@ -830,7 +889,7 @@ return view.extend({
 				'.localclash-task-status{margin:.25rem 0 1rem 0;line-height:1.45}',
 				'.localclash-task-log{box-sizing:border-box;width:100%;min-width:0;max-width:100%;max-height:48vh;overflow:auto;margin:0 0 1rem 0;padding:1rem;background:#111827;color:#d1d5db;border-radius:6px;white-space:pre-wrap;word-break:break-word}',
 				'.localclash-task-result:empty{display:none}',
-				'@media (max-width: 700px){.localclash-view .localclash-button{width:100%;min-width:0}.localclash-view .localclash-status-table td:first-child{width:auto;white-space:normal}.localclash-task-log{min-width:0;max-width:100%;max-height:42vh;font-size:12px}.localclash-result{max-width:100%}}'
+				'@media (max-width: 700px){.localclash-view .localclash-button{width:100%;min-width:0}.localclash-view .localclash-inline-check{width:100%;max-width:none}.localclash-view .localclash-status-table td:first-child{width:auto;white-space:normal}.localclash-task-log{min-width:0;max-width:100%;max-height:42vh;font-size:12px}.localclash-result{max-width:100%}}'
 			].join('\n') ]),
 			E('h2', {}, [ _('localClash') ]),
 			section(_('状态'), E('div', { 'id': 'localclash-advanced-status-body' }, [
@@ -844,12 +903,7 @@ return view.extend({
 					commandButton(_('查看日志'), callBootstrapLogs, null, { keepOpen: true })
 				])
 			])),
-			section(_('更新'), E('div', {}, [
-				E('p', {}, [ _('更新 LuCI、localClash 核心、Mihomo 核心和 Dashboard，刷新订阅并在最后恢复运行时和网络接管。') ]),
-				actionRow([
-					liveTaskButton(_('一键更新'), callOneClickUpdate, 'cbi-button-apply')
-				])
-			])),
+			section(_('更新'), oneClickUpdateControls(data)),
 			section(_('MCP 服务'), actionRow([
 				commandButton(_('启动 MCP 服务'), callServiceStart, 'cbi-button-apply'),
 				commandButton(_('停止 MCP 服务'), callServiceStop, 'cbi-button-reset')

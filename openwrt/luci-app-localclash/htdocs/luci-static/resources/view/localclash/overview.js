@@ -43,6 +43,20 @@ var callTaskCancel = rpc.declare({
 var callOneClickUpdate = rpc.declare({
 	object: 'localclash',
 	method: 'one_click_update',
+	params: [ 'sync_default_policy' ],
+	expect: { '': {} }
+});
+
+var callOneClickUpdatePreferences = rpc.declare({
+	object: 'localclash',
+	method: 'one_click_update_preferences',
+	expect: { '': {} }
+});
+
+var callOneClickUpdatePreferencesSet = rpc.declare({
+	object: 'localclash',
+	method: 'one_click_update_preferences_set',
+	params: [ 'sync_default_policy' ],
 	expect: { '': {} }
 });
 
@@ -107,6 +121,7 @@ var callMcpHelp = rpc.declare({
 });
 
 var lastOverviewStatusData = null;
+var oneClickUpdatePreferencesData = null;
 
 function statusText(value) {
 	if (value === null || value === undefined || value === '')
@@ -887,6 +902,13 @@ function tableActionCell(actions) {
 	return E('td', { 'class': 'td cbi-section-actions' }, actions || []);
 }
 
+function syncDefaultPolicyPreference(data) {
+	var preferences = data && data.preferences ? data.preferences : {};
+	var oneClickUpdate = preferences.one_click_update || {};
+
+	return oneClickUpdate.sync_default_policy !== false;
+}
+
 function summaryActionRow(item, status, actions) {
 	return E('tr', { 'class': 'tr cbi-rowstyle-1' }, [
 		E('td', { 'class': 'td', 'data-title': _('项目') }, [ item ]),
@@ -895,23 +917,66 @@ function summaryActionRow(item, status, actions) {
 	]);
 }
 
+function oneClickUpdateSyncDefaultPolicy() {
+	var checkbox = document.getElementById('localclash-overview-sync-default-policy');
+	return checkbox && checkbox.checked === true;
+}
+
+function setOneClickUpdatePreference(syncDefaultPolicy) {
+	return callOneClickUpdatePreferencesSet(syncDefaultPolicy).then(function(result) {
+		oneClickUpdatePreferencesData = result;
+		return result;
+	});
+}
+
+function oneClickUpdateHandler() {
+	var syncDefaultPolicy = oneClickUpdateSyncDefaultPolicy();
+
+	return setOneClickUpdatePreference(syncDefaultPolicy).then(function() {
+		return callOneClickUpdate(syncDefaultPolicy);
+	});
+}
+
 function oneClickUpdateButton() {
-	var button = liveTaskButton(_('一键更新'), callOneClickUpdate, 'cbi-button-apply');
+	var button = liveTaskButton(_('一键更新'), oneClickUpdateHandler, 'cbi-button-apply');
 	button.id = 'localclash-one-click-update-button';
 	button.disabled = true;
 	return button;
 }
 
-function oneClickUpdateRow() {
-	return E('tr', { 'class': 'tr cbi-rowstyle-1' }, [
-		E('td', { 'class': 'td', 'data-title': _('项目') }, [ _('一键更新') ]),
-		E('td', { 'class': 'td', 'data-title': _('目前状态') }, [
-			E('span', { 'id': 'localclash-one-click-update-status' }, [ _('正在检查更新…') ])
-		]),
-		tableActionCell([
-			oneClickUpdateButton()
+function oneClickUpdatePreferenceControl() {
+	var checked = syncDefaultPolicyPreference(oneClickUpdatePreferencesData);
+
+	return E('label', { 'class': 'localclash-inline-check' }, [
+		E('input', {
+			'id': 'localclash-overview-sync-default-policy',
+			'type': 'checkbox',
+			'checked': checked ? 'checked' : null,
+			'change': function(ev) {
+				setOneClickUpdatePreference(ev.target.checked === true).catch(showError);
+			}
+		}),
+		E('span', { 'class': 'localclash-inline-check-title' }, [ _('同步最新默认策略（推荐）') ]),
+		E('span', { 'class': 'localclash-inline-check-help' }, [
+			_('会更新内置默认规则；用户自定义规则会保留，手动改过的默认规则会被新版默认值覆盖。')
 		])
 	]);
+}
+
+function oneClickUpdateSection() {
+	return section(_('一键更新'), E('div', { 'class': 'localclash-one-click-update' }, [
+		E('p', { 'class': 'localclash-muted' }, [
+			_('更新 LuCI 界面、localClash 核心、Mihomo 核心和 Dashboard，刷新订阅并在最后恢复运行时和网络接管。')
+		]),
+		E('p', { 'class': 'localclash-one-click-update-status' }, [
+			E('span', { 'class': 'localclash-one-click-update-status-title' }, [ _('更新检查') ]),
+			E('span', { 'id': 'localclash-one-click-update-status' }, [ _('正在检查更新…') ])
+		]),
+		actionRow([
+			oneClickUpdateButton(),
+			oneClickUpdatePreferenceControl()
+		])
+	]), 'localclash-one-click-update-section');
 }
 
 function updateCheckCurrentVersion(check) {
@@ -1045,8 +1110,7 @@ function summaryTable(data, takeover, task, state) {
 			summaryActionRow(_('订阅'), subscriptionConfigured(status) ? _('已配置') : _('缺失'), []),
 			summaryActionRow(_('开机自动恢复'), bootRestoreSummary(bootRestore), [
 				commandButton(_('切换'), bootRestoreEnabled ? callBootRestoreDisable : callBootRestoreEnable, bootRestoreEnabled ? 'cbi-button-reset' : 'cbi-button-apply')
-			]),
-			oneClickUpdateRow()
+			])
 		])
 	]);
 }
@@ -1069,14 +1133,7 @@ function summaryLoadingTable() {
 			]),
 			summaryActionRow(_('Dashboard'), defaultDashboardURL(), []),
 			summaryActionRow(_('订阅'), pending, []),
-			summaryActionRow(_('开机自动恢复'), pending, []),
-			summaryActionRow(_('一键更新'), _('正在检查更新…'), [
-				E('button', {
-					'type': 'button',
-					'class': 'btn cbi-button localclash-button cbi-button-apply',
-					'disabled': 'disabled'
-				}, [ _('一键更新') ])
-			])
+			summaryActionRow(_('开机自动恢复'), pending, [])
 		])
 	]);
 }
@@ -1148,7 +1205,7 @@ function refreshMcpGuidance() {
 
 return view.extend({
 	load: function() {
-		return {};
+		return callOneClickUpdatePreferences();
 	},
 
 	render: function(results) {
@@ -1158,6 +1215,7 @@ return view.extend({
 			message: _('正在读取路由器状态，请稍候。')
 		};
 
+		oneClickUpdatePreferencesData = results || null;
 		deferAfterPaint(refreshOverviewStatus, 600);
 		deferAfterPaint(refreshMcpGuidance, 1200);
 
@@ -1175,13 +1233,21 @@ return view.extend({
 				'.localclash-view .localclash-bootstrap-options{display:flex;flex-wrap:wrap;gap:1rem;margin:.75rem 1rem 0 1rem;align-items:center}',
 				'.localclash-view .localclash-check-option{display:inline-flex;gap:.45rem;align-items:center;margin:0;line-height:1.4}',
 				'.localclash-view .localclash-check-option input{margin:0}',
+				'.localclash-view .localclash-inline-check{display:inline-grid;grid-template-columns:auto auto;grid-template-areas:"box title" ". help";column-gap:.5rem;row-gap:.15rem;align-items:center;max-width:38rem;margin:0;line-height:1.35;text-align:left;white-space:normal}',
+				'.localclash-view .localclash-inline-check input{grid-area:box;margin:0}',
+				'.localclash-view .localclash-inline-check-title{grid-area:title;font-weight:600}',
+				'.localclash-view .localclash-inline-check-help{grid-area:help;color:#667085;font-size:.92em}',
 				'.localclash-view .localclash-muted{color:#667085;line-height:1.55}',
 				'.localclash-view .localclash-copybox{box-sizing:border-box;width:calc(100% - 2rem);min-height:16rem;margin:1rem;padding:1rem;font-family:monospace;line-height:1.45;resize:vertical}',
-				'.localclash-view table.table th,.localclash-view table.table td{text-align:left}',
-				'.localclash-view table.table tr.cbi-rowstyle-1,.localclash-view table.table tr.cbi-rowstyle-1 > th,.localclash-view table.table tr.cbi-rowstyle-1 > td{background-color:rgba(0,0,0,.1)}',
+				'.localclash-view table.table th,.localclash-view table.table td{text-align:left;height:70px}',
+				'.localclash-view table.table tr.cbi-rowstyle-1,.localclash-view table.table tr.cbi-rowstyle-1 > th,.localclash-view table.table tr.cbi-rowstyle-1 > td{background-color:rgba(0,0,0,.07)}',
+				'.localclash-view table.table tr.cbi-rowstyle-1 > th:first-child,.localclash-view table.table tr.cbi-rowstyle-1 > td:first-child{border-top-left-radius:4px;border-bottom-left-radius:4px}',
+				'.localclash-view table.table tr.cbi-rowstyle-1 > th:last-child,.localclash-view table.table tr.cbi-rowstyle-1 > td:last-child{border-top-right-radius:4px;border-bottom-right-radius:4px}',
 				'.localclash-summary-table tbody th,.localclash-status-table tbody th{text-align:left}',
 				'.localclash-summary-table .cbi-section-actions{white-space:nowrap;text-align:right}',
 				'.localclash-summary-table .localclash-button{min-width:4.25rem;min-height:2.25rem;margin:.125rem;padding:.45rem .7rem;white-space:nowrap}',
+				'.localclash-one-click-update-status{display:flex;flex-wrap:wrap;gap:.45rem;align-items:baseline;margin:.75rem 1rem 0 1rem;line-height:1.45}',
+				'.localclash-one-click-update-status-title{font-weight:700}',
 				'.localclash-result{box-sizing:border-box;width:100%;min-width:0;max-width:100%;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word}',
 				'.localclash-task-status{margin:.25rem 0 1rem 0;line-height:1.45}',
 				'.localclash-task-log{box-sizing:border-box;width:100%;min-width:0;max-width:100%;max-height:48vh;overflow:auto;margin:0 0 1rem 0;padding:1rem;background:#111827;color:#d1d5db;border-radius:6px;white-space:pre-wrap;word-break:break-word}',
@@ -1197,6 +1263,7 @@ return view.extend({
 					'.localclash-summary-table td:nth-child(3){display:flex;flex-wrap:wrap;gap:.5rem;margin-top:.75rem;white-space:normal;text-align:left}',
 					'.localclash-summary-table td:nth-child(3):empty{display:none}',
 					'.localclash-summary-table .localclash-button{width:auto;min-width:0;min-height:2.75rem;flex:1 1 8rem;margin:0}',
+					'.localclash-view .localclash-inline-check{width:100%;max-width:none}',
 					'.localclash-task-log{min-width:0;max-width:100%;max-height:42vh;font-size:12px}',
 					'.localclash-result{max-width:100%}',
 					'}'
@@ -1208,6 +1275,7 @@ return view.extend({
 			section(_('摘要'), E('div', { 'id': 'localclash-overview-summary-body' }, [
 				summaryLoadingTable()
 			]), 'localclash-summary'),
+			oneClickUpdateSection(),
 			E('div', { 'id': 'localclash-overview-actions' }, [
 				primaryActions(state)
 			]),

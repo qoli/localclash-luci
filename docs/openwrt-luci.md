@@ -518,7 +518,8 @@ Schema:
   "template": "localclash-default",
   "runtime_profile": "router",
   "core": "meta",
-  "allow_overwrite_modified": false
+  "allow_overwrite_modified": false,
+  "refresh_policy_template_patches": false
 }
 ```
 
@@ -530,6 +531,11 @@ Fields:
 - `core`: required string enum: `meta`, `smart`.
 - `allow_overwrite_modified`: required boolean. If `false`, the command must
   fail when current durable config is modified outside a known template.
+- `refresh_policy_template_patches`: optional boolean, default `false`. If
+  `true`, the core removes only existing patch registry files with
+  `source="policy_template"` before re-importing the selected template; user
+  patches are preserved, while manually edited default patches are replaced by
+  the current default template.
 
 Code-grounded notes:
 
@@ -915,21 +921,34 @@ Method contracts:
   `localclash` uses the bootstrap helper to install or update from the latest
   release manifest; other values call
   `localclash component update <component> --json`.
-- `one_click_update`: no input. Starts a background task that updates LuCI,
-  localClash core, Mihomo core, and Dashboard; refreshes saved subscriptions;
-  renders and validates Mihomo config; then restores the previous runtime and
-  router takeover state. The task keeps the current runtime untouched during
-  download, update, render, and config-test preparation, and only enters the
-  outage window for the final runtime switch. If Mihomo core changed, the final
-  switch uses `runtime restart --strategy process_restart --json`; otherwise it
-  uses `--strategy hot_reload`. If router takeover was effective before the
-  update, success requires `takeover status` to report effective after restore.
-  If saved subscriptions are configured but `subscription refresh --json` fails,
+- `one_click_update`: optional input `{ "sync_default_policy": true|false }`.
+  Starts a background task that updates LuCI, localClash core, Mihomo core, and
+  Dashboard; optionally refreshes the built-in default policy template patches;
+  refreshes saved subscriptions; renders and validates Mihomo config; then
+  restores the previous runtime and router takeover state. When
+  `sync_default_policy` is absent, the helper reads the persisted LuCI
+  preference from the localClash work directory; no preference file means
+  `true`. When the field is present, the helper persists it before continuing.
+  The policy sync preserves user-sourced patches and replaces policy-template
+  patches. The task keeps the current runtime untouched during download, update,
+  render, and config-test preparation, and only enters the outage window for the
+  final runtime switch. If Mihomo core changed, the final switch uses
+  `runtime restart --strategy process_restart --json`; otherwise it uses
+  `--strategy hot_reload`. If router takeover was effective before the update,
+  success requires `takeover status` to report effective after restore. If saved
+  subscriptions are configured but `subscription refresh --json` fails,
   one-click update records `subscription.refresh_failed=true`, uses the existing
   merged subscription cache, and continues only if `config render --json` and
   `mihomo config-test --json` both pass. This fallback exists to recover the
   router after component updates when a subscription provider is temporarily
   unavailable; it must not silently hide an unusable or missing cache.
+- `one_click_update_preferences`: no input. Returns LuCI one-click update
+  preferences from the router filesystem. The default response is
+  `sync_default_policy=true` when no preference file exists.
+- `one_click_update_preferences_set`: input `{ "sync_default_policy": true|false
+  }`. Persists the LuCI one-click update preference in the localClash work
+  directory so browser reloads, browser changes, and router-side task execution
+  share the same value.
 - `apply`: input is the LuCI desired state without `version`. The helper adds
   `version: 1`, writes a temporary JSON file, calls
   `localclash apply --input <file> --json`, then removes the temp file.

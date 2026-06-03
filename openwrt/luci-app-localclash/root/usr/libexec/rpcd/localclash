@@ -96,6 +96,89 @@ boot_restore_status() {
 	ok "$(boot_restore_json)"
 }
 
+one_click_update_preferences_path() {
+	local workdir
+	if [ -n "${LOCALCLASH_ONE_CLICK_UPDATE_PREFERENCES_FILE:-}" ]; then
+		printf '%s\n' "$LOCALCLASH_ONE_CLICK_UPDATE_PREFERENCES_FILE"
+		return 0
+	fi
+	workdir="$(resolve_state_dir)" || return 1
+	printf '%s/luci-preferences.json\n' "$workdir"
+}
+
+one_click_update_sync_default_policy_preference() {
+	local path value
+	path="$(one_click_update_preferences_path)" || return 1
+	if [ ! -f "$path" ]; then
+		printf 'true\n'
+		return 0
+	fi
+	value="$(jsonfilter -i "$path" -e '@.one_click_update.sync_default_policy' 2>/dev/null || true)"
+	case "$value" in
+		true|false) printf '%s\n' "$value" ;;
+		*)
+			fail_with_details "invalid_one_click_update_preferences" "一键更新偏好文件无效，请删除后重新设置。" '"path":"'"$(json_escape "$path")"'"'
+			return 1
+			;;
+	esac
+}
+
+one_click_update_preferences() {
+	local path value defaulted
+	path="$(one_click_update_preferences_path)" || {
+		printf '%s\n' "$path"
+		return 1
+	}
+	value="$(one_click_update_sync_default_policy_preference)" || {
+		printf '%s\n' "$value"
+		return 1
+	}
+	defaulted=false
+	[ ! -f "$path" ] && defaulted=true
+	ok '"preferences":{"one_click_update":{"sync_default_policy":'"$value"'}},"defaulted":'"$defaulted"',"path":"'"$(json_escape "$path")"'"'
+}
+
+one_click_update_preferences_set_value() {
+	local value path dir tmp
+	value="$1"
+	case "$value" in
+		true|false) ;;
+		*)
+			fail_with_details "invalid_one_click_update_preferences_input" "sync_default_policy 必须是 true 或 false。" '"sync_default_policy":"'"$(json_escape "$value")"'"'
+			return 1
+			;;
+	esac
+	path="$(one_click_update_preferences_path)" || {
+		printf '%s\n' "$path"
+		return 1
+	}
+	dir="$(dirname "$path")"
+	if ! mkdir -p "$dir"; then
+		fail_with_details "one_click_update_preferences_write_failed" "无法创建一键更新偏好目录。" '"path":"'"$(json_escape "$dir")"'"'
+		return 1
+	fi
+	tmp="${path}.$$"
+	umask 077
+	if ! printf '{"version":1,"one_click_update":{"sync_default_policy":%s}}\n' "$value" > "$tmp"; then
+		rm -f "$tmp"
+		fail_with_details "one_click_update_preferences_write_failed" "无法写入一键更新偏好文件。" '"path":"'"$(json_escape "$path")"'"'
+		return 1
+	fi
+	if ! mv "$tmp" "$path"; then
+		rm -f "$tmp"
+		fail_with_details "one_click_update_preferences_write_failed" "无法保存一键更新偏好文件。" '"path":"'"$(json_escape "$path")"'"'
+		return 1
+	fi
+	ok '"changed":true,"preferences":{"one_click_update":{"sync_default_policy":'"$value"'}},"path":"'"$(json_escape "$path")"'"'
+}
+
+one_click_update_preferences_set() {
+	local payload value
+	payload="$(strip_ubus_rpc_session "$(cat)")"
+	value="$(jsonfilter -s "$payload" -e '@.sync_default_policy' 2>/dev/null || true)"
+	one_click_update_preferences_set_value "$value"
+}
+
 luci_package_json() {
 	local installed manager version
 	installed=false
@@ -1505,14 +1588,16 @@ component_update() {
 }
 
 start_one_click_update() {
-	local result rc bg_pid
+	local result rc bg_pid payload
 	clear_stale_lock
 	if [ -d "$LOCK_DIR" ]; then
 		printf '{"ok":true,"started":false,"running":true,"summary":"另一个 localClash 任务正在运行。"}\n'
 		return 0
 	fi
+	payload="$(strip_ubus_rpc_session "$(cat)")"
 	rm -f "$TASK_STATUS" "$TASK_RESULT" "$TASK_INPUT" "$TASK_PID"
 	: > "$LOG"
+	write_versioned_payload "$payload" > "$TASK_INPUT"
 	write_task_running "一键更新任务正在运行。"
 	log_line "一键更新：已加入后台任务队列"
 	(
@@ -1523,7 +1608,7 @@ start_one_click_update() {
 		fi
 		printf '%s\n' "$result" > "$TASK_RESULT"
 		printf '{"ok":true,"running":false,"done":true,"exit_code":%s,"result":%s}\n' "$rc" "$result" > "$TASK_STATUS"
-		rm -f "$TASK_PID"
+		rm -f "$TASK_INPUT" "$TASK_PID"
 		if [ "$rc" -eq 0 ] && one_click_update_luci_changed "$result"; then
 			luci_schedule_service_reload
 		fi
@@ -1534,7 +1619,38 @@ start_one_click_update() {
 }
 
 one_click_update_run() {
-	local tmpdir runtime_was_running takeover_was_effective profile_mode subscription_ready subscription_refresh_failed subscription_cache_used subscription_refresh_json mihomo_changed dashboard_changed restart_strategy runtime_recovered takeover_recovered mcp_healthy
+	local tmpdir payload sync_default_policy runtime_was_running takeover_was_effective profile_mode subscription_ready subscription_refresh_failed subscription_cache_used subscription_refresh_json policy_template_sync_json mihomo_changed dashboard_changed restart_strategy runtime_recovered takeover_recovered mcp_healthy current_mode current_core
+	payload='{"version":1}'
+	if [ -f "$TASK_INPUT" ]; then
+		payload="$(cat "$TASK_INPUT" 2>/dev/null || printf '{"version":1}')"
+	fi
+	sync_default_policy="$(jsonfilter -s "$payload" -e '@.sync_default_policy' 2>/dev/null || true)"
+	case "$sync_default_policy" in
+		true|false)
+			sync_default_policy="$(one_click_update_preferences_set_value "$sync_default_policy")" || {
+				printf '%s\n' "$sync_default_policy"
+				return 1
+			}
+			sync_default_policy="$(jsonfilter -s "$sync_default_policy" -e '@.preferences.one_click_update.sync_default_policy' 2>/dev/null || true)"
+			;;
+		"")
+			sync_default_policy="$(one_click_update_sync_default_policy_preference)" || {
+				printf '%s\n' "$sync_default_policy"
+				return 1
+			}
+			;;
+		*)
+			fail_with_details "invalid_one_click_update_input" "sync_default_policy 必须是 true 或 false。" '"sync_default_policy":"'"$(json_escape "$sync_default_policy")"'"'
+			return 1
+			;;
+	esac
+	case "$sync_default_policy" in
+		true|false) ;;
+		*)
+			fail_with_details "invalid_one_click_update_preferences" "一键更新偏好文件无效，请删除后重新设置。" '"sync_default_policy":"'"$(json_escape "$sync_default_policy")"'"'
+			return 1
+			;;
+	esac
 	runtime_was_running=false
 	takeover_was_effective=false
 	profile_mode=""
@@ -1542,6 +1658,7 @@ one_click_update_run() {
 	subscription_refresh_failed=false
 	subscription_cache_used=false
 	subscription_refresh_json='null'
+	policy_template_sync_json='{"ok":true,"changed":false,"skipped":true,"summary":"未选择同步最新默认策略。"}'
 	mihomo_changed=false
 	dashboard_changed=false
 	restart_strategy="skipped"
@@ -1641,6 +1758,53 @@ one_click_update_run() {
 		rm -rf "$tmpdir"
 		return 1
 	}
+
+	if [ "$sync_default_policy" = "true" ]; then
+		log_line "一键更新：准备同步最新默认策略"
+		if ! call_core config status --json > "$tmpdir/config-status.json"; then
+			log_line "一键更新：配置状态读取失败，无法同步默认策略"
+			cat "$tmpdir/config-status.json" 2>/dev/null || true
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		current_mode="$(jsonfilter -i "$tmpdir/config-status.json" -e '@.status.runtime_profile.mode' 2>/dev/null || true)"
+		current_core="$(jsonfilter -i "$tmpdir/config-status.json" -e '@.status.runtime_profile.core' 2>/dev/null || true)"
+		case "$current_mode" in
+			normal|router) ;;
+			*)
+				fail_with_details "runtime_profile_status_invalid" "无法读取当前 runtime profile mode，已停止同步默认策略。" '"mode":"'"$(json_escape "$current_mode")"'"'
+				rm -rf "$tmpdir"
+				return 1
+				;;
+		esac
+		case "$current_core" in
+			meta|smart) ;;
+			*)
+				fail_with_details "runtime_profile_status_invalid" "无法读取当前 runtime core，已停止同步默认策略。" '"core":"'"$(json_escape "$current_core")"'"'
+				rm -rf "$tmpdir"
+				return 1
+				;;
+		esac
+		cat > "$tmpdir/template-sync.json" <<JSON
+{
+  "version": 1,
+  "template": "localclash-default",
+  "runtime_profile": "$current_mode",
+  "core": "$current_core",
+  "allow_overwrite_modified": true,
+  "refresh_policy_template_patches": true
+}
+JSON
+		if ! run_with_heartbeat "一键更新：正在同步最新默认策略" "$tmpdir/policy-template-sync.json" call_core config apply-template --input "$tmpdir/template-sync.json" --json; then
+			log_line "一键更新：默认策略同步失败"
+			cat "$tmpdir/policy-template-sync.json"
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		policy_template_sync_json="$(cat "$tmpdir/policy-template-sync.json")"
+	else
+		log_line "一键更新：未选择同步最新默认策略"
+	fi
 
 	log_line "一键更新：检查已保存订阅"
 	if ! call_core subscription status --json > "$tmpdir/subscription-status.json"; then
@@ -1763,7 +1927,7 @@ one_click_update_run() {
 	fi
 
 	log_line "一键更新：已完成"
-	printf '{"ok":true,"changed":true,"summary":"一键更新已完成。","minimal_outage":{"runtime_kept_until_final_switch":true,"restart_strategy":"%s","runtime_was_running":%s,"runtime_recovered":%s,"takeover_was_effective":%s,"takeover_recovered":%s},"luci":%s,"core":%s,"mihomo":%s,"dashboard":%s,"subscription":{"configured":%s,"refresh_failed":%s,"used_cached_artifact":%s,"refresh":%s},"mcp_service":%s}\n' \
+	printf '{"ok":true,"changed":true,"summary":"一键更新已完成。","minimal_outage":{"runtime_kept_until_final_switch":true,"restart_strategy":"%s","runtime_was_running":%s,"runtime_recovered":%s,"takeover_was_effective":%s,"takeover_recovered":%s},"luci":%s,"core":%s,"mihomo":%s,"dashboard":%s,"policy_template_sync":%s,"subscription":{"configured":%s,"refresh_failed":%s,"used_cached_artifact":%s,"refresh":%s},"mcp_service":%s}\n' \
 		"$(json_escape "$restart_strategy")" \
 		"$runtime_was_running" \
 		"$runtime_recovered" \
@@ -1773,6 +1937,7 @@ one_click_update_run() {
 		"$(cat "$tmpdir/core.json")" \
 		"$(cat "$tmpdir/mihomo.json")" \
 		"$(cat "$tmpdir/dashboard.json")" \
+		"$policy_template_sync_json" \
 		"$subscription_ready" \
 		"$subscription_refresh_failed" \
 		"$subscription_cache_used" \
@@ -2620,7 +2785,9 @@ case "$method" in
   "subscription_refresh": {},
   "component_update": { "component": "localclash" },
   "component_update_async": { "component": "localclash" },
-  "one_click_update": {},
+  "one_click_update": { "sync_default_policy": false },
+  "one_click_update_preferences": {},
+  "one_click_update_preferences_set": { "sync_default_policy": false },
   "core_update_check": {},
   "luci_update_check": {},
   "luci_update_async": {},
@@ -2666,6 +2833,8 @@ JSON
 	component_update_async) start_component_update ;;
 	component_update_run) component_update_run ;;
 	one_click_update) start_one_click_update ;;
+	one_click_update_preferences) one_click_update_preferences ;;
+	one_click_update_preferences_set) one_click_update_preferences_set ;;
 	one_click_update_run) with_lock one_click_update_run ;;
 	core_update_check) core_update_check ;;
 	luci_update_check) luci_update_check ;;

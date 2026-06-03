@@ -41,6 +41,27 @@ json_bool() {
 	return 1
 }
 case "$expr" in
+	@.sync_default_policy)
+		json_bool sync_default_policy
+		;;
+	@.one_click_update.sync_default_policy)
+		if printf '%s\n' "$content" | grep -q '"one_click_update"[[:space:]]*:[[:space:]]*{[^}]*"sync_default_policy"[[:space:]]*:[[:space:]]*true'; then
+			printf 'true\n'
+		elif printf '%s\n' "$content" | grep -q '"one_click_update"[[:space:]]*:[[:space:]]*{[^}]*"sync_default_policy"[[:space:]]*:[[:space:]]*false'; then
+			printf 'false\n'
+		else
+			exit 1
+		fi
+		;;
+	@.preferences.one_click_update.sync_default_policy)
+		if printf '%s\n' "$content" | grep -q '"preferences"[[:space:]]*:[[:space:]]*{[^}]*"one_click_update"[[:space:]]*:[[:space:]]*{[^}]*"sync_default_policy"[[:space:]]*:[[:space:]]*true'; then
+			printf 'true\n'
+		elif printf '%s\n' "$content" | grep -q '"preferences"[[:space:]]*:[[:space:]]*{[^}]*"one_click_update"[[:space:]]*:[[:space:]]*{[^}]*"sync_default_policy"[[:space:]]*:[[:space:]]*false'; then
+			printf 'false\n'
+		else
+			exit 1
+		fi
+		;;
 	@.changed)
 		json_bool changed
 		;;
@@ -62,6 +83,12 @@ case "$expr" in
 	@.status.profile_mode)
 		printf '%s\n' "$content" | sed -n 's/.*"profile_mode"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
 		;;
+	@.status.runtime_profile.mode)
+		printf '%s\n' "$content" | sed -n 's/.*"runtime_profile"[[:space:]]*:[[:space:]]*{[^}]*"mode"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+		;;
+	@.status.runtime_profile.core)
+		printf '%s\n' "$content" | sed -n 's/.*"runtime_profile"[[:space:]]*:[[:space:]]*{[^}]*"core"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+		;;
 	*) exit 1 ;;
 esac
 EOF
@@ -73,6 +100,7 @@ awk '/^method="\$\{1:-\}"/ { exit } { print }' "${helper}" > "${tmp_dir}/functio
 
 LOG="${tmp_dir}/helper.log"
 STATE_DIR="${tmp_dir}/state"
+TASK_INPUT="${tmp_dir}/task-input.json"
 mkdir -p "$STATE_DIR"
 
 trace() {
@@ -87,6 +115,14 @@ fail_test() {
 assert_json() {
 	local payload="$1"
 	printf '%s\n' "$payload" | python3 -m json.tool >/dev/null || fail_test "invalid JSON: ${payload}"
+}
+
+set_task_input() {
+	printf '%s\n' "$1" > "$TASK_INPUT"
+}
+
+clear_task_input() {
+	rm -f "$TASK_INPUT"
 }
 
 core_installed() {
@@ -147,6 +183,13 @@ call_core() {
 				printf '{"ok":true,"changed":true,"summary":"subscription refreshed"}\n'
 			fi
 			;;
+		"config status --json")
+			printf '{"status":{"runtime_profile":{"mode":"router","core":"smart"}}}\n'
+			;;
+		config\ apply-template\ --input\ *\ --json)
+			cp "$4" "${tmp_dir}/template-sync-input.json"
+			printf '{"ok":true,"changed":true,"summary":"default policy synced"}\n'
+			;;
 		"config render --json")
 			if [ "${MOCK_CONFIG_RENDER_FAIL:-0}" = "1" ]; then
 				printf '{"ok":false,"code":"cached_subscription_invalid","message":"cached subscription cannot render"}\n'
@@ -169,7 +212,18 @@ call_core() {
 }
 
 : > "${tmp_dir}/trace"
+result="$(one_click_update_preferences)"
+assert_json "$result"
+printf '%s\n' "$result" | grep -q '"sync_default_policy":true' || fail_test "default sync preference should be true: ${result}"
+
+result="$(printf '{"sync_default_policy":false}' | one_click_update_preferences_set)"
+assert_json "$result"
+printf '%s\n' "$result" | grep -q '"sync_default_policy":false' || fail_test "sync preference false was not saved: ${result}"
+grep -q '"sync_default_policy":false' "${STATE_DIR}/luci-preferences.json" || fail_test "sync preference file was not persisted"
+
+set_task_input '{"version":1,"sync_default_policy":false}'
 result="$(one_click_update_run)"
+clear_task_input
 assert_json "$result"
 printf '%s\n' "$result" | grep -q '"ok":true' || fail_test "one_click_update_run failed: ${result}"
 printf '%s\n' "$result" | grep -q '"restart_strategy":"process_restart"' || fail_test "restart strategy mismatch: ${result}"
@@ -200,16 +254,20 @@ if ! diff -u "$expected" "${tmp_dir}/trace"; then
 fi
 
 : > "${tmp_dir}/trace"
+set_task_input '{"version":1,"sync_default_policy":false}'
 MOCK_MIHOMO_CHANGED_MISSING=1
 result="$(one_click_update_run || true)"
+clear_task_input
 assert_json "$result"
 unset MOCK_MIHOMO_CHANGED_MISSING
 printf '%s\n' "$result" | grep -q '"ok":false' || fail_test "missing changed did not fail: ${result}"
 printf '%s\n' "$result" | grep -q '"code":"component_update_result_invalid"' || fail_test "missing changed code mismatch: ${result}"
 
 : > "${tmp_dir}/trace"
+set_task_input '{"version":1,"sync_default_policy":false}'
 MOCK_SUBSCRIPTION_REFRESH_FAIL=1
 result="$(one_click_update_run 2>"${tmp_dir}/subscription-refresh-fallback.stderr")"
+clear_task_input
 assert_json "$result"
 unset MOCK_SUBSCRIPTION_REFRESH_FAIL
 printf '%s\n' "$result" | grep -q '"ok":true' || fail_test "subscription refresh fallback failed: ${result}"
@@ -240,9 +298,48 @@ if ! diff -u "$expected" "${tmp_dir}/trace"; then
 fi
 
 : > "${tmp_dir}/trace"
+set_task_input '{"version":1,"sync_default_policy":true}'
+result="$(one_click_update_run)"
+clear_task_input
+assert_json "$result"
+printf '%s\n' "$result" | grep -q '"ok":true' || fail_test "sync default policy run failed: ${result}"
+printf '%s\n' "$result" | grep -q '"policy_template_sync"' || fail_test "policy sync result missing: ${result}"
+grep -q '"sync_default_policy":true' "${STATE_DIR}/luci-preferences.json" || fail_test "one-click run did not persist true sync preference"
+grep -q '"refresh_policy_template_patches":[[:space:]]*true' "${tmp_dir}/template-sync-input.json" || fail_test "template sync did not request policy-template-only refresh"
+grep -q '"reset_patches"' "${tmp_dir}/template-sync-input.json" && fail_test "template sync should not request reset_patches"
+grep -q '"core":[[:space:]]*"smart"' "${tmp_dir}/template-sync-input.json" || fail_test "template sync did not preserve current smart core"
+
+sed -E 's#--input /tmp/localclash-one-click-update[.][^ ]+/template-sync[.]json#--input <template-sync>#' "${tmp_dir}/trace" > "${tmp_dir}/trace.normalized"
+cat > "$expected" <<EOF
+call_core runtime status --json
+call_core takeover status --json
+luci_update
+bootstrap_core
+service_status
+call_core component update mihomo --json
+call_core component update dashboard --json
+call_core config status --json
+call_core config apply-template --input <template-sync> --json
+call_core subscription status --json
+call_core subscription refresh --json
+call_core config render --json
+call_core mihomo config-test --json
+call_core runtime restart --strategy process_restart --json
+takeover_apply
+call_core takeover status --json
+service_status
+EOF
+
+if ! diff -u "$expected" "${tmp_dir}/trace.normalized"; then
+	fail_test "sync default policy order mismatch"
+fi
+
+: > "${tmp_dir}/trace"
+set_task_input '{"version":1,"sync_default_policy":false}'
 MOCK_SUBSCRIPTION_REFRESH_FAIL=1
 MOCK_CONFIG_RENDER_FAIL=1
 result="$(one_click_update_run 2>"${tmp_dir}/subscription-cache-invalid.stderr" || true)"
+clear_task_input
 assert_json "$result"
 unset MOCK_SUBSCRIPTION_REFRESH_FAIL MOCK_CONFIG_RENDER_FAIL
 printf '%s\n' "$result" | grep -q '"ok":false' || fail_test "invalid cached subscription did not fail: ${result}"
