@@ -125,6 +125,32 @@ clear_task_input() {
 	rm -f "$TASK_INPUT"
 }
 
+(
+	LOG="${tmp_dir}/mirror-switch.log"
+	MIRROR_CACHE_DIR="${tmp_dir}/mirror-cache"
+	GITHUB_RELEASE_MIRRORS="https://mirror.example/https://github.com"
+	downloaded="${tmp_dir}/mirror-download.out"
+	stderr="${tmp_dir}/mirror-switch.stderr"
+	: > "$LOG"
+	fetch_single_url() {
+		case "$1" in
+			https://github.com/*)
+				printf 'Failed to send request: Operation not permitted\n' >&2
+				return 1
+				;;
+			https://mirror.example/*)
+				printf 'ok\n' > "$2"
+				return 0
+				;;
+		esac
+		return 1
+	}
+	fetch_url_direct_first "https://github.com/qoli/localclash-luci/releases/download/v-test/luci-app-localclash_0.1.0-test_all.ipk.sha256" "$downloaded" 2>"$stderr" || fail_test "direct-first mirror fallback failed"
+	grep -q 'Failed to send request: Operation not permitted' "$stderr" || fail_test "raw fetch stderr was not preserved"
+	grep -q '下载：正在切换 GitHub 镜像' "$LOG" || fail_test "mirror switch log was not written"
+	grep -q '^ok$' "$downloaded" || fail_test "mirror download output mismatch"
+)
+
 core_installed() {
 	return 0
 }

@@ -1090,9 +1090,10 @@ fetch_url() {
 }
 
 fetch_url_direct_first() {
-	local url output tmp candidate
+	local url output tmp candidate switched
 	url="$1"
 	output="$2"
+	switched=false
 	tmp="$output.download.$$"
 	rm -f "$tmp"
 	log_line "下载：尝试 $url"
@@ -1103,6 +1104,10 @@ fetch_url_direct_first() {
 	rm -f "$tmp"
 	for candidate in $(github_download_candidates "$url"); do
 		[ "$candidate" = "$url" ] && continue
+		if [ "$switched" = false ]; then
+			log_line "下载：正在切换 GitHub 镜像"
+			switched=true
+		fi
 		log_line "下载：尝试 $candidate"
 		if fetch_single_url "$candidate" "$tmp"; then
 			mv "$tmp" "$output"
@@ -1140,10 +1145,11 @@ fetch_manifest() {
 }
 
 fetch_url_verified_direct_first() {
-	local url output expected_sha tmp candidate actual_sha
+	local url output expected_sha tmp candidate actual_sha switched
 	url="$1"
 	output="$2"
 	expected_sha="$3"
+	switched=false
 	tmp="$output.download.$$"
 	rm -f "$tmp"
 	log_line "下载：尝试 $url"
@@ -1158,6 +1164,10 @@ fetch_url_verified_direct_first() {
 	rm -f "$tmp"
 	for candidate in $(github_download_candidates "$url"); do
 		[ "$candidate" = "$url" ] && continue
+		if [ "$switched" = false ]; then
+			log_line "下载：正在切换 GitHub 镜像"
+			switched=true
+		fi
 		log_line "下载：尝试 $candidate"
 		if fetch_single_url "$candidate" "$tmp"; then
 			actual_sha="$(sha256sum "$tmp" | cut -d ' ' -f 1)"
