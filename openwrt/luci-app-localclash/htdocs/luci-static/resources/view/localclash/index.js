@@ -82,6 +82,12 @@ var callComponentUpdateAsync = rpc.declare({
 	expect: { '': {} }
 });
 
+var callOneClickUpdate = rpc.declare({
+	object: 'localclash',
+	method: 'one_click_update',
+	expect: { '': {} }
+});
+
 var callTakeoverStatus = rpc.declare({
 	object: 'localclash',
 	method: 'takeover_status',
@@ -838,6 +844,12 @@ return view.extend({
 					commandButton(_('查看日志'), callBootstrapLogs, null, { keepOpen: true })
 				])
 			])),
+			section(_('更新'), E('div', {}, [
+				E('p', {}, [ _('更新 LuCI、localClash 核心、Mihomo 核心和 Dashboard，刷新订阅并在最后恢复运行时和网络接管。') ]),
+				actionRow([
+					liveTaskButton(_('一键更新'), callOneClickUpdate, 'cbi-button-apply')
+				])
+			])),
 			section(_('MCP 服务'), actionRow([
 				commandButton(_('启动 MCP 服务'), callServiceStart, 'cbi-button-apply'),
 				commandButton(_('停止 MCP 服务'), callServiceStop, 'cbi-button-reset')
@@ -849,7 +861,7 @@ return view.extend({
 				commandButton(_('重启'), callRuntimeRestart),
 				commandButton(_('停止'), callRuntimeStop, 'cbi-button-reset')
 			])),
-			section(_('组件'), actionRow([
+			section(_('高级组件维护'), actionRow([
 				liveTaskButton(_('更新 localClash'), function() { return callComponentUpdateAsync('localclash'); }),
 				liveTaskButton(_('更新 Mihomo'), function() { return callComponentUpdateAsync('mihomo'); }),
 				liveTaskButton(_('更新 Dashboard'), function() { return callComponentUpdateAsync('dashboard'); }),

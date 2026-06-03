@@ -133,7 +133,7 @@
 
 ## 以后怎么更新
 
-localClash 现在可以在页面里分别更新 LuCI 界面、localClash 核心、Mihomo 核心和 Dashboard。
+localClash 现在提供 `一键更新`：更新 LuCI 界面、localClash 核心、Mihomo 核心和 Dashboard，并自动刷新已保存订阅、重建配置，最后恢复运行时和网络接管。
 
 日常更新时，先进入：
 
@@ -141,9 +141,9 @@ localClash 现在可以在页面里分别更新 LuCI 界面、localClash 核心�
 服务 -> localClash
 ```
 
-在 `概览` 页的 `LuCI 界面` 一行点击 `检查更新`，可以更新 OpenWrt 后台页面。更新完成后刷新浏览器页面。
+在 `概览` 页点击 `一键更新`。更新准备阶段会尽量保持当前运行时继续工作；只有最后切换 Mihomo 运行时并恢复接管时，可能会短暂断网。
 
-如果要单独更新运行时组件，进入进阶页面：
+如果要单独维护某个组件，可以使用 `高级组件维护`：
 
 - 点 `安装 / 更新核心`：安装或刷新 localClash 核心和基础文件。
 - 点 `更新 localClash`：更新 localClash 运行时程序。

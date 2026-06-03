@@ -247,6 +247,27 @@ luci_update_changed() {
 	[ "$(jsonfilter -s "$1" -e '@.changed' 2>/dev/null)" = "true" ]
 }
 
+one_click_update_luci_changed() {
+	[ "$(jsonfilter -s "$1" -e '@.luci.changed' 2>/dev/null)" = "true" ]
+}
+
+json_bool_required() {
+	local file expr value code message
+	file="$1"
+	expr="$2"
+	code="$3"
+	message="$4"
+	value="$(jsonfilter -i "$file" -e "$expr" 2>/dev/null || true)"
+	case "$value" in
+		true|false)
+			printf '%s\n' "$value"
+			return 0
+			;;
+	esac
+	fail_with_details "$code" "$message" '"path":"'"$(json_escape "$file")"'","expr":"'"$(json_escape "$expr")"'","value":"'"$(json_escape "$value")"'"'
+	return 1
+}
+
 core_update_check() {
 	local arch tmpdir manifest asset_url asset_sha asset_version current_sha relation update_available
 	log_line "localClash 核心更新检查：开始"
@@ -1483,6 +1504,268 @@ component_update() {
 	esac
 }
 
+start_one_click_update() {
+	local result rc bg_pid
+	clear_stale_lock
+	if [ -d "$LOCK_DIR" ]; then
+		printf '{"ok":true,"started":false,"running":true,"summary":"另一个 localClash 任务正在运行。"}\n'
+		return 0
+	fi
+	rm -f "$TASK_STATUS" "$TASK_RESULT" "$TASK_INPUT" "$TASK_PID"
+	: > "$LOG"
+	write_task_running "一键更新任务正在运行。"
+	log_line "一键更新：已加入后台任务队列"
+	(
+		result="$("$0" call one_click_update_run 2>>"$LOG")"
+		rc=$?
+		if [ -z "$result" ]; then
+			result='{"ok":false,"code":"empty_task_result","message":"一键更新任务没有产生 JSON 结果。","details":{},"next_actions":[]}'
+		fi
+		printf '%s\n' "$result" > "$TASK_RESULT"
+		printf '{"ok":true,"running":false,"done":true,"exit_code":%s,"result":%s}\n' "$rc" "$result" > "$TASK_STATUS"
+		rm -f "$TASK_PID"
+		if [ "$rc" -eq 0 ] && one_click_update_luci_changed "$result"; then
+			luci_schedule_service_reload
+		fi
+	) >/dev/null 2>&1 &
+	bg_pid="$!"
+	write_task_pid "$bg_pid"
+	ok '"started":true,"running":true,"summary":"一键更新任务已启动。准备阶段不会停止当前运行时；只有最终切换运行时时可能短暂断网。"'
+}
+
+one_click_update_run() {
+	local tmpdir runtime_was_running takeover_was_effective profile_mode subscription_ready mihomo_changed dashboard_changed restart_strategy runtime_recovered takeover_recovered mcp_healthy
+	runtime_was_running=false
+	takeover_was_effective=false
+	profile_mode=""
+	subscription_ready=false
+	mihomo_changed=false
+	dashboard_changed=false
+	restart_strategy="skipped"
+	runtime_recovered=false
+	takeover_recovered=false
+
+	log_line "一键更新：开始"
+	tmpdir="$(mktemp -d /tmp/localclash-one-click-update.XXXXXX)" || {
+		fail "tmpdir_failed" "无法创建一键更新临时目录。"
+		return 1
+	}
+
+	if core_installed; then
+		log_line "一键更新：记录更新前运行时状态"
+		if ! call_core runtime status --json > "$tmpdir/runtime-before.json"; then
+			log_line "一键更新：运行时状态读取失败"
+			cat "$tmpdir/runtime-before.json" 2>/dev/null || true
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		runtime_was_running="$(json_bool_required "$tmpdir/runtime-before.json" '@.status.running' "runtime_status_invalid" "无法读取更新前运行时状态。")" || {
+			printf '%s\n' "$runtime_was_running"
+			rm -rf "$tmpdir"
+			return 1
+		}
+
+		log_line "一键更新：记录更新前网络接管状态"
+		if ! call_core takeover status --json > "$tmpdir/takeover-before.json"; then
+			log_line "一键更新：网络接管状态读取失败"
+			cat "$tmpdir/takeover-before.json" 2>/dev/null || true
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		takeover_was_effective="$(json_bool_required "$tmpdir/takeover-before.json" '@.status.effective' "takeover_status_invalid" "无法读取更新前网络接管状态。")" || {
+			printf '%s\n' "$takeover_was_effective"
+			rm -rf "$tmpdir"
+			return 1
+		}
+		profile_mode="$(jsonfilter -i "$tmpdir/takeover-before.json" -e '@.status.profile_mode' 2>/dev/null || true)"
+	else
+		log_line "一键更新：localClash 核心尚未安装，跳过运行时快照"
+	fi
+
+	log_line "一键更新：准备阶段开始，当前运行时保持不动"
+	if ! run_with_heartbeat "一键更新：正在更新 LuCI 界面" "$tmpdir/luci.json" luci_update; then
+		log_line "一键更新：LuCI 更新失败"
+		cat "$tmpdir/luci.json"
+		rm -rf "$tmpdir"
+		return 1
+	fi
+
+	if ! run_with_heartbeat "一键更新：正在更新 localClash 核心" "$tmpdir/core.json" bootstrap_core; then
+		log_line "一键更新：localClash 核心更新失败"
+		cat "$tmpdir/core.json"
+		rm -rf "$tmpdir"
+		return 1
+	fi
+
+	if ! service_status > "$tmpdir/mcp-service.json"; then
+		log_line "一键更新：MCP 服务状态读取失败"
+		cat "$tmpdir/mcp-service.json"
+		rm -rf "$tmpdir"
+		return 1
+	fi
+	mcp_healthy="$(json_bool_required "$tmpdir/mcp-service.json" '@.mcp.healthy' "mcp_service_status_invalid" "无法读取 MCP 服务健康状态。")" || {
+		printf '%s\n' "$mcp_healthy"
+		rm -rf "$tmpdir"
+		return 1
+	}
+	if [ "$mcp_healthy" != "true" ]; then
+		log_line "一键更新：MCP 服务健康检查未通过"
+		fail "mcp_service_unhealthy" "localClash 核心已更新，但 MCP 服务健康检查未通过。"
+		rm -rf "$tmpdir"
+		return 1
+	fi
+
+	if ! run_with_heartbeat "一键更新：正在更新 Mihomo 核心" "$tmpdir/mihomo.json" call_core component update mihomo --json; then
+		log_line "一键更新：Mihomo 核心更新失败"
+		cat "$tmpdir/mihomo.json"
+		rm -rf "$tmpdir"
+		return 1
+	fi
+	mihomo_changed="$(json_bool_required "$tmpdir/mihomo.json" '@.changed' "component_update_result_invalid" "无法读取 Mihomo 核心更新结果。")" || {
+		printf '%s\n' "$mihomo_changed"
+		rm -rf "$tmpdir"
+		return 1
+	}
+
+	if ! run_with_heartbeat "一键更新：正在更新 Dashboard" "$tmpdir/dashboard.json" call_core component update dashboard --json; then
+		log_line "一键更新：Dashboard 更新失败"
+		cat "$tmpdir/dashboard.json"
+		rm -rf "$tmpdir"
+		return 1
+	fi
+	dashboard_changed="$(json_bool_required "$tmpdir/dashboard.json" '@.changed' "component_update_result_invalid" "无法读取 Dashboard 更新结果。")" || {
+		printf '%s\n' "$dashboard_changed"
+		rm -rf "$tmpdir"
+		return 1
+	}
+
+	log_line "一键更新：检查已保存订阅"
+	if ! call_core subscription status --json > "$tmpdir/subscription-status.json"; then
+		log_line "一键更新：订阅状态读取失败"
+		cat "$tmpdir/subscription-status.json" 2>/dev/null || true
+		rm -rf "$tmpdir"
+		return 1
+	fi
+	subscription_ready="$(json_bool_required "$tmpdir/subscription-status.json" '@.status.configured' "subscription_status_invalid" "无法读取订阅配置状态。")" || {
+		printf '%s\n' "$subscription_ready"
+		rm -rf "$tmpdir"
+		return 1
+	}
+
+	if [ "$subscription_ready" = "true" ]; then
+		if ! run_with_heartbeat "一键更新：正在刷新订阅" "$tmpdir/subscription-refresh.json" call_core subscription refresh --json; then
+			log_line "一键更新：订阅刷新失败"
+			cat "$tmpdir/subscription-refresh.json"
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		if ! run_with_heartbeat "一键更新：正在生成 Mihomo 配置" "$tmpdir/render.json" call_core config render --json; then
+			log_line "一键更新：配置生成失败"
+			cat "$tmpdir/render.json"
+			rm -rf "$tmpdir"
+			return 1
+		fi
+	else
+		log_line "一键更新：未配置订阅，跳过订阅刷新和配置重建"
+	fi
+
+	if [ "$subscription_ready" = "true" ] || [ "$runtime_was_running" = "true" ]; then
+		if ! run_with_heartbeat "一键更新：正在验证 Mihomo 配置" "$tmpdir/config-test.json" call_core mihomo config-test --json; then
+			log_line "一键更新：Mihomo 配置验证失败"
+			cat "$tmpdir/config-test.json"
+			rm -rf "$tmpdir"
+			return 1
+		fi
+	else
+		log_line "一键更新：没有订阅且更新前运行时未运行，跳过配置验证"
+	fi
+
+	if [ "$runtime_was_running" = "true" ]; then
+		restart_strategy="hot_reload"
+		if [ "$mihomo_changed" = "true" ]; then
+			restart_strategy="process_restart"
+		fi
+		log_line "一键更新：进入最短断网切换窗口，策略 ${restart_strategy}"
+		if ! run_with_heartbeat "一键更新：正在切换运行时" "$tmpdir/runtime-restart.json" call_core runtime restart --strategy "$restart_strategy" --json; then
+			log_line "一键更新：运行时切换失败"
+			cat "$tmpdir/runtime-restart.json"
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		runtime_recovered=true
+	else
+		log_line "一键更新：更新前运行时未运行，跳过运行时切换"
+	fi
+
+	if [ "$takeover_was_effective" = "true" ]; then
+		if [ "$profile_mode" != "router" ]; then
+			log_line "一键更新：更新前接管有效但 profile 不是 router，拒绝猜测恢复路径"
+			fail_with_details "takeover_snapshot_inconsistent" "更新前网络接管有效，但 runtime profile 不是 router，已停止在接管恢复前。" '"profile_mode":"'"$(json_escape "$profile_mode")"'"'
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		log_line "一键更新：恢复网络接管"
+		if ! run_with_heartbeat "一键更新：正在恢复网络接管" "$tmpdir/takeover-apply.json" takeover_apply; then
+			log_line "一键更新：网络接管恢复失败"
+			cat "$tmpdir/takeover-apply.json"
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		if ! call_core takeover status --json > "$tmpdir/takeover-after.json"; then
+			log_line "一键更新：接管恢复后状态读取失败"
+			cat "$tmpdir/takeover-after.json" 2>/dev/null || true
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		takeover_recovered="$(json_bool_required "$tmpdir/takeover-after.json" '@.status.effective' "takeover_status_invalid" "无法读取更新后网络接管状态。")" || {
+			printf '%s\n' "$takeover_recovered"
+			rm -rf "$tmpdir"
+			return 1
+		}
+		if [ "$takeover_recovered" != "true" ]; then
+			log_line "一键更新：接管恢复后仍未生效"
+			fail "takeover_restore_failed" "更新已完成，但网络接管恢复后仍未生效。"
+			rm -rf "$tmpdir"
+			return 1
+		fi
+	else
+		log_line "一键更新：更新前网络接管未生效，跳过接管恢复"
+	fi
+
+	if ! service_status > "$tmpdir/mcp-service-final.json"; then
+		log_line "一键更新：最终 MCP 服务状态读取失败"
+		cat "$tmpdir/mcp-service-final.json"
+		rm -rf "$tmpdir"
+		return 1
+	fi
+	mcp_healthy="$(json_bool_required "$tmpdir/mcp-service-final.json" '@.mcp.healthy' "mcp_service_status_invalid" "无法读取最终 MCP 服务健康状态。")" || {
+		printf '%s\n' "$mcp_healthy"
+		rm -rf "$tmpdir"
+		return 1
+	}
+	if [ "$mcp_healthy" != "true" ]; then
+		log_line "一键更新：最终 MCP 服务健康检查未通过"
+		fail "mcp_service_unhealthy" "一键更新已执行，但 MCP 服务健康检查未通过。"
+		rm -rf "$tmpdir"
+		return 1
+	fi
+
+	log_line "一键更新：已完成"
+	printf '{"ok":true,"changed":true,"summary":"一键更新已完成。","minimal_outage":{"runtime_kept_until_final_switch":true,"restart_strategy":"%s","runtime_was_running":%s,"runtime_recovered":%s,"takeover_was_effective":%s,"takeover_recovered":%s},"luci":%s,"core":%s,"mihomo":%s,"dashboard":%s,"subscription":{"configured":%s},"mcp_service":%s}\n' \
+		"$(json_escape "$restart_strategy")" \
+		"$runtime_was_running" \
+		"$runtime_recovered" \
+		"$takeover_was_effective" \
+		"$takeover_recovered" \
+		"$(cat "$tmpdir/luci.json")" \
+		"$(cat "$tmpdir/core.json")" \
+		"$(cat "$tmpdir/mihomo.json")" \
+		"$(cat "$tmpdir/dashboard.json")" \
+		"$subscription_ready" \
+		"$(cat "$tmpdir/mcp-service-final.json")"
+	rm -rf "$tmpdir"
+}
+
 start_bootstrap_core() {
 	local result rc bg_pid
 	clear_stale_lock
@@ -2322,6 +2605,7 @@ case "$method" in
   "subscription_refresh": {},
   "component_update": { "component": "localclash" },
   "component_update_async": { "component": "localclash" },
+  "one_click_update": {},
   "core_update_check": {},
   "luci_update_check": {},
   "luci_update_async": {},
@@ -2366,6 +2650,8 @@ JSON
 	component_update) with_lock component_update ;;
 	component_update_async) start_component_update ;;
 	component_update_run) component_update_run ;;
+	one_click_update) start_one_click_update ;;
+	one_click_update_run) with_lock one_click_update_run ;;
 	core_update_check) core_update_check ;;
 	luci_update_check) luci_update_check ;;
 	luci_update_async) start_luci_update ;;

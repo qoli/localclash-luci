@@ -874,6 +874,7 @@ status
 subscription_set
 subscription_refresh
 component_update
+one_click_update
 apply
 runtime_start
 runtime_restart
@@ -914,6 +915,15 @@ Method contracts:
   `localclash` uses the bootstrap helper to install or update from the latest
   release manifest; other values call
   `localclash component update <component> --json`.
+- `one_click_update`: no input. Starts a background task that updates LuCI,
+  localClash core, Mihomo core, and Dashboard; refreshes saved subscriptions;
+  renders and validates Mihomo config; then restores the previous runtime and
+  router takeover state. The task keeps the current runtime untouched during
+  download, update, render, and config-test preparation, and only enters the
+  outage window for the final runtime switch. If Mihomo core changed, the final
+  switch uses `runtime restart --strategy process_restart --json`; otherwise it
+  uses `--strategy hot_reload`. If router takeover was effective before the
+  update, success requires `takeover status` to report effective after restore.
 - `apply`: input is the LuCI desired state without `version`. The helper adds
   `version: 1`, writes a temporary JSON file, calls
   `localclash apply --input <file> --json`, then removes the temp file.
