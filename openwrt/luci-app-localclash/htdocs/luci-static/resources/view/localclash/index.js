@@ -776,6 +776,8 @@ return view.extend({
 				'.localclash-view + .cbi-page-actions,.localclash-view ~ .cbi-page-actions,.cbi-page-actions{display:none!important}',
 				'.localclash-view .localclash-muted{color:#667085;line-height:1.55}',
 				'.localclash-view .localclash-status-table{width:100%;max-width:100%}',
+				'.localclash-view table.table th,.localclash-view table.table td{text-align:left}',
+				'.localclash-view table.table tr.cbi-rowstyle-1,.localclash-view table.table tr.cbi-rowstyle-1 > th,.localclash-view table.table tr.cbi-rowstyle-1 > td{background-color:rgba(0,0,0,.1)}',
 				'.localclash-view .localclash-status-table th,.localclash-view .localclash-status-table td{vertical-align:top}',
 				'.localclash-view .localclash-status-table td:first-child{width:13rem;white-space:nowrap}',
 				'.localclash-view .localclash-status-table td:last-child{word-break:break-word}',
