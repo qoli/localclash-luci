@@ -924,6 +924,12 @@ Method contracts:
   switch uses `runtime restart --strategy process_restart --json`; otherwise it
   uses `--strategy hot_reload`. If router takeover was effective before the
   update, success requires `takeover status` to report effective after restore.
+  If saved subscriptions are configured but `subscription refresh --json` fails,
+  one-click update records `subscription.refresh_failed=true`, uses the existing
+  merged subscription cache, and continues only if `config render --json` and
+  `mihomo config-test --json` both pass. This fallback exists to recover the
+  router after component updates when a subscription provider is temporarily
+  unavailable; it must not silently hide an unusable or missing cache.
 - `apply`: input is the LuCI desired state without `version`. The helper adds
   `version: 1`, writes a temporary JSON file, calls
   `localclash apply --input <file> --json`, then removes the temp file.

@@ -84,6 +84,11 @@ fail_test() {
 	exit 1
 }
 
+assert_json() {
+	local payload="$1"
+	printf '%s\n' "$payload" | python3 -m json.tool >/dev/null || fail_test "invalid JSON: ${payload}"
+}
+
 core_installed() {
 	return 0
 }
@@ -135,10 +140,20 @@ call_core() {
 			printf '{"status":{"configured":true}}\n'
 			;;
 		"subscription refresh --json")
-			printf '{"ok":true,"changed":true,"summary":"subscription refreshed"}\n'
+			if [ "${MOCK_SUBSCRIPTION_REFRESH_FAIL:-0}" = "1" ]; then
+				printf '{"ok":false,"code":"subscription_fetch_failed","message":"subscription source unavailable"}\nprovider timeout\n'
+				return 1
+			else
+				printf '{"ok":true,"changed":true,"summary":"subscription refreshed"}\n'
+			fi
 			;;
 		"config render --json")
-			printf '{"ok":true,"changed":true,"summary":"config rendered"}\n'
+			if [ "${MOCK_CONFIG_RENDER_FAIL:-0}" = "1" ]; then
+				printf '{"ok":false,"code":"cached_subscription_invalid","message":"cached subscription cannot render"}\n'
+				return 1
+			else
+				printf '{"ok":true,"changed":true,"summary":"config rendered"}\n'
+			fi
 			;;
 		"mihomo config-test --json")
 			printf '{"ok":true,"changed":false,"summary":"config valid"}\n'
@@ -155,6 +170,7 @@ call_core() {
 
 : > "${tmp_dir}/trace"
 result="$(one_click_update_run)"
+assert_json "$result"
 printf '%s\n' "$result" | grep -q '"ok":true' || fail_test "one_click_update_run failed: ${result}"
 printf '%s\n' "$result" | grep -q '"restart_strategy":"process_restart"' || fail_test "restart strategy mismatch: ${result}"
 printf '%s\n' "$result" | grep -q '"takeover_recovered":true' || fail_test "takeover was not recovered: ${result}"
@@ -186,8 +202,50 @@ fi
 : > "${tmp_dir}/trace"
 MOCK_MIHOMO_CHANGED_MISSING=1
 result="$(one_click_update_run || true)"
+assert_json "$result"
 unset MOCK_MIHOMO_CHANGED_MISSING
 printf '%s\n' "$result" | grep -q '"ok":false' || fail_test "missing changed did not fail: ${result}"
 printf '%s\n' "$result" | grep -q '"code":"component_update_result_invalid"' || fail_test "missing changed code mismatch: ${result}"
+
+: > "${tmp_dir}/trace"
+MOCK_SUBSCRIPTION_REFRESH_FAIL=1
+result="$(one_click_update_run 2>"${tmp_dir}/subscription-refresh-fallback.stderr")"
+assert_json "$result"
+unset MOCK_SUBSCRIPTION_REFRESH_FAIL
+printf '%s\n' "$result" | grep -q '"ok":true' || fail_test "subscription refresh fallback failed: ${result}"
+printf '%s\n' "$result" | grep -q '"refresh_failed":true' || fail_test "subscription refresh failure was not reported: ${result}"
+printf '%s\n' "$result" | grep -q '"used_cached_artifact":true' || fail_test "cached subscription use was not reported: ${result}"
+printf '%s\n' "$result" | grep -q '"fallback_reason"' || fail_test "fallback reason missing: ${result}"
+
+cat > "$expected" <<EOF
+call_core runtime status --json
+call_core takeover status --json
+luci_update
+bootstrap_core
+service_status
+call_core component update mihomo --json
+call_core component update dashboard --json
+call_core subscription status --json
+call_core subscription refresh --json
+call_core config render --json
+call_core mihomo config-test --json
+call_core runtime restart --strategy process_restart --json
+takeover_apply
+call_core takeover status --json
+service_status
+EOF
+
+if ! diff -u "$expected" "${tmp_dir}/trace"; then
+	fail_test "subscription refresh fallback order mismatch"
+fi
+
+: > "${tmp_dir}/trace"
+MOCK_SUBSCRIPTION_REFRESH_FAIL=1
+MOCK_CONFIG_RENDER_FAIL=1
+result="$(one_click_update_run 2>"${tmp_dir}/subscription-cache-invalid.stderr" || true)"
+assert_json "$result"
+unset MOCK_SUBSCRIPTION_REFRESH_FAIL MOCK_CONFIG_RENDER_FAIL
+printf '%s\n' "$result" | grep -q '"ok":false' || fail_test "invalid cached subscription did not fail: ${result}"
+printf '%s\n' "$result" | grep -q '"code":"cached_subscription_invalid"' || fail_test "invalid cached subscription failure code mismatch: ${result}"
 
 printf 'rpcd one-click update tests passed\n'

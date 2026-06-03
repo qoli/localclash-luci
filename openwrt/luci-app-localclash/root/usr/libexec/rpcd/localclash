@@ -1534,11 +1534,14 @@ start_one_click_update() {
 }
 
 one_click_update_run() {
-	local tmpdir runtime_was_running takeover_was_effective profile_mode subscription_ready mihomo_changed dashboard_changed restart_strategy runtime_recovered takeover_recovered mcp_healthy
+	local tmpdir runtime_was_running takeover_was_effective profile_mode subscription_ready subscription_refresh_failed subscription_cache_used subscription_refresh_json mihomo_changed dashboard_changed restart_strategy runtime_recovered takeover_recovered mcp_healthy
 	runtime_was_running=false
 	takeover_was_effective=false
 	profile_mode=""
 	subscription_ready=false
+	subscription_refresh_failed=false
+	subscription_cache_used=false
+	subscription_refresh_json='null'
 	mihomo_changed=false
 	dashboard_changed=false
 	restart_strategy="skipped"
@@ -1654,10 +1657,18 @@ one_click_update_run() {
 
 	if [ "$subscription_ready" = "true" ]; then
 		if ! run_with_heartbeat "一键更新：正在刷新订阅" "$tmpdir/subscription-refresh.json" call_core subscription refresh --json; then
-			log_line "一键更新：订阅刷新失败"
-			cat "$tmpdir/subscription-refresh.json"
-			rm -rf "$tmpdir"
-			return 1
+			subscription_refresh_failed=true
+			subscription_cache_used=true
+			subscription_refresh_json="$(printf '{"ok":false,"changed":false,"summary":"订阅刷新失败，已使用缓存订阅继续。","fallback_reason":"一键更新需要在组件更新后尽量恢复可用运行时；订阅源临时不可用时，只要现有缓存订阅还能通过配置生成和 Mihomo 配置验证，就继续完成运行时切换和接管恢复。","output":"%s"}' "$(json_escape "$(tr '\n\r' '  ' < "$tmpdir/subscription-refresh.json" 2>/dev/null)")")"
+			# Fallback reason: one-click update is an availability-recovery flow.
+			# A transient subscription source outage should not block runtime restart
+			# when the existing merged subscription cache can still render and pass
+			# config-test below. If the cache is missing or invalid, config render or
+			# mihomo config-test still fails explicitly instead of guessing state.
+			log_line "一键更新：订阅刷新失败，使用已保存的订阅缓存继续"
+			cat "$tmpdir/subscription-refresh.json" >&2
+		else
+			subscription_refresh_json="$(cat "$tmpdir/subscription-refresh.json")"
 		fi
 		if ! run_with_heartbeat "一键更新：正在生成 Mihomo 配置" "$tmpdir/render.json" call_core config render --json; then
 			log_line "一键更新：配置生成失败"
@@ -1666,6 +1677,7 @@ one_click_update_run() {
 			return 1
 		fi
 	else
+		subscription_refresh_json='{"ok":true,"changed":false,"summary":"未配置订阅，跳过订阅刷新。","skipped":true}'
 		log_line "一键更新：未配置订阅，跳过订阅刷新和配置重建"
 	fi
 
@@ -1751,7 +1763,7 @@ one_click_update_run() {
 	fi
 
 	log_line "一键更新：已完成"
-	printf '{"ok":true,"changed":true,"summary":"一键更新已完成。","minimal_outage":{"runtime_kept_until_final_switch":true,"restart_strategy":"%s","runtime_was_running":%s,"runtime_recovered":%s,"takeover_was_effective":%s,"takeover_recovered":%s},"luci":%s,"core":%s,"mihomo":%s,"dashboard":%s,"subscription":{"configured":%s},"mcp_service":%s}\n' \
+	printf '{"ok":true,"changed":true,"summary":"一键更新已完成。","minimal_outage":{"runtime_kept_until_final_switch":true,"restart_strategy":"%s","runtime_was_running":%s,"runtime_recovered":%s,"takeover_was_effective":%s,"takeover_recovered":%s},"luci":%s,"core":%s,"mihomo":%s,"dashboard":%s,"subscription":{"configured":%s,"refresh_failed":%s,"used_cached_artifact":%s,"refresh":%s},"mcp_service":%s}\n' \
 		"$(json_escape "$restart_strategy")" \
 		"$runtime_was_running" \
 		"$runtime_recovered" \
@@ -1762,6 +1774,9 @@ one_click_update_run() {
 		"$(cat "$tmpdir/mihomo.json")" \
 		"$(cat "$tmpdir/dashboard.json")" \
 		"$subscription_ready" \
+		"$subscription_refresh_failed" \
+		"$subscription_cache_used" \
+		"$subscription_refresh_json" \
 		"$(cat "$tmpdir/mcp-service-final.json")"
 	rm -rf "$tmpdir"
 }
