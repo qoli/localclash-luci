@@ -34,6 +34,9 @@ case "$expr" in
 	@.status.running)
 		grep -q '"running"[[:space:]]*:[[:space:]]*true' "$file" && printf 'true\n' || printf 'false\n'
 		;;
+	@.running)
+		grep -q '"running"[[:space:]]*:[[:space:]]*true' "$file" && printf 'true\n' || printf 'false\n'
+		;;
 	@.status.profile_mode)
 		sed -n 's/.*"profile_mode"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$file"
 		;;

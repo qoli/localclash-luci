@@ -603,12 +603,33 @@ task_started_at() {
 	jsonfilter -i "$TASK_STATUS" -e '@.started_at' 2>/dev/null || printf '0\n'
 }
 
+task_name() {
+	jsonfilter -i "$TASK_STATUS" -e '@.task' 2>/dev/null || printf 'task\n'
+}
+
 task_pid_alive() {
 	local pid
 	[ -f "$TASK_PID" ] || return 1
 	pid="$(cat "$TASK_PID" 2>/dev/null)"
 	[ -n "$pid" ] || return 1
 	kill -0 "$pid" 2>/dev/null
+}
+
+task_status_running() {
+	[ "$(jsonfilter -i "$TASK_STATUS" -e '@.running' 2>/dev/null || true)" = "true" ]
+}
+
+write_task_done() {
+	local rc result task started completed
+	rc="$1"
+	result="$2"
+	task="$(task_name)"
+	started="$(task_started_at)"
+	completed="$(now_epoch)"
+	case "$started" in
+		""|*[!0-9]*) started=0 ;;
+	esac
+	printf '{"ok":true,"running":false,"done":true,"started_at":%s,"completed_at":%s,"task":"%s","exit_code":%s,"result":%s}\n' "$started" "$completed" "$(json_escape "$task")" "$rc" "$result" > "$TASK_STATUS"
 }
 
 lock_pid_alive() {
@@ -672,13 +693,13 @@ write_task_stale_result() {
 	esac
 	result='{"ok":false,"code":"task_interrupted","message":"'"$(json_escape "$message")"'","details":{},"next_actions":["'"$(json_escape "$action")"'"]}'
 	printf '%s\n' "$result" > "$TASK_RESULT"
-	printf '{"ok":true,"running":false,"done":true,"exit_code":124,"result":%s}\n' "$result" > "$TASK_STATUS"
+	write_task_done 124 "$result"
 }
 
 reconcile_task_status() {
 	local started age
 	[ -f "$TASK_STATUS" ] || return 0
-	grep -q '"running":true' "$TASK_STATUS" 2>/dev/null || return 0
+	task_status_running || return 0
 	clear_stale_lock
 	clear_stale_task_pid
 	[ -d "$LOCK_DIR" ] && return 0
@@ -772,7 +793,7 @@ task_cancel() {
 	rm -f "$TASK_PID" "$TASK_INPUT" 2>/dev/null || true
 	result='{"ok":false,"code":"task_cancelled","message":"任务已中止。","details":{},"next_actions":["可以重新执行刚才的操作。"]}'
 	printf '%s\n' "$result" > "$TASK_RESULT"
-	printf '{"ok":true,"running":false,"done":true,"exit_code":130,"result":%s}\n' "$result" > "$TASK_STATUS"
+	write_task_done 130 "$result"
 	log_line "任务控制：任务已中止"
 	printf '%s\n' "$result"
 }
@@ -1384,9 +1405,13 @@ service_body() {
 		"$SERVICE" enabled >/dev/null 2>&1 && enabled=true
 		if "$SERVICE" running >/dev/null 2>&1; then
 			running=true
-			pid="$(ps w 2>/dev/null | awk '/[l]ocalclash mcp serve/ { print $1; exit }')"
-			[ -n "$pid" ] || pid=0
 		fi
+	fi
+	pid="$(localclash_mcp_pid)"
+	if [ -n "$pid" ]; then
+		running=true
+	else
+		pid=0
 	fi
 	endpoint="$(mcp_endpoint)"
 	health_endpoint="${endpoint%/mcp}/health"
@@ -1402,6 +1427,21 @@ service_body() {
 		rm -f /tmp/localclash-mcp-health.err
 	fi
 	printf '"service":{"name":"localclash-mcp","installed":%s,"enabled":%s,"running":%s,"pid":%s},"mcp":{"endpoint":"%s","health_endpoint":"%s","healthy":%s,"last_error":"%s"}' "$installed" "$enabled" "$running" "$pid" "$(json_escape "$endpoint")" "$(json_escape "$health_endpoint")" "$healthy" "$(json_escape "$last_error")"
+}
+
+localclash_mcp_pid() {
+	local p cmd
+	for p in /proc/[0-9]*; do
+		[ -r "$p/cmdline" ] || continue
+		cmd="$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null || true)"
+		case "$cmd" in
+			*"/localclash mcp serve"*)
+				printf '%s\n' "${p#/proc/}"
+				return 0
+				;;
+		esac
+	done
+	return 1
 }
 
 mcp_health_body() {
@@ -1647,7 +1687,7 @@ start_one_click_update() {
 			result='{"ok":false,"code":"empty_task_result","message":"一键更新任务没有产生 JSON 结果。","details":{},"next_actions":[]}'
 		fi
 		printf '%s\n' "$result" > "$TASK_RESULT"
-		printf '{"ok":true,"running":false,"done":true,"exit_code":%s,"result":%s}\n' "$rc" "$result" > "$TASK_STATUS"
+		write_task_done "$rc" "$result"
 		rm -f "$TASK_INPUT" "$TASK_PID"
 		if [ "$rc" -eq 0 ] && one_click_update_luci_changed "$result"; then
 			luci_schedule_service_reload
@@ -2004,7 +2044,7 @@ start_bootstrap_core() {
 			result='{"ok":false,"code":"empty_task_result","message":"localClash 核心更新任务没有产生 JSON 结果。","details":{},"next_actions":[]}'
 		fi
 		printf '%s\n' "$result" > "$TASK_RESULT"
-		printf '{"ok":true,"running":false,"done":true,"exit_code":%s,"result":%s}\n' "$rc" "$result" > "$TASK_STATUS"
+		write_task_done "$rc" "$result"
 		rm -f "$TASK_PID"
 	) >/dev/null 2>&1 &
 	bg_pid="$!"
@@ -2037,7 +2077,7 @@ start_component_update() {
 			result='{"ok":false,"code":"empty_task_result","message":"组件更新任务没有产生 JSON 结果。","details":{},"next_actions":[]}'
 		fi
 		printf '%s\n' "$result" > "$TASK_RESULT"
-		printf '{"ok":true,"running":false,"done":true,"exit_code":%s,"result":%s}\n' "$rc" "$result" > "$TASK_STATUS"
+		write_task_done "$rc" "$result"
 		rm -f "$TASK_INPUT" "$TASK_PID"
 	) >/dev/null 2>&1 &
 	bg_pid="$!"
@@ -2071,7 +2111,7 @@ start_luci_update() {
 			result='{"ok":false,"code":"empty_task_result","message":"LuCI 更新任务没有产生 JSON 结果。","details":{},"next_actions":[]}'
 		fi
 		printf '%s\n' "$result" > "$TASK_RESULT"
-		printf '{"ok":true,"running":false,"done":true,"exit_code":%s,"result":%s}\n' "$rc" "$result" > "$TASK_STATUS"
+		write_task_done "$rc" "$result"
 		rm -f "$TASK_PID"
 		if [ "$rc" -eq 0 ] && luci_update_changed "$result"; then
 			luci_schedule_service_reload
@@ -2277,7 +2317,7 @@ start_subscription_setup() {
 			result='{"ok":false,"code":"empty_task_result","message":"订阅设置任务没有产生 JSON 结果。","details":{},"next_actions":[]}'
 		fi
 		printf '%s\n' "$result" > "$TASK_RESULT"
-		printf '{"ok":true,"running":false,"done":true,"exit_code":%s,"result":%s}\n' "$rc" "$result" > "$TASK_STATUS"
+		write_task_done "$rc" "$result"
 		rm -f "$TASK_INPUT" "$TASK_PID"
 	) >/dev/null 2>&1 &
 	bg_pid="$!"
@@ -2447,7 +2487,7 @@ start_bootstrap_default() {
 			result='{"ok":false,"code":"empty_task_result","message":"初始化任务没有产生 JSON 结果。","details":{},"next_actions":[]}'
 		fi
 		printf '%s\n' "$result" > "$TASK_RESULT"
-		printf '{"ok":true,"running":false,"done":true,"exit_code":%s,"result":%s}\n' "$rc" "$result" > "$TASK_STATUS"
+		write_task_done "$rc" "$result"
 		rm -f "$TASK_INPUT" "$TASK_PID"
 	) >/dev/null 2>&1 &
 	bg_pid="$!"
@@ -2631,7 +2671,7 @@ start_runtime_takeover() {
 			result='{"ok":false,"code":"empty_task_result","message":"运行时启动和网络接管任务没有产生 JSON 结果。","details":{},"next_actions":[]}'
 		fi
 		printf '%s\n' "$result" > "$TASK_RESULT"
-		printf '{"ok":true,"running":false,"done":true,"exit_code":%s,"result":%s}\n' "$rc" "$result" > "$TASK_STATUS"
+		write_task_done "$rc" "$result"
 		rm -f "$TASK_PID"
 	) >/dev/null 2>&1 &
 	bg_pid="$!"

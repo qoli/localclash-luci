@@ -603,6 +603,165 @@ function showTaskModal(title, cancellable) {
 	};
 }
 
+function taskLabel(task) {
+	switch (task && task.task) {
+	case 'one_click_update':
+		return _('一键更新');
+	case 'runtime_start_takeover':
+		return _('启动并接管');
+	case 'bootstrap_core':
+		return _('安装 / 更新核心');
+	case 'component_update':
+		return _('组件更新');
+	case 'luci_update':
+		return _('检查 LuCI 更新');
+	case 'subscription_set':
+		return _('订阅设置');
+	case 'bootstrap_default':
+		return _('初始化');
+	default:
+		return _('任务');
+	}
+}
+
+function taskIdentity(task) {
+	return [
+		task && task.task || 'task',
+		task && task.started_at || 0,
+		task && task.completed_at || 0,
+		task && task.exit_code !== undefined ? task.exit_code : ''
+	].join(':');
+}
+
+function taskSeen(task) {
+	try {
+		return window.localStorage.getItem('localclash-seen-task') === taskIdentity(task);
+	}
+	catch (e) {
+		return false;
+	}
+}
+
+function markTaskSeen(task) {
+	try {
+		window.localStorage.setItem('localclash-seen-task', taskIdentity(task));
+	}
+	catch (e) {}
+}
+
+function taskIsRecent(task) {
+	var completed = Number(task && task.completed_at || 0);
+	if (!completed)
+		return false;
+	return Math.abs(Math.floor(Date.now() / 1000) - completed) < 900;
+}
+
+function trackTask(title, startPromise, options) {
+	options = options || {};
+	var startedAt = options.startedAt ? options.startedAt * 1000 : Date.now();
+	var modal = showTaskModal(title, options.cancellable !== false);
+	var timer;
+
+	function updateLogs() {
+		return callBootstrapLogs().then(function(result) {
+			var elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+			var lines = (result && result.logs) || [];
+			modal.statusLine.textContent = options.resume ? formatText(_('正在恢复任务进度，已等待 %s 秒。'), elapsed) : formatText(_('任务执行中，已等待 %s 秒。'), elapsed);
+			modal.logOutput.textContent = formatLogLines(lines);
+			modal.logOutput.scrollTop = modal.logOutput.scrollHeight;
+		}).catch(function(err) {
+			modal.statusLine.textContent = formatText(_('无法读取任务输出：%s'), err.message || String(err));
+		});
+	}
+
+	function waitForTaskCompletion() {
+		return callTaskStatus().then(function(task) {
+			if (task && task.done) {
+				markTaskSeen(task);
+				return task.result || task;
+			}
+			if (task && task.running === false && task.result) {
+				markTaskSeen(task);
+				return task.result;
+			}
+
+			return new Promise(function(resolve) {
+				window.setTimeout(resolve, 1000);
+			}).then(waitForTaskCompletion);
+		});
+	}
+
+	return Promise.resolve(startPromise).then(function(result) {
+		var completion = (result && (result.started || result.running)) ? waitForTaskCompletion() : Promise.resolve(result);
+
+		timer = window.setInterval(updateLogs, 1000);
+		return updateLogs().then(function() {
+			return completion;
+		});
+	}).then(function(finalResult) {
+		window.clearInterval(timer);
+		return updateLogs().then(function() {
+			return finalResult;
+		});
+	}).then(function(finalResult) {
+		if (finalResult && finalResult.ok === false)
+			modal.statusLine.textContent = formatText(_('任务失败：%s'), finalResult.message || finalResult.code || _('未知错误'));
+		else {
+			modal.statusLine.textContent = _('任务完成。');
+			modal.closeButton.setAttribute('data-reload', 'true');
+		}
+		if (options.task)
+			markTaskSeen(options.task);
+		modal.cancelButton.disabled = true;
+		modal.resultOutput.textContent = JSON.stringify(finalResult, null, 2);
+		if (finalResult && finalResult.ok === true && options.autoReload !== false)
+			window.setTimeout(function() {
+				ui.hideModal();
+				window.location.reload();
+			}, 900);
+	}).catch(function(err) {
+		window.clearInterval(timer);
+		if (!timer)
+			modal.logOutput.textContent = _('任务未启动。');
+
+		return (timer ? updateLogs() : Promise.resolve()).then(function() {
+			modal.statusLine.textContent = formatText(_('任务失败：%s'), err.message || String(err));
+			modal.resultOutput.textContent = JSON.stringify({ ok: false, message: err.message || String(err) }, null, 2);
+			modal.cancelButton.disabled = true;
+		});
+	});
+}
+
+var taskResumeChecked = false;
+
+function resumeTaskIfNeeded() {
+	if (taskResumeChecked)
+		return Promise.resolve();
+	taskResumeChecked = true;
+
+	return callTaskStatus().then(function(task) {
+		if (!task || !task.task)
+			return null;
+		if (task.running === true)
+			return trackTask(taskLabel(task), Promise.resolve({ started: true }), {
+				resume: true,
+				task: task,
+				startedAt: task.started_at || 0
+			});
+		if (task.done === true && task.result && task.task === 'one_click_update' && taskIsRecent(task) && !taskSeen(task))
+			return trackTask(taskLabel(task), Promise.resolve(task.result), {
+				resume: true,
+				task: task,
+				startedAt: task.started_at || 0,
+				cancellable: false,
+				autoReload: false
+			});
+		return null;
+	}).catch(function() {
+		return null;
+	});
+}
+
 function liveTaskButton(label, handler, extraClass) {
 	return E('button', {
 		'type': 'button',
@@ -610,9 +769,6 @@ function liveTaskButton(label, handler, extraClass) {
 		'click': function(ev) {
 			ev.preventDefault();
 			var button = ev.currentTarget;
-			var startedAt = Date.now();
-			var modal;
-			var timer;
 
 			if (button.disabled)
 				return null;
@@ -621,70 +777,8 @@ function liveTaskButton(label, handler, extraClass) {
 			button.setAttribute('aria-busy', 'true');
 			button.classList.add('localclash-busy');
 			button.textContent = _('查看任务输出…');
-			modal = showTaskModal(label, true);
 
-			function updateLogs() {
-				return callBootstrapLogs().then(function(result) {
-					var elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
-					var lines = (result && result.logs) || [];
-					modal.statusLine.textContent = formatText(_('任务执行中，已等待 %s 秒。'), elapsed);
-					modal.logOutput.textContent = formatLogLines(lines);
-					modal.logOutput.scrollTop = modal.logOutput.scrollHeight;
-				}).catch(function(err) {
-					modal.statusLine.textContent = formatText(_('无法读取任务输出：%s'), err.message || String(err));
-				});
-			}
-
-			function waitForTaskCompletion() {
-				return callTaskStatus().then(function(task) {
-					if (task && task.done)
-						return task.result || task;
-					if (task && task.running === false && task.result)
-						return task.result;
-
-					return new Promise(function(resolve) {
-						window.setTimeout(resolve, 1000);
-					}).then(waitForTaskCompletion);
-				});
-			}
-
-			return Promise.resolve().then(handler).then(function(result) {
-				var completion = (result && (result.started || result.running)) ? waitForTaskCompletion() : Promise.resolve(result);
-
-				timer = window.setInterval(updateLogs, 1000);
-				return updateLogs().then(function() {
-					return completion;
-				});
-			}).then(function(finalResult) {
-				window.clearInterval(timer);
-				return updateLogs().then(function() {
-					return finalResult;
-				});
-			}).then(function(finalResult) {
-				if (finalResult && finalResult.ok === false)
-					modal.statusLine.textContent = formatText(_('任务失败：%s'), finalResult.message || finalResult.code || _('未知错误'));
-				else {
-					modal.statusLine.textContent = _('任务完成。');
-					modal.closeButton.setAttribute('data-reload', 'true');
-				}
-				modal.cancelButton.disabled = true;
-				modal.resultOutput.textContent = JSON.stringify(finalResult, null, 2);
-				if (finalResult && finalResult.ok === true)
-					window.setTimeout(function() {
-						ui.hideModal();
-						window.location.reload();
-					}, 900);
-			}).catch(function(err) {
-				window.clearInterval(timer);
-				if (!timer)
-					modal.logOutput.textContent = _('任务未启动。');
-
-				return (timer ? updateLogs() : Promise.resolve()).then(function() {
-					modal.statusLine.textContent = formatText(_('任务失败：%s'), err.message || String(err));
-					modal.resultOutput.textContent = JSON.stringify({ ok: false, message: err.message || String(err) }, null, 2);
-					modal.cancelButton.disabled = true;
-				});
-			}).finally(function() {
+			return trackTask(label, Promise.resolve().then(handler)).finally(function() {
 				button.disabled = false;
 				button.removeAttribute('aria-busy');
 				button.classList.remove('localclash-busy');
@@ -860,7 +954,10 @@ return view.extend({
 	},
 
 	render: function(data) {
-		deferAfterPaint(refreshStatus, 600);
+		deferAfterPaint(function() {
+			refreshStatus();
+			resumeTaskIfNeeded();
+		}, 600);
 
 		return E('div', { 'class': 'cbi-map localclash-view' }, [
 			E('style', {}, [ [
