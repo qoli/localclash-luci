@@ -268,38 +268,6 @@ function taskLabel(task) {
 	}
 }
 
-function taskIdentity(task) {
-	return [
-		task && task.task || 'task',
-		task && task.started_at || 0,
-		task && task.completed_at || 0,
-		task && task.exit_code !== undefined ? task.exit_code : ''
-	].join(':');
-}
-
-function taskSeen(task) {
-	try {
-		return window.localStorage.getItem('localclash-seen-task') === taskIdentity(task);
-	}
-	catch (e) {
-		return false;
-	}
-}
-
-function markTaskSeen(task) {
-	try {
-		window.localStorage.setItem('localclash-seen-task', taskIdentity(task));
-	}
-	catch (e) {}
-}
-
-function taskIsRecent(task) {
-	var completed = Number(task && task.completed_at || 0);
-	if (!completed)
-		return false;
-	return Math.abs(Math.floor(Date.now() / 1000) - completed) < 900;
-}
-
 function showTaskModal(title, cancellable) {
 	var logOutput = E('pre', { 'class': 'localclash-task-log' }, [ _('等待任务输出…') ]);
 	var statusLine = E('p', { 'class': 'localclash-task-status' }, [ _('正在启动任务…') ]);
@@ -371,14 +339,10 @@ function trackTask(title, startPromise, options) {
 
 	function waitForTaskCompletion() {
 		return callBootstrapTaskStatus().then(function(task) {
-			if (task && task.done) {
-				markTaskSeen(task);
+			if (task && task.done)
 				return task.result || task;
-			}
-			if (task && task.running === false && task.result) {
-				markTaskSeen(task);
+			if (task && task.running === false && task.result)
 				return task.result;
-			}
 
 			return delay(1000).then(waitForTaskCompletion);
 		}).catch(function(err) {
@@ -407,8 +371,6 @@ function trackTask(title, startPromise, options) {
 			modal.statusLine.textContent = formatText(_('任务失败：%s'), finalResult.message || finalResult.code || _('未知错误'));
 		else
 			modal.statusLine.textContent = _('任务完成。');
-		if (options.task)
-			markTaskSeen(options.task);
 		modal.cancelButton.disabled = true;
 		modal.resultOutput.textContent = JSON.stringify(finalResult, null, 2);
 		if (finalResult && finalResult.ok === true && options.autoReload !== false)
@@ -444,14 +406,6 @@ function resumeTaskIfNeeded() {
 				resume: true,
 				task: task,
 				startedAt: task.started_at || 0
-			});
-		if (task.done === true && task.result && task.task === 'one_click_update' && taskIsRecent(task) && !taskSeen(task))
-			return trackTask(taskLabel(task), Promise.resolve(task.result), {
-				resume: true,
-				task: task,
-				startedAt: task.started_at || 0,
-				cancellable: false,
-				autoReload: false
 			});
 		return null;
 	}).catch(function() {
