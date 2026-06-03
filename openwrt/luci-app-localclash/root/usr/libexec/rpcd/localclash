@@ -247,6 +247,56 @@ luci_update_changed() {
 	[ "$(jsonfilter -s "$1" -e '@.changed' 2>/dev/null)" = "true" ]
 }
 
+luci_update_check() {
+	local manager tmpdir release asset_url asset_version current_version version_relation tag update_available
+	log_line "LuCI 更新检查：开始"
+	if ! command -v jsonfilter >/dev/null 2>&1; then
+		fail "jsonfilter_missing" "需要 jsonfilter 解析 localclash-luci Release 信息。"
+		return 1
+	fi
+	manager="$(luci_package_manager)" || {
+		fail "package_manager_missing" "未检测到 opkg 或 apk，无法检查 LuCI 更新。"
+		return 1
+	}
+	current_version="$(luci_installed_package_version "$manager")"
+	if [ -z "$current_version" ]; then
+		fail_with_details "luci_package_version_missing" "无法读取当前 LuCI 界面版本。" '"package_manager":"'"$(json_escape "$manager")"'"'
+		return 1
+	fi
+	tmpdir="$(mktemp -d /tmp/localclash-luci-check.XXXXXX)" || {
+		fail "tmpdir_failed" "无法创建 LuCI 更新检查临时目录。"
+		return 1
+	}
+	release="$tmpdir/latest.json"
+	if ! fetch_url "$LUCI_RELEASE_API" "$release"; then
+		rm -rf "$tmpdir"
+		fail "luci_release_download_failed" "无法读取 localclash-luci 最新 Release。"
+		return 1
+	fi
+	tag="$(jsonfilter -i "$release" -e '@.tag_name' 2>/dev/null)"
+	asset_url="$(luci_update_asset_url "$release" "$manager")"
+	if [ -z "$asset_url" ]; then
+		rm -rf "$tmpdir"
+		fail "luci_release_asset_missing" "最新 Release 中没有匹配当前包管理器的 LuCI 安装包。"
+		return 1
+	fi
+	asset_version="$(luci_update_asset_version "$manager" "$asset_url")"
+	if [ -z "$asset_version" ]; then
+		rm -rf "$tmpdir"
+		fail "luci_release_version_missing" "无法从最新 Release 安装包名称中识别 LuCI 版本。"
+		return 1
+	fi
+	version_relation="$(luci_version_relation "$manager" "$current_version" "$asset_version")" || {
+		rm -rf "$tmpdir"
+		fail_with_details "luci_version_compare_failed" "无法比较当前 LuCI 版本和最新 Release 版本。" '"package_manager":"'"$(json_escape "$manager")"'","current_version":"'"$(json_escape "$current_version")"'","latest_version":"'"$(json_escape "$asset_version")"'"'
+		return 1
+	}
+	rm -rf "$tmpdir"
+	update_available=false
+	[ "$version_relation" = "target_newer" ] && update_available=true
+	ok '"changed":false,"summary":"LuCI 更新检查完成。","current_version":"'"$(json_escape "$current_version")"'","latest_version":"'"$(json_escape "$asset_version")"'","release_tag":"'"$(json_escape "$tag")"'","relation":"'"$(json_escape "$version_relation")"'","update_available":'"$update_available"',"checked_at":'"$(now_epoch)"',"luci_package":{"installed":true,"name":"luci-app-localclash","version":"'"$(json_escape "$current_version")"'","manager":"'"$(json_escape "$manager")"'","latest_url":"https://github.com/qoli/localclash-luci/releases/latest","release_api":"'"$(json_escape "$LUCI_RELEASE_API")"'"}}'
+}
+
 luci_update() {
 	local manager tmpdir release asset_url asset_version current_version version_relation sha_url package sha_file expected actual install_log tag rc install_excerpt
 	log_line "LuCI 更新：开始"
@@ -2215,6 +2265,7 @@ case "$method" in
   "subscription_refresh": {},
   "component_update": { "component": "localclash" },
   "component_update_async": { "component": "localclash" },
+  "luci_update_check": {},
   "luci_update_async": {},
   "apply": {},
   "config_render": {},
@@ -2257,6 +2308,7 @@ JSON
 	component_update) with_lock component_update ;;
 	component_update_async) start_component_update ;;
 	component_update_run) component_update_run ;;
+	luci_update_check) luci_update_check ;;
 	luci_update_async) start_luci_update ;;
 	luci_update_run) luci_update_run ;;
 	apply) with_lock apply_state ;;

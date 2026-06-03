@@ -118,6 +118,12 @@ var callLuciUpdate = rpc.declare({
 	expect: { '': {} }
 });
 
+var callLuciUpdateCheck = rpc.declare({
+	object: 'localclash',
+	method: 'luci_update_check',
+	expect: { '': {} }
+});
+
 var callReset = rpc.declare({
 	object: 'localclash',
 	method: 'reset',
@@ -279,8 +285,37 @@ function runtimeRunning(status) {
 	return runtime.running === true;
 }
 
-function luciPackageSummary(data) {
+function luciPackageSummary(data, updateCheck) {
 	var luciPackage = data.luci_package || {};
+	var current = updateCheck && updateCheck.current_version ? updateCheck.current_version : luciPackage.version;
+	var latest = updateCheck && updateCheck.latest_version ? updateCheck.latest_version : null;
+
+	if (updateCheck && updateCheck.update_available === true)
+		return statusWithDetails(formatText(_('%s → %s'), current, latest), [
+			luciPackage.manager ? 'manager=' + luciPackage.manager : null,
+			updateCheck.release_tag ? 'release=' + updateCheck.release_tag : null,
+			luciPackage.latest_url
+		]);
+
+	if (updateCheck && updateCheck.relation === 'equal')
+		return statusWithDetails(formatText(_('%s（已是最新）'), current || latest || '-'), [
+			luciPackage.manager ? 'manager=' + luciPackage.manager : null,
+			updateCheck.release_tag ? 'release=' + updateCheck.release_tag : null,
+			luciPackage.latest_url
+		]);
+
+	if (updateCheck && updateCheck.relation === 'target_older')
+		return statusWithDetails(formatText(_('%s（高于最新 Release %s）'), current, latest), [
+			luciPackage.manager ? 'manager=' + luciPackage.manager : null,
+			updateCheck.release_tag ? 'release=' + updateCheck.release_tag : null,
+			luciPackage.latest_url
+		]);
+
+	if (updateCheck && updateCheck.ok === false)
+		return statusWithDetails(formatText(_('%s（更新检查失败：%s）'), luciPackage.version || '-', updateCheck.message || updateCheck.code || _('未知错误')), [
+			luciPackage.manager ? 'manager=' + luciPackage.manager : null,
+			luciPackage.latest_url
+		]);
 
 	if (luciPackage.version)
 		return statusWithDetails(luciPackage.version, [
@@ -316,7 +351,7 @@ function statusRow(item, value) {
 	]);
 }
 
-function advancedStatusTable(data, takeover) {
+function advancedStatusTable(data, takeover, updateCheck) {
 	var core = data.core || {};
 	var baseAssets = data.base_assets || {};
 	var runtimeProfile = data.runtime_profile || {};
@@ -334,7 +369,7 @@ function advancedStatusTable(data, takeover) {
 			statusRow(_('localClash 核心'), statusWithDetails(core.installed ? _('已安装') : _('缺失'), [
 				core.path
 			])),
-			statusRow(_('LuCI 界面'), luciPackageSummary(data)),
+			statusRow(_('LuCI 界面'), luciPackageSummary(data, updateCheck)),
 			statusRow(_('基础文件'), statusWithDetails(baseAssets.installed ? _('已安装') : _('缺失'), [
 				baseAssets.path,
 				baseAssets.missing ? 'missing=' + baseAssets.missing : null
@@ -431,12 +466,16 @@ function refreshStatus() {
 		}),
 		callTakeoverStatus().catch(function(err) {
 			return { ok: false, message: err.message || String(err) };
+		}),
+		callLuciUpdateCheck().catch(function(err) {
+			return { ok: false, message: err.message || String(err) };
 		})
 	]).then(function(results) {
 		var data = results[0] || {};
 		var takeover = results[1] || {};
+		var updateCheck = results[2] || {};
 
-		replaceContent('localclash-advanced-status-body', data.ok === false && data.error ? advancedStatusErrorTable(data.error) : advancedStatusTable(data, takeover));
+		replaceContent('localclash-advanced-status-body', data.ok === false && data.error ? advancedStatusErrorTable(data.error) : advancedStatusTable(data, takeover, updateCheck));
 	});
 }
 

@@ -88,11 +88,19 @@ var callLuciUpdate = rpc.declare({
 	expect: { '': {} }
 });
 
+var callLuciUpdateCheck = rpc.declare({
+	object: 'localclash',
+	method: 'luci_update_check',
+	expect: { '': {} }
+});
+
 var callMcpHelp = rpc.declare({
 	object: 'localclash',
 	method: 'mcp_help',
 	expect: { '': {} }
 });
+
+var lastOverviewStatusData = null;
 
 function statusText(value) {
 	if (value === null || value === undefined || value === '')
@@ -738,7 +746,9 @@ function refreshOverviewStatus() {
 
 		replaceContent('localclash-overview-actions', primaryActions(state));
 		updateBootstrapStartButton();
+		lastOverviewStatusData = data.ok === false && data.error ? null : data;
 		replaceContent('localclash-overview-summary-body', data.ok === false && data.error ? summaryErrorTable(data.error) : summaryTable(data, takeover, task, state));
+		refreshLuciUpdateCheck(lastOverviewStatusData);
 		return refreshTakeoverStatus();
 	});
 }
@@ -879,6 +889,101 @@ function summaryActionRow(item, status, actions) {
 	]);
 }
 
+function luciUpdateSummary(data, check) {
+	var luciPackage = data && data.luci_package ? data.luci_package : {};
+	var current = check && check.current_version ? check.current_version : luciPackage.version;
+	var latest = check && check.latest_version ? check.latest_version : null;
+
+	if (check && check.pending === true)
+		return current ? formatText(_('%s（正在检查更新…）'), current) : _('正在检查更新…');
+
+	if (check && check.ok === false)
+		return current ? formatText(_('%s（更新检查失败：%s）'), current, check.message || check.code || _('未知错误')) : formatText(_('更新检查失败：%s'), check.message || check.code || _('未知错误'));
+
+	if (check && check.update_available === true)
+		return formatText(_('%s → %s'), current, latest);
+
+	if (check && check.relation === 'equal')
+		return formatText(_('%s（已是最新）'), current || latest || '-');
+
+	if (check && check.relation === 'target_older')
+		return formatText(_('%s（高于最新 Release %s）'), current, latest);
+
+	return luciPackageSummary(data);
+}
+
+function luciUpdateButton() {
+	var button = liveTaskButton(_('更新'), callLuciUpdate, 'cbi-button-apply');
+	button.id = 'localclash-luci-update-button';
+	button.disabled = true;
+	return button;
+}
+
+function luciUpdateRetryButton() {
+	return E('button', {
+		'type': 'button',
+		'id': 'localclash-luci-update-retry-button',
+		'class': 'btn cbi-button localclash-button cbi-button-action',
+		'style': 'display:none',
+		'click': function(ev) {
+			ev.preventDefault();
+			refreshLuciUpdateCheck();
+		}
+	}, [ _('重新检查') ]);
+}
+
+function luciUpdateRow(data) {
+	return E('tr', { 'class': 'tr cbi-rowstyle-1' }, [
+		E('td', { 'class': 'td', 'data-title': _('项目') }, [ _('LuCI 界面') ]),
+		E('td', { 'class': 'td', 'data-title': _('目前状态') }, [
+			E('span', { 'id': 'localclash-luci-update-status' }, [ luciUpdateSummary(data, { pending: true }) ])
+		]),
+		tableActionCell([
+			luciUpdateButton(),
+			luciUpdateRetryButton()
+		])
+	]);
+}
+
+function applyLuciUpdateCheck(data, check) {
+	var status = document.getElementById('localclash-luci-update-status');
+	var updateButton = document.getElementById('localclash-luci-update-button');
+	var retryButton = document.getElementById('localclash-luci-update-retry-button');
+
+	if (status)
+		status.textContent = luciUpdateSummary(data, check);
+	if (updateButton)
+		updateButton.disabled = !(check && check.update_available === true);
+	if (retryButton)
+		retryButton.style.display = check && check.ok === false ? '' : 'none';
+}
+
+function refreshLuciUpdateCheck(data) {
+	var summaryData = data || lastOverviewStatusData;
+	var status = document.getElementById('localclash-luci-update-status');
+	var updateButton = document.getElementById('localclash-luci-update-button');
+	var retryButton = document.getElementById('localclash-luci-update-retry-button');
+
+	if (!status)
+		return Promise.resolve();
+	if (!summaryData) {
+		applyLuciUpdateCheck({}, { ok: false, message: _('状态数据未加载') });
+		return Promise.resolve();
+	}
+
+	if (updateButton)
+		updateButton.disabled = true;
+	if (retryButton)
+		retryButton.style.display = 'none';
+	status.textContent = _('正在检查更新…');
+
+	return callLuciUpdateCheck().then(function(check) {
+		applyLuciUpdateCheck(summaryData, check || {});
+	}).catch(function(err) {
+		applyLuciUpdateCheck(summaryData, { ok: false, message: err.message || String(err) });
+	});
+}
+
 function runtimeStopButton() {
 	return commandButton(_('停止'), function() {
 		return callTakeoverStop().catch(function(err) {
@@ -939,9 +1044,7 @@ function summaryTable(data, takeover, task, state) {
 			summaryActionRow(_('开机自动恢复'), bootRestoreSummary(bootRestore), [
 				commandButton(_('切换'), bootRestoreEnabled ? callBootRestoreDisable : callBootRestoreEnable, bootRestoreEnabled ? 'cbi-button-reset' : 'cbi-button-apply')
 			]),
-			summaryActionRow(_('LuCI 界面'), luciPackageSummary(data), [
-				liveTaskButton(_('检查更新'), callLuciUpdate, 'cbi-button-action')
-			])
+			luciUpdateRow(data)
 		])
 	]);
 }
