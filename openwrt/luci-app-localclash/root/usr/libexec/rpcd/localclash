@@ -24,6 +24,8 @@ TAKEOVER_REPAIR_TICKET="${LOCALCLASH_TAKEOVER_REPAIR_TICKET:-/tmp/localclash/rou
 TAKEOVER_STATE_STATUS="${LOCALCLASH_TAKEOVER_STATE_STATUS:-/tmp/localclash/router-takeover/status}"
 BOOT_AUTO_RESTORE_FILE="${LOCALCLASH_BOOT_AUTO_RESTORE_FILE:-$STATE_DIR/boot-auto-restore-enabled}"
 LEGACY_TAKEOVER_INTENT_FILE="${LOCALCLASH_LEGACY_TAKEOVER_INTENT_FILE:-$STATE_DIR/takeover-enabled}"
+BOOT_RESTORE_MAX_UPTIME="${LOCALCLASH_BOOT_RESTORE_MAX_UPTIME:-300}"
+PROC_UPTIME="${LOCALCLASH_PROC_UPTIME:-/proc/uptime}"
 
 json_escape() {
 	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
@@ -586,7 +588,10 @@ now_epoch() {
 }
 
 write_task_running() {
-	printf '{"ok":true,"running":true,"done":false,"started_at":%s,"summary":"%s"}\n' "$(now_epoch)" "$(json_escape "$1")" > "$TASK_STATUS"
+	local summary task
+	summary="$1"
+	task="${2:-task}"
+	printf '{"ok":true,"running":true,"done":false,"started_at":%s,"task":"%s","summary":"%s"}\n' "$(now_epoch)" "$(json_escape "$task")" "$(json_escape "$summary")" > "$TASK_STATUS"
 }
 
 write_task_pid() {
@@ -629,8 +634,43 @@ clear_stale_task_pid() {
 }
 
 write_task_stale_result() {
-	local result
-	result='{"ok":false,"code":"task_interrupted","message":"初始化任务已中断，请重试。","details":{},"next_actions":["点击一键初始化重试。"]}'
+	local result task message action
+	task="$(jsonfilter -i "$TASK_STATUS" -e '@.task' 2>/dev/null || true)"
+	case "$task" in
+		one_click_update)
+			message="一键更新任务已中断，请重试。"
+			action="点击一键更新重试。"
+			;;
+		runtime_start_takeover)
+			message="运行时启动和网络接管任务已中断，请重试。"
+			action="点击启动并接管重试。"
+			;;
+		bootstrap_core)
+			message="localClash 核心更新任务已中断，请重试。"
+			action="点击安装 / 更新核心重试。"
+			;;
+		bootstrap_default)
+			message="初始化任务已中断，请重试。"
+			action="点击一键初始化重试。"
+			;;
+		component_update)
+			message="组件更新任务已中断，请重试。"
+			action="点击对应组件更新按钮重试。"
+			;;
+		luci_update)
+			message="LuCI 界面更新任务已中断，请重试。"
+			action="点击检查 LuCI 更新重试。"
+			;;
+		subscription_set)
+			message="订阅设置任务已中断，请重试。"
+			action="重新保存订阅设置。"
+			;;
+		*)
+			message="任务已中断，请重试。"
+			action="重新执行刚才的操作。"
+			;;
+	esac
+	result='{"ok":false,"code":"task_interrupted","message":"'"$(json_escape "$message")"'","details":{},"next_actions":["'"$(json_escape "$action")"'"]}'
 	printf '%s\n' "$result" > "$TASK_RESULT"
 	printf '{"ok":true,"running":false,"done":true,"exit_code":124,"result":%s}\n' "$result" > "$TASK_STATUS"
 }
@@ -1513,7 +1553,7 @@ start_service() {
 	procd_close_instance
 	if [ -x "\$HELPER" ]; then
 		procd_open_instance boot_restore
-		procd_set_param command /bin/sh -c 'sleep "\${LOCALCLASH_BOOT_RESTORE_DELAY:-20}"; exec "\$1" call boot_restore_run' localclash-boot-restore "\$HELPER"
+		procd_set_param command /bin/sh -c 'sleep "\${LOCALCLASH_BOOT_RESTORE_DELAY:-20}"; exec "\$1" call boot_restore_startup_run' localclash-boot-restore "\$HELPER"
 		procd_close_instance
 	fi
 }
@@ -1598,7 +1638,7 @@ start_one_click_update() {
 	rm -f "$TASK_STATUS" "$TASK_RESULT" "$TASK_INPUT" "$TASK_PID"
 	: > "$LOG"
 	write_versioned_payload "$payload" > "$TASK_INPUT"
-	write_task_running "一键更新任务正在运行。"
+	write_task_running "一键更新任务正在运行。" "one_click_update"
 	log_line "一键更新：已加入后台任务队列"
 	(
 		result="$("$0" call one_click_update_run 2>>"$LOG")"
@@ -1955,7 +1995,7 @@ start_bootstrap_core() {
 	fi
 	rm -f "$TASK_STATUS" "$TASK_RESULT" "$TASK_INPUT" "$TASK_PID"
 	: > "$LOG"
-	write_task_running "localClash 核心更新任务正在运行。"
+	write_task_running "localClash 核心更新任务正在运行。" "bootstrap_core"
 	log_line "核心初始化：已加入后台任务队列"
 	(
 		result="$("$0" call bootstrap_core_run 2>>"$LOG")"
@@ -1988,7 +2028,7 @@ start_component_update() {
 	rm -f "$TASK_STATUS" "$TASK_RESULT" "$TASK_INPUT" "$TASK_PID"
 	: > "$LOG"
 	printf '%s\n' "$payload" > "$TASK_INPUT"
-	write_task_running "组件更新任务正在运行。"
+	write_task_running "组件更新任务正在运行。" "component_update"
 	log_line "组件更新：$component 已加入后台任务队列"
 	(
 		result="$("$0" call component_update_run 2>>"$LOG")"
@@ -2022,7 +2062,7 @@ start_luci_update() {
 	fi
 	rm -f "$TASK_STATUS" "$TASK_RESULT" "$TASK_INPUT" "$TASK_PID"
 	: > "$LOG"
-	write_task_running "LuCI 界面更新任务正在运行。"
+	write_task_running "LuCI 界面更新任务正在运行。" "luci_update"
 	log_line "LuCI 更新：已加入后台任务队列"
 	(
 		result="$("$0" call luci_update_run 2>>"$LOG")"
@@ -2228,7 +2268,7 @@ start_subscription_setup() {
 	rm -f "$TASK_STATUS" "$TASK_RESULT" "$TASK_INPUT" "$TASK_PID"
 	: > "$LOG"
 	write_versioned_payload "$payload" > "$TASK_INPUT"
-	write_task_running "订阅设置任务正在运行。"
+	write_task_running "订阅设置任务正在运行。" "subscription_set"
 	log_line "订阅设置：已加入后台任务队列"
 	(
 		result="$("$0" call subscription_setup_run 2>>"$LOG")"
@@ -2398,7 +2438,7 @@ start_bootstrap_default() {
 	rm -f "$TASK_STATUS" "$TASK_RESULT" "$TASK_INPUT" "$TASK_PID"
 	: > "$LOG"
 	write_versioned_payload "$payload" > "$TASK_INPUT"
-	write_task_running "初始化和运行时启动任务正在运行。"
+	write_task_running "初始化和运行时启动任务正在运行。" "bootstrap_default"
 	log_line "默认初始化：已加入后台任务队列"
 	(
 		result="$("$0" call bootstrap_default_run 2>>"$LOG")"
@@ -2582,7 +2622,7 @@ start_runtime_takeover() {
 	fi
 	rm -f "$TASK_STATUS" "$TASK_RESULT" "$TASK_INPUT" "$TASK_PID"
 	: > "$LOG"
-	write_task_running "运行时启动和网络接管任务正在运行。"
+	write_task_running "运行时启动和网络接管任务正在运行。" "runtime_start_takeover"
 	log_line "运行时接管：已加入后台任务队列"
 	(
 		result="$("$0" call runtime_start_takeover_run 2>>"$LOG")"
@@ -2753,6 +2793,29 @@ takeover_restore_run() {
 	rm -rf "$tmpdir"
 }
 
+boot_restore_startup_allowed() {
+	local max_uptime uptime
+	max_uptime="$BOOT_RESTORE_MAX_UPTIME"
+	case "$max_uptime" in
+		""|*[!0-9]*) max_uptime=300 ;;
+	esac
+	[ "$max_uptime" -eq 0 ] && return 0
+	uptime="$(cut -d. -f1 "$PROC_UPTIME" 2>/dev/null || printf '0')"
+	case "$uptime" in
+		""|*[!0-9]*) uptime=0 ;;
+	esac
+	[ "$uptime" -le "$max_uptime" ]
+}
+
+boot_restore_startup_run() {
+	if ! boot_restore_startup_allowed; then
+		log_line "开机自动恢复：当前不是开机窗口，跳过"
+		ok '"changed":false,"skipped":true,"summary":"当前不是开机自动恢复窗口，跳过。",'"$(boot_restore_json)"
+		return 0
+	fi
+	boot_restore_run
+}
+
 boot_restore_run() {
 	if ! boot_auto_restore_enabled; then
 		log_line "开机自动恢复：未启用，跳过"
@@ -2800,6 +2863,7 @@ case "$method" in
   "boot_restore_status": {},
   "boot_restore_enable": {},
   "boot_restore_disable": {},
+  "boot_restore_startup_run": {},
   "boot_restore_run": {},
   "takeover_status": {},
   "takeover_apply": {},
@@ -2850,6 +2914,7 @@ JSON
 	boot_restore_status) boot_restore_status ;;
 	boot_restore_enable) with_lock boot_restore_enable ;;
 	boot_restore_disable) with_lock boot_restore_disable ;;
+	boot_restore_startup_run) with_lock boot_restore_startup_run ;;
 	boot_restore_run) with_lock boot_restore_run ;;
 	takeover_status) call_core takeover status --json ;;
 	takeover_apply) takeover_apply ;;

@@ -37,6 +37,12 @@ case "$expr" in
 	@.status.profile_mode)
 		sed -n 's/.*"profile_mode"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$file"
 		;;
+	@.started_at)
+		sed -n 's/.*"started_at"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$file"
+		;;
+	@.task)
+		sed -n 's/.*"task"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$file"
+		;;
 	*) exit 1 ;;
 esac
 EOF
@@ -48,7 +54,13 @@ TAKEOVER_REPAIR_TICKET="${tmp_dir}/repair-ticket"
 TAKEOVER_STATE_STATUS="${tmp_dir}/runtime-status"
 BOOT_AUTO_RESTORE_FILE="${STATE_DIR}/boot-auto-restore-enabled"
 LEGACY_TAKEOVER_INTENT_FILE="${STATE_DIR}/takeover-enabled"
+LOCK_DIR="${tmp_dir}/lock"
+TASK_STATUS="${tmp_dir}/task-status.json"
+TASK_RESULT="${tmp_dir}/task-result.json"
+TASK_PID="${tmp_dir}/task.pid"
+PROC_UPTIME="${tmp_dir}/uptime"
 mkdir -p "$STATE_DIR"
+printf '999.00 0.00\n' > "$PROC_UPTIME"
 
 trace() {
 	printf '%s\n' "$1" >> "${tmp_dir}/trace"
@@ -140,6 +152,26 @@ grep -q '^call_core runtime start --json$' "${tmp_dir}/trace" || fail_test "boot
 grep -q '^call_core runtime status --json$' "${tmp_dir}/trace" || fail_test "boot restore did not verify runtime"
 grep -q '^call_core takeover apply --json$' "${tmp_dir}/trace" || fail_test "boot restore did not apply takeover"
 [ -f "$TAKEOVER_REPAIR_TICKET" ] || fail_test "boot restore should create same-boot repair ticket after applying takeover"
+
+BOOT_RESTORE_MAX_UPTIME=1
+: > "${tmp_dir}/trace"
+result="$(boot_restore_startup_run)"
+printf '%s\n' "$result" | grep -q '"skipped":true' || fail_test "boot restore startup should skip outside boot window: ${result}"
+if grep -q 'call_core' "${tmp_dir}/trace"; then
+	fail_test "boot restore startup outside boot window should not call core"
+fi
+
+BOOT_RESTORE_MAX_UPTIME=0
+: > "${tmp_dir}/trace"
+result="$(boot_restore_startup_run)"
+printf '%s\n' "$result" | grep -q '"changed":true' || fail_test "boot restore startup should run when uptime guard is disabled: ${result}"
+grep -q '^call_core runtime start --json$' "${tmp_dir}/trace" || fail_test "boot restore startup did not start runtime when allowed"
+
+printf '{"ok":true,"running":true,"done":false,"started_at":1,"task":"one_click_update","summary":"一键更新任务正在运行。"}\n' > "$TASK_STATUS"
+rm -f "$TASK_PID" "$TASK_RESULT"
+reconcile_task_status
+grep -q '一键更新任务已中断' "$TASK_RESULT" || fail_test "stale one-click task message should name one-click update"
+grep -q '点击一键更新重试' "$TASK_STATUS" || fail_test "stale one-click task action should name one-click retry"
 
 result="$(boot_restore_disable)"
 printf '%s\n' "$result" | grep -q '"enabled":false' || fail_test "boot restore disable failed: ${result}"
