@@ -40,6 +40,13 @@ var callTaskCancel = rpc.declare({
 	expect: { '': {} }
 });
 
+var callComponentUpdateAsync = rpc.declare({
+	object: 'localclash',
+	method: 'component_update_async',
+	params: [ 'component' ],
+	expect: { '': {} }
+});
+
 var callRuntimeStartTakeover = rpc.declare({
 	object: 'localclash',
 	method: 'runtime_start_takeover',
@@ -85,6 +92,12 @@ var callBootRestoreDisable = rpc.declare({
 var callLuciUpdate = rpc.declare({
 	object: 'localclash',
 	method: 'luci_update_async',
+	expect: { '': {} }
+});
+
+var callCoreUpdateCheck = rpc.declare({
+	object: 'localclash',
+	method: 'core_update_check',
 	expect: { '': {} }
 });
 
@@ -748,6 +761,7 @@ function refreshOverviewStatus() {
 		updateBootstrapStartButton();
 		lastOverviewStatusData = data.ok === false && data.error ? null : data;
 		replaceContent('localclash-overview-summary-body', data.ok === false && data.error ? summaryErrorTable(data.error) : summaryTable(data, takeover, task, state));
+		refreshCoreUpdateCheck(lastOverviewStatusData);
 		refreshLuciUpdateCheck(lastOverviewStatusData);
 		return refreshTakeoverStatus();
 	});
@@ -887,6 +901,106 @@ function summaryActionRow(item, status, actions) {
 		E('td', { 'class': 'td', 'data-title': _('目前状态') }, [ statusText(status) ]),
 		tableActionCell(actions)
 	]);
+}
+
+function coreSummary(data) {
+	var core = data && data.core ? data.core : {};
+
+	if (core.installed === false)
+		return _('缺失');
+	return _('已安装');
+}
+
+function coreUpdateSummary(data, check) {
+	var latest = check && check.latest_version ? check.latest_version : null;
+
+	if (check && check.pending === true)
+		return formatText(_('%s（正在检查更新…）'), coreSummary(data));
+
+	if (check && check.ok === false)
+		return formatText(_('%s（更新检查失败：%s）'), coreSummary(data), check.message || check.code || _('未知错误'));
+
+	if (check && check.update_available === true)
+		return latest ? formatText(_('可更新到 %s'), latest) : _('有可用更新');
+
+	if (check && check.relation === 'equal')
+		return latest ? formatText(_('%s（已是最新）'), latest) : _('已是最新');
+
+	return coreSummary(data);
+}
+
+function coreUpdateButton() {
+	var button = liveTaskButton(_('更新'), function() {
+		return callComponentUpdateAsync('localclash');
+	}, 'cbi-button-apply');
+	button.id = 'localclash-core-update-button';
+	button.disabled = true;
+	return button;
+}
+
+function coreUpdateRetryButton() {
+	return E('button', {
+		'type': 'button',
+		'id': 'localclash-core-update-retry-button',
+		'class': 'btn cbi-button localclash-button cbi-button-action',
+		'style': 'display:none',
+		'click': function(ev) {
+			ev.preventDefault();
+			refreshCoreUpdateCheck();
+		}
+	}, [ _('重新检查') ]);
+}
+
+function coreUpdateRow(data) {
+	return E('tr', { 'class': 'tr cbi-rowstyle-1' }, [
+		E('td', { 'class': 'td', 'data-title': _('项目') }, [ _('localClash 核心') ]),
+		E('td', { 'class': 'td', 'data-title': _('目前状态') }, [
+			E('span', { 'id': 'localclash-core-update-status' }, [ coreUpdateSummary(data, { pending: true }) ])
+		]),
+		tableActionCell([
+			coreUpdateButton(),
+			coreUpdateRetryButton()
+		])
+	]);
+}
+
+function applyCoreUpdateCheck(data, check) {
+	var status = document.getElementById('localclash-core-update-status');
+	var updateButton = document.getElementById('localclash-core-update-button');
+	var retryButton = document.getElementById('localclash-core-update-retry-button');
+
+	if (status)
+		status.textContent = coreUpdateSummary(data, check);
+	if (updateButton)
+		updateButton.disabled = !(check && check.update_available === true);
+	if (retryButton)
+		retryButton.style.display = check && check.ok === false ? '' : 'none';
+}
+
+function refreshCoreUpdateCheck(data) {
+	var summaryData = data || lastOverviewStatusData;
+	var status = document.getElementById('localclash-core-update-status');
+	var updateButton = document.getElementById('localclash-core-update-button');
+	var retryButton = document.getElementById('localclash-core-update-retry-button');
+
+	if (!status)
+		return Promise.resolve();
+	if (!summaryData) {
+		applyCoreUpdateCheck({}, { ok: false, message: _('状态数据未加载') });
+		return Promise.resolve();
+	}
+
+	if (updateButton)
+		updateButton.disabled = true;
+	if (retryButton)
+		retryButton.style.display = 'none';
+	status.textContent = _('正在检查更新…');
+
+	return callCoreUpdateCheck().then(function(check) {
+		applyCoreUpdateCheck(summaryData, check || {});
+	}).catch(function(err) {
+		applyCoreUpdateCheck(summaryData, { ok: false, message: err.message || String(err) });
+	});
 }
 
 function luciUpdateSummary(data, check) {
@@ -1044,7 +1158,8 @@ function summaryTable(data, takeover, task, state) {
 			summaryActionRow(_('开机自动恢复'), bootRestoreSummary(bootRestore), [
 				commandButton(_('切换'), bootRestoreEnabled ? callBootRestoreDisable : callBootRestoreEnable, bootRestoreEnabled ? 'cbi-button-reset' : 'cbi-button-apply')
 			]),
-			luciUpdateRow(data)
+			luciUpdateRow(data),
+			coreUpdateRow(data)
 		])
 	]);
 }
@@ -1068,7 +1183,8 @@ function summaryLoadingTable() {
 			summaryActionRow(_('Dashboard'), defaultDashboardURL(), []),
 			summaryActionRow(_('订阅'), pending, []),
 			summaryActionRow(_('开机自动恢复'), pending, []),
-			summaryActionRow(_('LuCI 界面'), pending, [])
+			summaryActionRow(_('LuCI 界面'), pending, []),
+			summaryActionRow(_('localClash 核心'), pending, [])
 		])
 	]);
 }

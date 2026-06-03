@@ -247,6 +247,63 @@ luci_update_changed() {
 	[ "$(jsonfilter -s "$1" -e '@.changed' 2>/dev/null)" = "true" ]
 }
 
+core_update_check() {
+	local arch tmpdir manifest asset_url asset_sha asset_version current_sha relation update_available
+	log_line "localClash 核心更新检查：开始"
+	if ! command -v jsonfilter >/dev/null 2>&1; then
+		fail "jsonfilter_missing" "需要 jsonfilter 解析 localClash Release 清单。"
+		return 1
+	fi
+	if ! command -v sha256sum >/dev/null 2>&1; then
+		fail "sha256sum_missing" "需要 sha256sum 比对已安装 localClash 核心。"
+		return 1
+	fi
+	if ! core_installed; then
+		fail "bootstrap_core_missing" "localClash 核心尚未安装。"
+		return 1
+	fi
+	arch="$(router_arch)" || {
+		fail "unsupported_arch" "localClash 初始化助手不支持此路由器架构。"
+		return 1
+	}
+	current_sha="$(sha256sum "$CORE" 2>/dev/null | awk '{print $1; exit}')"
+	if [ -z "$current_sha" ]; then
+		fail "core_checksum_failed" "无法计算已安装 localClash 核心的 sha256。"
+		return 1
+	fi
+	tmpdir="$(mktemp -d /tmp/localclash-core-check.XXXXXX)" || {
+		fail "tmpdir_failed" "无法创建 localClash 核心更新检查临时目录。"
+		return 1
+	}
+	manifest="$tmpdir/manifest.json"
+	if ! fetch_manifest "$MANIFEST_URL" "$manifest"; then
+		rm -rf "$tmpdir"
+		fail "manifest_download_failed" "无法下载 localClash Release 清单。"
+		return 1
+	fi
+	asset_url="$(jsonfilter -i "$manifest" -e "@.assets[@.arch=\"$arch\"].url" 2>/dev/null)"
+	asset_sha="$(jsonfilter -i "$manifest" -e "@.assets[@.arch=\"$arch\"].sha256" 2>/dev/null)"
+	asset_version="$(jsonfilter -i "$manifest" -e "@.version" 2>/dev/null)"
+	if [ -z "$asset_url" ] || [ -z "$asset_sha" ]; then
+		rm -rf "$tmpdir"
+		fail "manifest_asset_missing" "Release 清单中没有匹配此路由器的 Linux 二进制文件。"
+		return 1
+	fi
+	if [ -z "$asset_version" ]; then
+		rm -rf "$tmpdir"
+		fail "manifest_version_missing" "Release 清单中没有 localClash 版本号。"
+		return 1
+	fi
+	rm -rf "$tmpdir"
+	relation="asset_mismatch"
+	update_available=true
+	if [ "$current_sha" = "$asset_sha" ]; then
+		relation="equal"
+		update_available=false
+	fi
+	ok '"changed":false,"summary":"localClash 核心更新检查完成。","core":{"installed":true,"path":"'"$(json_escape "$CORE")"'","arch":"'"$(json_escape "$arch")"'","current_sha256":"'"$(json_escape "$current_sha")"'","latest_sha256":"'"$(json_escape "$asset_sha")"'","latest_version":"'"$(json_escape "$asset_version")"'","asset_url":"'"$(json_escape "$asset_url")"'"},"latest_version":"'"$(json_escape "$asset_version")"'","relation":"'"$(json_escape "$relation")"'","update_available":'"$update_available"',"checked_at":'"$(now_epoch)"
+}
+
 luci_update_check() {
 	local manager tmpdir release asset_url asset_version current_version version_relation tag update_available
 	log_line "LuCI 更新检查：开始"
@@ -2265,6 +2322,7 @@ case "$method" in
   "subscription_refresh": {},
   "component_update": { "component": "localclash" },
   "component_update_async": { "component": "localclash" },
+  "core_update_check": {},
   "luci_update_check": {},
   "luci_update_async": {},
   "apply": {},
@@ -2308,6 +2366,7 @@ JSON
 	component_update) with_lock component_update ;;
 	component_update_async) start_component_update ;;
 	component_update_run) component_update_run ;;
+	core_update_check) core_update_check ;;
 	luci_update_check) luci_update_check ;;
 	luci_update_async) start_luci_update ;;
 	luci_update_run) luci_update_run ;;
