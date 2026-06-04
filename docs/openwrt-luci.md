@@ -1169,6 +1169,48 @@ Long-running operations can be synchronous in V1, but the UI must show a busy
 state and avoid duplicate submissions. If later operations exceed normal rpcd
 timeouts, introduce a job model instead of extending command schemas ad hoc.
 
+## Initialization Entry Discoverability
+
+Incident recorded on 2026-06-04:
+
+- A beginner user reinstalled localClash after resetting the router, but the
+  reset left an incomplete localClash user home/work directory.
+- The visible failure was a router takeover error from the core:
+  `router_takeover_apply_failed` with `profile_mode: "normal"`.
+- The root cause was not that LuCI generated a normal profile. The core observed
+  an incomplete or mismatched state directory and defaulted the missing runtime
+  profile to `normal`.
+- The correct user recovery was `Advanced` -> full reset, then a normal
+  initialization from the overview page.
+
+Product issue:
+
+- The initialization input panel and `开始初始化` action are not visually strong
+  enough for beginner users.
+- A user can see the page and still fail to understand that the subscription
+  input plus `开始初始化` is the first-run entry point that creates the coherent
+  localClash state: runtime profile, policy template, rendered config, runtime,
+  and router takeover.
+- When first-run state is incomplete, the UI should not make the user infer the
+  recovery path from core/MCP-oriented messages like
+  `call config_configure with runtime_profile=router`.
+
+Design requirement:
+
+- In first-run or incomplete-workdir states, make the initialization panel the
+  dominant overview action, not just one control among many.
+- The subscription input, core/template options, and `开始初始化` button should
+  form one visually connected task region.
+- Runtime, takeover, and advanced maintenance controls should read as secondary
+  until initialization has produced a coherent router profile and generated
+  config.
+- If LuCI detects an incomplete work directory after reinstall/reset, show a
+  direct recovery message: run `进阶` -> `完全重置`, then return to overview and
+  initialize again.
+- The status page should expose the observed paths behind the diagnosis:
+  `LOCALCLASH_WORKDIR`, runtime profile path, generated config path, selected
+  core path, and whether those files exist.
+
 ## Build and Release Workflow
 
 Initial release can ship as a standalone package artifact before upstreaming.
