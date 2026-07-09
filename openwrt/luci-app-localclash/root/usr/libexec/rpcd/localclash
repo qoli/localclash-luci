@@ -26,6 +26,8 @@ BOOT_AUTO_RESTORE_FILE="${LOCALCLASH_BOOT_AUTO_RESTORE_FILE:-$STATE_DIR/boot-aut
 LEGACY_TAKEOVER_INTENT_FILE="${LOCALCLASH_LEGACY_TAKEOVER_INTENT_FILE:-$STATE_DIR/takeover-enabled}"
 BOOT_RESTORE_MAX_UPTIME="${LOCALCLASH_BOOT_RESTORE_MAX_UPTIME:-300}"
 PROC_UPTIME="${LOCALCLASH_PROC_UPTIME:-/proc/uptime}"
+HELPER_SELF="${LOCALCLASH_HELPER_SELF:-$0}"
+MCP_HEALTH_ATTEMPTS="${LOCALCLASH_MCP_HEALTH_ATTEMPTS:-30}"
 
 json_escape() {
 	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
@@ -1403,25 +1405,18 @@ runtime_running() {
 }
 
 service_body() {
-	local installed enabled running pid endpoint health_endpoint health_probe health_body healthy last_error
+	local installed enabled running endpoint health_endpoint health_probe health_body healthy last_error
 	installed=false
 	enabled=false
 	running=false
-	pid=0
 	healthy=false
 	last_error=""
 	if [ -x "$SERVICE" ]; then
 		installed=true
 		"$SERVICE" enabled >/dev/null 2>&1 && enabled=true
-		if "$SERVICE" running >/dev/null 2>&1; then
+		if "$SERVICE" running mcp >/dev/null 2>&1; then
 			running=true
 		fi
-	fi
-	pid="$(localclash_mcp_pid)"
-	if [ -n "$pid" ]; then
-		running=true
-	else
-		pid=0
 	fi
 	endpoint="$(mcp_endpoint)"
 	health_endpoint="${endpoint%/mcp}/health"
@@ -1436,22 +1431,7 @@ service_body() {
 		fi
 		rm -f /tmp/localclash-mcp-health.err
 	fi
-	printf '"service":{"name":"localclash-mcp","installed":%s,"enabled":%s,"running":%s,"pid":%s},"mcp":{"endpoint":"%s","health_endpoint":"%s","healthy":%s,"last_error":"%s"}' "$installed" "$enabled" "$running" "$pid" "$(json_escape "$endpoint")" "$(json_escape "$health_endpoint")" "$healthy" "$(json_escape "$last_error")"
-}
-
-localclash_mcp_pid() {
-	local p cmd
-	for p in /proc/[0-9]*; do
-		[ -r "$p/cmdline" ] || continue
-		cmd="$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null || true)"
-		case "$cmd" in
-			*"/localclash mcp serve"*)
-				printf '%s\n' "${p#/proc/}"
-				return 0
-				;;
-		esac
-	done
-	return 1
+	printf '"service":{"name":"localclash-mcp","installed":%s,"enabled":%s,"running":%s,"pid":0},"mcp":{"endpoint":"%s","health_endpoint":"%s","healthy":%s,"last_error":"%s"}' "$installed" "$enabled" "$running" "$(json_escape "$endpoint")" "$(json_escape "$health_endpoint")" "$healthy" "$(json_escape "$last_error")"
 }
 
 mcp_health_body() {
@@ -1505,6 +1485,51 @@ mcp_local_health_endpoint() {
 		host="127.0.0.1"
 	fi
 	printf 'http://%s:%s/health\n' "$host" "$port"
+}
+
+wait_for_mcp_ready() {
+	local attempts current url body status_result service_running service_healthy
+	attempts="$MCP_HEALTH_ATTEMPTS"
+	case "$attempts" in
+		""|*[!0-9]*|0)
+			fail_with_details "mcp_health_attempts_invalid" "MCP 健康检查次数必须是正整数。" '"value":"'"$(json_escape "$attempts")"'"'
+			return 1
+			;;
+	esac
+	if ! command -v jsonfilter >/dev/null 2>&1; then
+		fail "jsonfilter_missing" "需要 jsonfilter 验证 localclash-mcp 服务状态。"
+		return 1
+	fi
+	url="$(mcp_local_health_endpoint)"
+	current=1
+	service_running=false
+	service_healthy=false
+	while [ "$current" -le "$attempts" ]; do
+		service_running=false
+		service_healthy=false
+		if "$SERVICE" running mcp >/dev/null 2>&1; then
+			service_running=true
+			body="$(mcp_health_body "$url" 2>/dev/null || true)"
+			if printf '%s' "$body" | grep -q '"status":"ok"'; then
+				status_result="$(service_status 2>/dev/null || true)"
+				service_running="$(jsonfilter -s "$status_result" -e '@.service.running' 2>/dev/null || true)"
+				service_healthy="$(jsonfilter -s "$status_result" -e '@.mcp.healthy' 2>/dev/null || true)"
+				if [ "$service_running" = "true" ] && [ "$service_healthy" = "true" ]; then
+					printf '%s\n' "$status_result"
+					return 0
+				fi
+			fi
+		else
+			service_running=false
+			service_healthy=false
+		fi
+		if [ "$current" -lt "$attempts" ]; then
+			sleep 1
+		fi
+		current=$((current + 1))
+	done
+	fail_with_details "mcp_health_timeout" "localclash-mcp 重启后未在限定时间内同时通过 procd 实例和健康检查。" '"attempts":'"$attempts"',"health_endpoint":"'"$(json_escape "$url")"'","service_running":"'"$(json_escape "$service_running")"'","mcp_healthy":"'"$(json_escape "$service_healthy")"'"'
+	return 1
 }
 
 service_status() {
@@ -1578,8 +1603,19 @@ $endpoint
 }
 
 service_ensure() {
-	mkdir -p "$(dirname "$SERVICE")"
-	cat > "$SERVICE" <<EOF
+	local dir tmp
+	dir="$(dirname "$SERVICE")"
+	tmp="$SERVICE.tmp.$$"
+	if [ -L "$SERVICE" ] || { [ -e "$SERVICE" ] && [ ! -f "$SERVICE" ]; }; then
+		fail_with_details "service_script_path_invalid" "localclash-mcp 服务脚本路径类型无效。" '"path":"'"$(json_escape "$SERVICE")"'"'
+		return 1
+	fi
+	if ! mkdir -p "$dir"; then
+		fail_with_details "service_script_dir_failed" "无法创建 localclash-mcp 服务脚本目录。" '"path":"'"$(json_escape "$dir")"'"'
+		return 1
+	fi
+	rm -f "$tmp" 2>/dev/null || true
+	if ! (umask 022; cat > "$tmp" <<EOF
 #!/bin/sh /etc/rc.common
 
 START=95
@@ -1608,33 +1644,60 @@ start_service() {
 	fi
 }
 EOF
-	chmod 755 "$SERVICE"
+); then
+		rm -f "$tmp" 2>/dev/null || true
+		fail_with_details "service_script_write_failed" "无法写入 localclash-mcp 服务脚本。" '"path":"'"$(json_escape "$SERVICE")"'"'
+		return 1
+	fi
+	if ! chmod 755 "$tmp" || ! mv "$tmp" "$SERVICE"; then
+		rm -f "$tmp" 2>/dev/null || true
+		fail_with_details "service_script_install_failed" "无法原子安装 localclash-mcp 服务脚本。" '"path":"'"$(json_escape "$SERVICE")"'"'
+		return 1
+	fi
 	log_line "服务脚本已确保存在：$SERVICE"
 	ok '"changed":true,"summary":"MCP 服务脚本已确保存在。"'
 }
 
 service_start() {
-	service_ensure >/dev/null
+	local ensure_result ready_result
+	ensure_result="$(service_ensure)" || {
+		if [ -n "$ensure_result" ]; then
+			printf '%s\n' "$ensure_result"
+		else
+			fail "service_ensure_failed" "无法确保 localclash-mcp 服务脚本。"
+		fi
+		return 1
+	}
 	if ! core_installed; then
 		fail "bootstrap_core_missing" "localClash 核心尚未安装。"
+		return 1
+	fi
+	case "$MCP_HEALTH_ATTEMPTS" in
+		""|*[!0-9]*|0)
+			fail_with_details "mcp_health_attempts_invalid" "MCP 健康检查次数必须是正整数。" '"value":"'"$(json_escape "$MCP_HEALTH_ATTEMPTS")"'"'
+			return 1
+			;;
+	esac
+	if ! command -v jsonfilter >/dev/null 2>&1; then
+		fail "jsonfilter_missing" "需要 jsonfilter 验证 localclash-mcp 服务状态。"
 		return 1
 	fi
 	"$SERVICE" enable >/dev/null 2>&1 || {
 		fail "service_enable_failed" "无法启用 localclash-mcp 服务。"
 		return 1
 	}
-	if "$SERVICE" running >/dev/null 2>&1; then
-		"$SERVICE" restart >/dev/null 2>&1 || true
-	else
-		"$SERVICE" start >/dev/null 2>&1 || true
+	if ! "$SERVICE" restart >/dev/null 2>&1; then
+		fail "service_restart_failed" "无法重启 localclash-mcp 服务。"
+		return 1
 	fi
+	# procd restart is asynchronous; allow the old instance to leave before
+	# jointly polling the named instance and the HTTP endpoint.
 	sleep 1
-	if "$SERVICE" running >/dev/null 2>&1; then
-		service_status
-		return 0
-	fi
-	fail "service_start_failed" "无法启动 localclash-mcp 服务。"
-	return 1
+	ready_result="$(wait_for_mcp_ready)" || {
+		printf '%s\n' "$ready_result"
+		return 1
+	}
+	printf '%s\n' "$ready_result"
 }
 
 status() {
@@ -1673,8 +1736,152 @@ component_update() {
 			rm -f "$tmp"
 			return "$rc"
 			;;
-		*) fail "invalid_component" "component 必须是 localclash、mihomo 或 dashboard。" ;;
+		*) fail "invalid_component" "component 必须是 localclash、mihomo 或 dashboard。"; return 1 ;;
 	esac
+}
+
+one_click_update_state_dir() {
+	printf '/tmp/localclash-one-click-update.%s\n' "$$"
+}
+
+one_click_update_write_state() {
+	local dir phase tmp
+	dir="$1"
+	phase="$2"
+	tmp="$dir/state.json.tmp.$$"
+	if ! (umask 077; printf '{"version":1,"task":"one_click_update","owner_pid":%s,"phase":"%s"}\n' "$$" "$(json_escape "$phase")" > "$tmp"); then
+		rm -f "$tmp"
+		fail "one_click_update_state_write_failed" "无法写入一键更新交接状态。"
+		return 1
+	fi
+	if ! mv "$tmp" "$dir/state.json"; then
+		rm -f "$tmp"
+		fail "one_click_update_state_write_failed" "无法提交一键更新交接状态。"
+		return 1
+	fi
+}
+
+one_click_update_write_snapshot() {
+	local dir sync_default_policy runtime_was_running takeover_was_effective profile_mode tmp
+	dir="$1"
+	sync_default_policy="$2"
+	runtime_was_running="$3"
+	takeover_was_effective="$4"
+	profile_mode="$5"
+	tmp="$dir/snapshot.json.tmp.$$"
+	if ! (umask 077; printf '{"version":1,"sync_default_policy":%s,"runtime_was_running":%s,"takeover_was_effective":%s,"profile_mode":"%s"}\n' \
+		"$sync_default_policy" "$runtime_was_running" "$takeover_was_effective" "$(json_escape "$profile_mode")" > "$tmp"); then
+		rm -f "$tmp"
+		fail "one_click_update_snapshot_write_failed" "无法写入一键更新运行时快照。"
+		return 1
+	fi
+	if ! mv "$tmp" "$dir/snapshot.json"; then
+		rm -f "$tmp"
+		fail "one_click_update_snapshot_write_failed" "无法提交一键更新运行时快照。"
+		return 1
+	fi
+}
+
+one_click_update_validate_resume() {
+	local dir lock_owner version task state_owner phase
+	dir="$(one_click_update_state_dir)"
+	if [ -L "$LOCK_DIR" ] || [ ! -d "$LOCK_DIR" ] || [ -L "$LOCK_DIR/pid" ] || [ ! -f "$LOCK_DIR/pid" ]; then
+		fail "one_click_update_lock_missing" "一键更新交接所需的任务锁不存在或类型无效。"
+		return 1
+	fi
+	lock_owner="$(cat "$LOCK_DIR/pid" 2>/dev/null)"
+	case "$lock_owner" in
+		""|*[!0-9]*)
+			fail "one_click_update_lock_owner_invalid" "一键更新任务锁的 owner PID 无效。"
+			return 1
+			;;
+	esac
+	if [ "$lock_owner" != "$$" ]; then
+		fail_with_details "one_click_update_lock_owner_mismatch" "新版 helper 无法接管不属于当前进程的一键更新任务锁。" '"expected_pid":'"$$"',"actual_pid":'"$lock_owner"
+		return 1
+	fi
+	if [ -L "$dir" ] || [ ! -d "$dir" ] || [ -L "$dir/state.json" ] || [ ! -f "$dir/state.json" ] || [ -L "$dir/snapshot.json" ] || [ ! -f "$dir/snapshot.json" ] || [ -L "$dir/luci.json" ] || [ ! -f "$dir/luci.json" ]; then
+		fail "one_click_update_state_missing" "一键更新交接状态缺失或类型无效。"
+		return 1
+	fi
+	version="$(jsonfilter -i "$dir/state.json" -e '@.version' 2>/dev/null || true)"
+	task="$(jsonfilter -i "$dir/state.json" -e '@.task' 2>/dev/null || true)"
+	state_owner="$(jsonfilter -i "$dir/state.json" -e '@.owner_pid' 2>/dev/null || true)"
+	phase="$(jsonfilter -i "$dir/state.json" -e '@.phase' 2>/dev/null || true)"
+	if [ "$version" != "1" ]; then
+		fail_with_details "one_click_update_state_version_unsupported" "一键更新交接状态版本不受支持。" '"version":"'"$(json_escape "$version")"'"'
+		return 1
+	fi
+	if [ "$task" != "one_click_update" ]; then
+		fail_with_details "one_click_update_state_invalid" "一键更新交接状态的任务类型无效。" '"task":"'"$(json_escape "$task")"'"'
+		return 1
+	fi
+	if [ "$state_owner" != "$$" ]; then
+		fail_with_details "one_click_update_state_owner_mismatch" "一键更新交接状态不属于当前进程。" '"expected_pid":'"$$"',"actual_pid":"'"$(json_escape "$state_owner")"'"'
+		return 1
+	fi
+	if [ "$phase" != "awaiting_resume" ]; then
+		fail_with_details "one_click_update_resume_phase_invalid" "一键更新交接状态不允许继续执行。" '"phase":"'"$(json_escape "$phase")"'"'
+		return 1
+	fi
+}
+
+one_click_update_reexec() {
+	if [ -L "$HELPER_SELF" ] || [ ! -f "$HELPER_SELF" ] || [ ! -r "$HELPER_SELF" ] || [ ! -x "$HELPER_SELF" ]; then
+		fail_with_details "one_click_update_helper_unavailable" "LuCI 更新后无法执行新版 localClash helper。" '"path":"'"$(json_escape "$HELPER_SELF")"'"'
+		return 1
+	fi
+	if ! /bin/sh -n "$HELPER_SELF" >/dev/null 2>&1; then
+		fail_with_details "one_click_update_helper_invalid" "LuCI 更新后的 localClash helper 无法通过 shell 语法检查。" '"path":"'"$(json_escape "$HELPER_SELF")"'"'
+		return 1
+	fi
+	# Package replacement does not update functions already loaded by this
+	# shell. exec preserves the lock-owning PID while /bin/sh loads the new file.
+	exec /bin/sh "$HELPER_SELF" call one_click_update_resume
+	fail_with_details "one_click_update_reexec_failed" "无法切换到新版 localClash helper 继续一键更新。" '"path":"'"$(json_escape "$HELPER_SELF")"'"'
+	return 1
+}
+
+one_click_update_lock_owned() {
+	local owner
+	if [ -L "$LOCK_DIR" ] || [ ! -d "$LOCK_DIR" ] || [ -L "$LOCK_DIR/pid" ] || [ ! -f "$LOCK_DIR/pid" ]; then
+		return 1
+	fi
+	owner="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+	[ "$owner" = "$$" ]
+}
+
+one_click_update_resume_cleanup() {
+	local dir
+	dir="$(one_click_update_state_dir)"
+	rm -rf "$dir" 2>/dev/null || true
+	if one_click_update_lock_owned; then
+		rm -rf "$LOCK_DIR" 2>/dev/null || true
+	fi
+}
+
+one_click_update_resume() {
+	local rc
+	if ! one_click_update_validate_resume; then
+		if one_click_update_lock_owned; then
+			one_click_update_resume_cleanup
+		fi
+		return 1
+	fi
+	trap 'one_click_update_resume_cleanup' EXIT
+	trap 'one_click_update_resume_cleanup; exit 130' INT
+	trap 'one_click_update_resume_cleanup; exit 143' TERM
+	if ! one_click_update_write_state "$(one_click_update_state_dir)" "continuing"; then
+		one_click_update_resume_cleanup
+		trap - EXIT INT TERM
+		return 1
+	fi
+	ONE_CLICK_UPDATE_RESUME=1
+	one_click_update_run
+	rc=$?
+	one_click_update_resume_cleanup
+	trap - EXIT INT TERM
+	return "$rc"
 }
 
 start_one_click_update() {
@@ -1709,41 +1916,152 @@ start_one_click_update() {
 }
 
 one_click_update_run() {
-	local tmpdir payload sync_default_policy runtime_was_running takeover_was_effective profile_mode subscription_ready subscription_refresh_failed subscription_cache_used subscription_refresh_json policy_template_sync_json mihomo_changed dashboard_changed restart_strategy runtime_recovered takeover_recovered mcp_healthy current_mode current_core
-	payload='{"version":1}'
-	if [ -f "$TASK_INPUT" ]; then
-		payload="$(cat "$TASK_INPUT" 2>/dev/null || printf '{"version":1}')"
+	local tmpdir payload snapshot version sync_default_policy runtime_was_running takeover_was_effective profile_mode luci_changed subscription_ready subscription_refresh_failed subscription_cache_used subscription_refresh_json policy_template_sync_json mihomo_changed dashboard_changed restart_strategy runtime_recovered takeover_recovered mcp_healthy current_mode current_core
+	tmpdir="$(one_click_update_state_dir)"
+	if [ "${ONE_CLICK_UPDATE_RESUME:-0}" = "1" ]; then
+		snapshot="$tmpdir/snapshot.json"
+		version="$(jsonfilter -i "$snapshot" -e '@.version' 2>/dev/null || true)"
+		if [ "$version" != "1" ]; then
+			fail_with_details "one_click_update_snapshot_version_unsupported" "一键更新运行时快照版本不受支持。" '"version":"'"$(json_escape "$version")"'"'
+			return 1
+		fi
+		sync_default_policy="$(json_bool_required "$snapshot" '@.sync_default_policy' "one_click_update_snapshot_invalid" "无法读取一键更新的策略同步快照。")" || {
+			printf '%s\n' "$sync_default_policy"
+			return 1
+		}
+		runtime_was_running="$(json_bool_required "$snapshot" '@.runtime_was_running' "one_click_update_snapshot_invalid" "无法读取一键更新前的运行时状态。")" || {
+			printf '%s\n' "$runtime_was_running"
+			return 1
+		}
+		takeover_was_effective="$(json_bool_required "$snapshot" '@.takeover_was_effective' "one_click_update_snapshot_invalid" "无法读取一键更新前的网络接管状态。")" || {
+			printf '%s\n' "$takeover_was_effective"
+			return 1
+		}
+		profile_mode="$(jsonfilter -i "$snapshot" -e '@.profile_mode' 2>/dev/null || true)"
+		log_line "一键更新：新版 helper 已接管更新任务"
+	else
+		if [ -e "$tmpdir" ] || [ -L "$tmpdir" ]; then
+			fail_with_details "one_click_update_state_dir_exists" "一键更新状态目录已存在，拒绝复用。" '"path":"'"$(json_escape "$tmpdir")"'"'
+			return 1
+		fi
+		if ! (umask 077; mkdir "$tmpdir"); then
+			fail_with_details "one_click_update_state_dir_create_failed" "无法创建一键更新状态目录。" '"path":"'"$(json_escape "$tmpdir")"'"'
+			return 1
+		fi
+		if ! one_click_update_write_state "$tmpdir" "preparing"; then
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		payload='{"version":1}'
+		if [ -f "$TASK_INPUT" ]; then
+			payload="$(cat "$TASK_INPUT" 2>/dev/null || printf '{"version":1}')"
+		fi
+		sync_default_policy="$(jsonfilter -s "$payload" -e '@.sync_default_policy' 2>/dev/null || true)"
+		case "$sync_default_policy" in
+			true|false)
+				sync_default_policy="$(one_click_update_preferences_set_value "$sync_default_policy")" || {
+					printf '%s\n' "$sync_default_policy"
+					rm -rf "$tmpdir"
+					return 1
+				}
+				sync_default_policy="$(jsonfilter -s "$sync_default_policy" -e '@.preferences.one_click_update.sync_default_policy' 2>/dev/null || true)"
+				;;
+			"")
+				sync_default_policy="$(one_click_update_sync_default_policy_preference)" || {
+					printf '%s\n' "$sync_default_policy"
+					rm -rf "$tmpdir"
+					return 1
+				}
+				;;
+			*)
+				fail_with_details "invalid_one_click_update_input" "sync_default_policy 必须是 true 或 false。" '"sync_default_policy":"'"$(json_escape "$sync_default_policy")"'"'
+				rm -rf "$tmpdir"
+				return 1
+				;;
+		esac
+		case "$sync_default_policy" in
+			true|false) ;;
+			*)
+				fail_with_details "invalid_one_click_update_preferences" "一键更新偏好文件无效，请删除后重新设置。" '"sync_default_policy":"'"$(json_escape "$sync_default_policy")"'"'
+				rm -rf "$tmpdir"
+				return 1
+				;;
+		esac
+		runtime_was_running=false
+		takeover_was_effective=false
+		profile_mode=""
+
+		log_line "一键更新：开始"
+		if core_installed; then
+			log_line "一键更新：记录更新前运行时状态"
+			if ! call_core runtime status --json > "$tmpdir/runtime-before.json"; then
+				log_line "一键更新：运行时状态读取失败"
+				cat "$tmpdir/runtime-before.json" 2>/dev/null || true
+				rm -rf "$tmpdir"
+				return 1
+			fi
+			runtime_was_running="$(json_bool_required "$tmpdir/runtime-before.json" '@.status.running' "runtime_status_invalid" "无法读取更新前运行时状态。")" || {
+				printf '%s\n' "$runtime_was_running"
+				rm -rf "$tmpdir"
+				return 1
+			}
+
+			log_line "一键更新：记录更新前网络接管状态"
+			if ! call_core takeover status --json > "$tmpdir/takeover-before.json"; then
+				log_line "一键更新：网络接管状态读取失败"
+				cat "$tmpdir/takeover-before.json" 2>/dev/null || true
+				rm -rf "$tmpdir"
+				return 1
+			fi
+			takeover_was_effective="$(json_bool_required "$tmpdir/takeover-before.json" '@.status.effective' "takeover_status_invalid" "无法读取更新前网络接管状态。")" || {
+				printf '%s\n' "$takeover_was_effective"
+				rm -rf "$tmpdir"
+				return 1
+			}
+			profile_mode="$(jsonfilter -i "$tmpdir/takeover-before.json" -e '@.status.profile_mode' 2>/dev/null || true)"
+		else
+			log_line "一键更新：localClash 核心尚未安装，跳过运行时快照"
+		fi
+		if ! one_click_update_write_snapshot "$tmpdir" "$sync_default_policy" "$runtime_was_running" "$takeover_was_effective" "$profile_mode"; then
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		if ! one_click_update_write_state "$tmpdir" "luci_updating"; then
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		log_line "一键更新：准备阶段开始，当前运行时保持不动"
+		if ! run_with_heartbeat "一键更新：正在更新 LuCI 界面" "$tmpdir/luci.json" luci_update; then
+			log_line "一键更新：LuCI 更新失败"
+			cat "$tmpdir/luci.json"
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		luci_changed="$(json_bool_required "$tmpdir/luci.json" '@.changed' "luci_update_result_invalid" "无法读取 LuCI 更新结果的 changed 状态。")" || {
+			printf '%s\n' "$luci_changed"
+			rm -rf "$tmpdir"
+			return 1
+		}
+		if [ "$luci_changed" = "true" ]; then
+			if ! one_click_update_write_state "$tmpdir" "awaiting_resume"; then
+				rm -rf "$tmpdir"
+				return 1
+			fi
+			log_line "一键更新：LuCI helper 已更新，正在切换到新版 helper"
+			if ! one_click_update_reexec; then
+				rm -rf "$tmpdir"
+				return 1
+			fi
+			fail "one_click_update_reexec_returned" "新版 helper 交接异常返回，已停止继续更新。"
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		if ! one_click_update_write_state "$tmpdir" "continuing"; then
+			rm -rf "$tmpdir"
+			return 1
+		fi
 	fi
-	sync_default_policy="$(jsonfilter -s "$payload" -e '@.sync_default_policy' 2>/dev/null || true)"
-	case "$sync_default_policy" in
-		true|false)
-			sync_default_policy="$(one_click_update_preferences_set_value "$sync_default_policy")" || {
-				printf '%s\n' "$sync_default_policy"
-				return 1
-			}
-			sync_default_policy="$(jsonfilter -s "$sync_default_policy" -e '@.preferences.one_click_update.sync_default_policy' 2>/dev/null || true)"
-			;;
-		"")
-			sync_default_policy="$(one_click_update_sync_default_policy_preference)" || {
-				printf '%s\n' "$sync_default_policy"
-				return 1
-			}
-			;;
-		*)
-			fail_with_details "invalid_one_click_update_input" "sync_default_policy 必须是 true 或 false。" '"sync_default_policy":"'"$(json_escape "$sync_default_policy")"'"'
-			return 1
-			;;
-	esac
-	case "$sync_default_policy" in
-		true|false) ;;
-		*)
-			fail_with_details "invalid_one_click_update_preferences" "一键更新偏好文件无效，请删除后重新设置。" '"sync_default_policy":"'"$(json_escape "$sync_default_policy")"'"'
-			return 1
-			;;
-	esac
-	runtime_was_running=false
-	takeover_was_effective=false
-	profile_mode=""
+
 	subscription_ready=false
 	subscription_refresh_failed=false
 	subscription_cache_used=false
@@ -1754,51 +2072,6 @@ one_click_update_run() {
 	restart_strategy="skipped"
 	runtime_recovered=false
 	takeover_recovered=false
-
-	log_line "一键更新：开始"
-	tmpdir="$(mktemp -d /tmp/localclash-one-click-update.XXXXXX)" || {
-		fail "tmpdir_failed" "无法创建一键更新临时目录。"
-		return 1
-	}
-
-	if core_installed; then
-		log_line "一键更新：记录更新前运行时状态"
-		if ! call_core runtime status --json > "$tmpdir/runtime-before.json"; then
-			log_line "一键更新：运行时状态读取失败"
-			cat "$tmpdir/runtime-before.json" 2>/dev/null || true
-			rm -rf "$tmpdir"
-			return 1
-		fi
-		runtime_was_running="$(json_bool_required "$tmpdir/runtime-before.json" '@.status.running' "runtime_status_invalid" "无法读取更新前运行时状态。")" || {
-			printf '%s\n' "$runtime_was_running"
-			rm -rf "$tmpdir"
-			return 1
-		}
-
-		log_line "一键更新：记录更新前网络接管状态"
-		if ! call_core takeover status --json > "$tmpdir/takeover-before.json"; then
-			log_line "一键更新：网络接管状态读取失败"
-			cat "$tmpdir/takeover-before.json" 2>/dev/null || true
-			rm -rf "$tmpdir"
-			return 1
-		fi
-		takeover_was_effective="$(json_bool_required "$tmpdir/takeover-before.json" '@.status.effective' "takeover_status_invalid" "无法读取更新前网络接管状态。")" || {
-			printf '%s\n' "$takeover_was_effective"
-			rm -rf "$tmpdir"
-			return 1
-		}
-		profile_mode="$(jsonfilter -i "$tmpdir/takeover-before.json" -e '@.status.profile_mode' 2>/dev/null || true)"
-	else
-		log_line "一键更新：localClash 核心尚未安装，跳过运行时快照"
-	fi
-
-	log_line "一键更新：准备阶段开始，当前运行时保持不动"
-	if ! run_with_heartbeat "一键更新：正在更新 LuCI 界面" "$tmpdir/luci.json" luci_update; then
-		log_line "一键更新：LuCI 更新失败"
-		cat "$tmpdir/luci.json"
-		rm -rf "$tmpdir"
-		return 1
-	fi
 
 	if ! run_with_heartbeat "一键更新：正在更新 localClash 核心" "$tmpdir/core.json" bootstrap_core; then
 		log_line "一键更新：localClash 核心更新失败"
@@ -2016,6 +2289,10 @@ JSON
 		return 1
 	fi
 
+	if ! one_click_update_write_state "$tmpdir" "completed"; then
+		rm -rf "$tmpdir"
+		return 1
+	fi
 	log_line "一键更新：已完成"
 	printf '{"ok":true,"changed":true,"summary":"一键更新已完成。","minimal_outage":{"runtime_kept_until_final_switch":true,"restart_strategy":"%s","runtime_was_running":%s,"runtime_recovered":%s,"takeover_was_effective":%s,"takeover_recovered":%s},"luci":%s,"core":%s,"mihomo":%s,"dashboard":%s,"policy_template_sync":%s,"subscription":{"configured":%s,"refresh_failed":%s,"used_cached_artifact":%s,"refresh":%s},"mcp_service":%s}\n' \
 		"$(json_escape "$restart_strategy")" \
@@ -2133,7 +2410,55 @@ start_luci_update() {
 }
 
 luci_update_run() {
-	with_lock luci_update
+	with_lock luci_update_run_locked
+}
+
+luci_update_run_locked() {
+	local result rc changed service_result
+	result="$(luci_update)"
+	rc=$?
+	if [ "$rc" -ne 0 ]; then
+		if [ -n "$result" ]; then
+			printf '%s\n' "$result"
+		else
+			fail "luci_update_failed" "LuCI 更新失败且没有返回结果。"
+		fi
+		return "$rc"
+	fi
+	changed="$(jsonfilter -s "$result" -e '@.changed' 2>/dev/null || true)"
+	case "$changed" in
+		false)
+			printf '%s\n' "$result"
+			return 0
+			;;
+		true) ;;
+		*)
+			fail_with_details "luci_update_result_invalid" "无法读取 LuCI 更新结果的 changed 状态。" '"changed":"'"$(json_escape "$changed")"'"'
+			return 1
+			;;
+	esac
+	if core_installed; then
+		if [ -L "$HELPER_SELF" ] || [ ! -f "$HELPER_SELF" ] || [ ! -r "$HELPER_SELF" ] || [ ! -x "$HELPER_SELF" ]; then
+			fail_with_details "luci_update_helper_unavailable" "LuCI 更新后无法执行新版 localClash helper。" '"path":"'"$(json_escape "$HELPER_SELF")"'"'
+			return 1
+		fi
+		if ! /bin/sh -n "$HELPER_SELF" >/dev/null 2>&1; then
+			fail_with_details "luci_update_helper_invalid" "LuCI 更新后的 localClash helper 无法通过 shell 语法检查。" '"path":"'"$(json_escape "$HELPER_SELF")"'"'
+			return 1
+		fi
+		log_line "LuCI 更新：正在由新版 helper 重启 localclash-mcp"
+		service_result="$(/bin/sh "$HELPER_SELF" call service_start)"
+		rc=$?
+		if [ "$rc" -ne 0 ]; then
+			if [ -n "$service_result" ]; then
+				printf '%s\n' "$service_result"
+			else
+				fail "service_start_failed" "LuCI 已更新，但新版 helper 无法重启 localclash-mcp。"
+			fi
+			return "$rc"
+		fi
+	fi
+	printf '%s\n' "$result"
 }
 
 input_to_core_file() {
@@ -2360,7 +2685,7 @@ reset() {
 }
 
 bootstrap_core() {
-	local arch tmpdir manifest binary asset_url asset_sha asset_version tmp_core
+	local arch tmpdir manifest binary asset_url asset_sha asset_version tmp_core service_result
 	log_line "核心初始化：开始"
 	if ! command -v jsonfilter >/dev/null 2>&1; then
 		log_line "核心初始化：缺少 jsonfilter"
@@ -2413,17 +2738,21 @@ bootstrap_core() {
 		fail "core_install_failed" "无法安装 localClash 核心二进制文件。"
 		return 1
 	fi
+	service_result="$(service_start)" || {
+		rm -rf "$tmpdir"
+		log_line "核心初始化：MCP 服务启动失败"
+		if [ -n "$service_result" ]; then
+			printf '%s\n' "$service_result"
+		else
+			fail "service_start_failed" "localClash 核心已安装，但 MCP 服务无法启动。"
+		fi
+		return 1
+	}
 	if ! install_base_assets "$manifest" "$tmpdir"; then
 		rm -rf "$tmpdir"
 		return 1
 	fi
 	rm -rf "$tmpdir"
-	if ! service_start >/dev/null; then
-		rm -rf "$tmpdir"
-		log_line "核心初始化：MCP 服务启动失败"
-		fail "service_start_failed" "localClash 核心已安装，但 MCP 服务无法启动。"
-		return 1
-	fi
 	log_line "已安装 localClash 核心 ${asset_version}（${arch}）"
 	ok "\"changed\":true,\"summary\":\"localClash 核心已安装。\",\"core\":{\"installed\":true,\"path\":\"$CORE\",\"version\":\"$(json_escape "$asset_version")\",\"arch\":\"$arch\"}"
 }
@@ -2506,7 +2835,7 @@ start_bootstrap_default() {
 }
 
 bootstrap_default_run() {
-	local tmpdir mihomo_attempt payload selected_core selected_template subscription_input subscription_changed subscription_ready runtime_started runtime_result
+	local tmpdir mihomo_attempt payload selected_core selected_template subscription_input subscription_changed subscription_ready runtime_started runtime_result service_result
 	payload='{"version":1}'
 	selected_core="meta"
 	selected_template="localclash-default"
@@ -2635,12 +2964,16 @@ JSON
 		log_line "默认初始化：订阅尚未配置，跳过配置生成"
 	fi
 
-	if ! service_start >/dev/null; then
+	service_result="$(service_start)" || {
 		rm -rf "$tmpdir"
 		log_line "默认初始化：MCP 服务启动失败"
-		fail "service_start_failed" "默认配置已应用，但 MCP 服务无法启动。"
+		if [ -n "$service_result" ]; then
+			printf '%s\n' "$service_result"
+		else
+			fail "service_start_failed" "默认配置已应用，但 MCP 服务无法启动。"
+		fi
 		return 1
-	fi
+	}
 
 	if [ "$subscription_ready" = true ]; then
 		log_line "默认初始化：正在启动运行时并应用网络接管"
@@ -2950,6 +3283,7 @@ JSON
 	one_click_update_preferences) one_click_update_preferences ;;
 	one_click_update_preferences_set) one_click_update_preferences_set ;;
 	one_click_update_run) with_lock one_click_update_run ;;
+	one_click_update_resume) one_click_update_resume ;;
 	core_update_check) core_update_check ;;
 	luci_update_check) luci_update_check ;;
 	luci_update_async) start_luci_update ;;
@@ -2986,7 +3320,7 @@ JSON
 	bootstrap_task_status) bootstrap_task_status ;;
 	mcp_help) mcp_help ;;
 	bootstrap_logs) bootstrap_logs ;;
-	*) fail "unknown_method" "未知的 localClash rpcd 方法。" ;;
+	*) fail "unknown_method" "未知的 localClash rpcd 方法。"; false ;;
 esac
 
-exit 0
+exit $?

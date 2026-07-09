@@ -842,6 +842,10 @@ Package rules:
   `localclash component update assets --json` and
   `localclash component status --json`.
 - The package should not run network downloads from `postinst`.
+- The package `postinst` must not restart `localclash-mcp`. Standalone LuCI
+  update restarts it explicitly through the newly installed helper, while
+  one-click update transfers control to that helper and lets the post-core
+  continuation own the single authoritative restart.
 - The package should depend only on the LuCI/rpcd/runtime tools needed by the UI
   and helper.
 
@@ -921,6 +925,10 @@ Method contracts:
   `localclash` uses the bootstrap helper to install or update from the latest
   release manifest; other values call
   `localclash component update <component> --json`.
+- `luci_update_async`: no input. Updates the LuCI package as a background task.
+  When the package changes and a localClash core is installed, the task invokes
+  the newly installed helper to restart `localclash-mcp` and propagates any
+  restart/readiness failure. Package `postinst` does not own this restart.
 - `one_click_update`: optional input `{ "sync_default_policy": true|false }`.
   Starts a background task that updates LuCI, localClash core, Mihomo core, and
   Dashboard; optionally refreshes the built-in default policy template patches;
@@ -942,6 +950,15 @@ Method contracts:
   `mihomo config-test --json` both pass. This fallback exists to recover the
   router after component updates when a subscription provider is temporarily
   unavailable; it must not silently hide an unusable or missing cache.
+  When the LuCI package result reports `changed=true`, the worker persists a
+  versioned snapshot under `/tmp/localclash-one-click-update.<worker-pid>` and
+  uses `exec` to enter the newly installed helper with the same PID. The new
+  helper resumes only after the state version, task type, phase, and lock owner
+  all match. Missing or invalid handoff state is a hard failure; the old helper
+  must not continue as a fallback. A release that predates this handoff protocol
+  cannot adopt it retroactively while its old shell is already running. The
+  first upgrade from such a release must update LuCI independently, reload the
+  page, and then start one-click update.
 - `one_click_update_preferences`: no input. Returns LuCI one-click update
   preferences from the router filesystem. The default response is
   `sync_default_policy=true` when no preference file exists.
@@ -961,13 +978,22 @@ Method contracts:
 - `config_reset`: no input. Calls `localclash reset --json`.
 - `reset`: no input. Calls `localclash reset --full --json`.
 - `service_start`: no input. Ensures the procd service wrapper exists, enables
-  it for boot restore, then starts the procd service for MCP.
+  it, always runs `/etc/init.d/localclash-mcp restart`, allows the asynchronous
+  procd replacement to settle, and performs bounded joint readiness checks (30
+  attempts by default). Every successful attempt requires both
+  `/etc/init.d/localclash-mcp running mcp` and MCP HTTP health, and the returned
+  status must contain `service.running=true` and `mcp.healthy=true`. It does not
+  choose `start` versus `restart` from aggregate service state, a PID, a
+  process-name lookup, or the running binary checksum.
 - `service_stop`: no input. Stops and disables the procd service for MCP.
-- `service_status`: no input. Reports procd service status and MCP HTTP health
-  when reachable. This is the source of truth for the LuCI MCP service status
-  row.
+- `service_status`: no input. Queries the procd `mcp` instance with
+  `/etc/init.d/localclash-mcp running mcp` and reports MCP HTTP health when that
+  instance is running. It does not infer liveness or a PID by scanning `/proc`.
+  This is the source of truth for the LuCI MCP service status row.
 - `service_ensure`: no input. Installs or repairs `/etc/init.d/localclash-mcp`
-  from helper-owned service-generation logic. It does not start the service.
+  from helper-owned service-generation logic using a temporary file and atomic
+  rename. Directory, write, chmod, path-type, and rename failures are explicit.
+  It does not start the service.
 - `bootstrap_core`: no input. Downloads, verifies, and installs localClash core.
 - `bootstrap_logs`: no input. Returns recent bootstrap/helper logs with secrets
   redacted.
@@ -1106,6 +1132,13 @@ Service behavior:
   package policy explicitly decides otherwise
 - stdout/stderr: append to a localClash log file under the state directory
 - restart policy: use procd respawn with conservative limits
+
+Immediately after an atomic replacement of `/usr/local/bin/localclash`,
+lifecycle code must restart the procd service directly, before base-asset
+maintenance can return an error. Re-submitting `start` is insufficient because
+an existing instance may continue executing the deleted inode. The aggregate
+`running` result must not select the action because the one-shot `boot_restore`
+instance may have exited while the long-lived `mcp` instance is healthy.
 
 The service wrapper may exist while `/usr/local/bin/localclash` is still missing.
 That is not a failure. The init script must check for the binary before starting

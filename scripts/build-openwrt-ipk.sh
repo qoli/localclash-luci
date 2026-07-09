@@ -41,9 +41,6 @@ rm -rf /tmp/luci-modulecache /tmp/luci-templatecache 2>/dev/null || true
 if [ -x /etc/init.d/rpcd ]; then
 	/etc/init.d/rpcd restart >/dev/null 2>&1 || true
 fi
-if [ -x /usr/local/bin/localclash ] && [ -x /usr/libexec/rpcd/localclash ]; then
-	/usr/libexec/rpcd/localclash call service_start >/dev/null 2>&1 || true
-fi
 exit 0
 EOF
 chmod 755 "${build_dir}/pkg/CONTROL/postinst"
