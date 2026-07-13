@@ -8,19 +8,24 @@ esac
 HELPER="${LOCALCLASH_HELPER:-/usr/libexec/rpcd/localclash}"
 [ -x "$HELPER" ] || exit 0
 
-STAMP="/tmp/localclash-restore-hotplug.stamp"
-NOW="$(date +%s 2>/dev/null || printf '0\n')"
-LAST="$(cat "$STAMP" 2>/dev/null || printf '0\n')"
-case "$NOW:$LAST" in
-	*[!0-9:]*|:*) LAST=0 ;;
+STAMP="${LOCALCLASH_RESTORE_HOTPLUG_STAMP:-/tmp/localclash-restore-hotplug.stamp}"
+RESTORE_DELAY="${LOCALCLASH_RESTORE_DELAY:-8}"
+case "$RESTORE_DELAY" in
+	''|*[!0-9]*) exit 1 ;;
 esac
 
-if [ "$NOW" -gt 0 ] && [ "$LAST" -gt 0 ] && [ $((NOW - LAST)) -lt "${LOCALCLASH_RESTORE_DEBOUNCE:-20}" ]; then
-	exit 0
-fi
-printf '%s\n' "$NOW" > "$STAMP" 2>/dev/null || true
+# Each interface event gets a unique generation token. The worker from an
+# earlier event exits when a newer event has arrived, so restoration begins
+# only after the final ifup/ifupdate event has been quiet for RESTORE_DELAY.
+TOKEN="$$"
+STAMP_TMP="${STAMP}.${TOKEN}"
+umask 077
+printf '%s\n' "$TOKEN" > "$STAMP_TMP" || exit 1
+mv -f "$STAMP_TMP" "$STAMP" || exit 1
 
 (
-	sleep "${LOCALCLASH_RESTORE_DELAY:-8}"
+	sleep "$RESTORE_DELAY"
+	LATEST_TOKEN="$(cat "$STAMP" 2>/dev/null)" || exit 1
+	[ "$LATEST_TOKEN" = "$TOKEN" ] || exit 0
 	"$HELPER" call takeover_restore >/dev/null 2>&1
 ) &

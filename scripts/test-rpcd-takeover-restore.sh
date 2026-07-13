@@ -122,6 +122,7 @@ result="$(takeover_restore_run)"
 printf '%s\n' "$result" | grep -q '"changed":true' || fail_test "restore should reapply takeover: ${result}"
 grep -q '^call_core takeover status --json$' "${tmp_dir}/trace" || fail_test "restore did not inspect status"
 grep -q '^call_core takeover apply --json$' "${tmp_dir}/trace" || fail_test "restore did not apply takeover"
+grep -q '网络接管恢复：重新应用接管已验证生效' "$LOG" || fail_test "restore did not log verified takeover success"
 [ -f "$TAKEOVER_REPAIR_TICKET" ] || fail_test "restore should keep same-boot repair ticket after reapply"
 [ ! -f "$LEGACY_TAKEOVER_INTENT_FILE" ] || fail_test "restore should not create legacy persistent takeover intent"
 

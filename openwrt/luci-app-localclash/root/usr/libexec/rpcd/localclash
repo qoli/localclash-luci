@@ -3165,6 +3165,7 @@ takeover_restore_run() {
 			rm -rf "$tmpdir"
 			return "$rc"
 		fi
+		log_line "网络接管恢复：重新应用接管已验证生效"
 		takeover_repair_ticket_enable
 		printf '{"ok":true,"changed":true,"summary":"网络接管已重新应用。","status":%s,"takeover":%s}\n' "$(cat "$tmpdir/status.json")" "$(cat "$tmpdir/apply.json")"
 		rm -rf "$tmpdir"
