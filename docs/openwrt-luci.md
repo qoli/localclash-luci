@@ -931,14 +931,18 @@ Method contracts:
   restart/readiness failure. Package `postinst` does not own this restart.
 - `one_click_update`: optional input `{ "sync_default_policy": true|false }`.
   Starts a background task that updates LuCI, localClash core, Mihomo core, and
-  Dashboard; optionally refreshes the built-in default policy template patches;
+  Dashboard; optionally replaces the complete local policy patch registry with
+  the built-in default policy template patches;
   refreshes saved subscriptions; renders and validates Mihomo config; then
   restores the previous runtime and router takeover state. When
   `sync_default_policy` is absent, the helper reads the persisted LuCI
   preference from the localClash work directory; no preference file means
   `true`. When the field is present, the helper persists it before continuing.
-  The policy sync preserves user-sourced patches and replaces policy-template
-  patches. The task keeps the current runtime untouched during download, update,
+  When `sync_default_policy=true`, the policy sync sends `reset_patches=true`:
+  it discards every local policy patch, including user-sourced patches, and
+  imports the latest built-in defaults. This explicit reset avoids same-pack
+  conflicts during a user-selected default-policy sync. The task keeps the
+  current runtime untouched during download, update,
   render, and config-test preparation, and only enters the outage window for the
   final runtime switch. If Mihomo core changed, the final switch uses
   `runtime restart --strategy process_restart --json`; otherwise it uses

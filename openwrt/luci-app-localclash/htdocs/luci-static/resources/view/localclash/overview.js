@@ -1030,7 +1030,7 @@ function oneClickUpdatePreferenceControl() {
 		}),
 		E('span', { 'class': 'localclash-inline-check-title' }, [ _('同步最新默认策略（推荐）') ]),
 		E('span', { 'class': 'localclash-inline-check-help' }, [
-			_('会更新内置默认规则；用户自定义规则会保留，手动改过的默认规则会被新版默认值覆盖。')
+			_('会用最新内置默认策略完全覆盖本地策略补丁；取消勾选可保留当前本地策略。')
 		])
 	]);
 }

@@ -2155,7 +2155,7 @@ one_click_update_run() {
   "runtime_profile": "$current_mode",
   "core": "$current_core",
   "allow_overwrite_modified": true,
-  "refresh_policy_template_patches": true
+  "reset_patches": true
 }
 JSON
 		if ! run_with_heartbeat "一键更新：正在同步最新默认策略" "$tmpdir/policy-template-sync.json" call_core config apply-template --input "$tmpdir/template-sync.json" --json; then
