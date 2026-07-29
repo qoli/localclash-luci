@@ -28,8 +28,8 @@ LuCI 面向用户的表达语言维持为简体中文。
 
 交付前，对改动过的 surface 运行聚焦的语法和打包检查，例如：
 
-- `rtk sh -n openwrt/luci-app-localclash/root/usr/libexec/rpcd/localclash`
-- `rtk bash -n scripts/test-rpcd-takeover-restore.sh`
-- `rtk scripts/test-rpcd-takeover-restore.sh`
-- `rtk scripts/build-openwrt-ipk.sh`
-- `rtk scripts/build-openwrt-apk.sh`
+- `sh -n openwrt/luci-app-localclash/root/usr/libexec/rpcd/localclash`
+- `bash -n scripts/test-rpcd-takeover-restore.sh`
+- `scripts/test-rpcd-takeover-restore.sh`
+- `scripts/build-openwrt-ipk.sh`
+- `scripts/build-openwrt-apk.sh`
