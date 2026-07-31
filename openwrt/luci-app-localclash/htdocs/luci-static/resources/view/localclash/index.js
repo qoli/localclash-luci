@@ -130,6 +130,24 @@ var callReset = rpc.declare({
 	expect: { '': {} }
 });
 
+var callDNSOptimizationStatus = rpc.declare({
+	object: 'localclash',
+	method: 'dnsqualify_status',
+	expect: { '': {} }
+});
+
+var callDNSOptimizationRunAsync = rpc.declare({
+	object: 'localclash',
+	method: 'dnsqualify_run_async',
+	expect: { '': {} }
+});
+
+var callDNSOptimizationResetAsync = rpc.declare({
+	object: 'localclash',
+	method: 'dnsqualify_reset_async',
+	expect: { '': {} }
+});
+
 function statusText(value) {
 	if (value === null || value === undefined || value === '')
 		return '-';
@@ -479,6 +497,39 @@ function refreshStatus() {
 	});
 }
 
+function dnsOptimizationBody(data) {
+	var status = (data && data.status) || {};
+	var resolver = status.resolver || {};
+
+	return E('div', {}, [
+		E('table', { 'class': 'table cbi-section-table localclash-status-table' }, [
+			E('tbody', {}, [
+				statusRow(_('当前模式'), status.enabled === true ? _('dnsqualify 配置') : _('Core 默认选择（WAN → AliDNS）')),
+				statusRow(_('作用范围'), status.scope || 'geosite:cn'),
+				statusRow(_('独立程序'), data && data.binary_installed === true ? _('已安装') : _('未安装')),
+				statusRow(_('配置 DNS'), status.enabled === true ? formatText(_('%s（%s / %s）'), resolver.endpoint || '-', resolver.source || '-', resolver.transport || '-') : '-'),
+				statusRow(_('候选 ID'), resolver.candidate_id || '-'),
+				statusRow(_('配置生成时间'), status.generated_at || '-')
+			])
+		]),
+		E('p', { 'class': 'localclash-muted' }, [
+			_('dnsqualify 不是 Core 的主动行为。只有用户按下按钮时，LuCI 才会启动独立 dnsqualify 程序；该程序自行完成测试并只输出 dnsqualify.json。Core 不包含测试或评分能力，只在配置存在时严格读取并套用；不会改变节点域名解析。')
+		]),
+		actionRow([
+			liveTaskButton(status.enabled === true ? _('重新运行 dnsqualify') : _('运行 dnsqualify'), callDNSOptimizationRunAsync, 'cbi-button-apply'),
+			liveTaskButton(_('删除 dnsqualify 配置'), callDNSOptimizationResetAsync, 'cbi-button-reset')
+		])
+	]);
+}
+
+function refreshDNSOptimization() {
+	return callDNSOptimizationStatus().then(function(data) {
+		replaceContent('localclash-dns-optimization-body', dnsOptimizationBody(data));
+	}).catch(function(err) {
+		replaceContent('localclash-dns-optimization-body', advancedStatusErrorTable(err.message || String(err)));
+	});
+}
+
 function section(title, body) {
 	return E('div', { 'class': 'cbi-section localclash-section' }, [
 		E('h3', {}, [ title ]),
@@ -613,6 +664,8 @@ function taskLabel(task) {
 		return _('订阅设置');
 	case 'bootstrap_default':
 		return _('初始化');
+	case 'dnsqualify':
+		return _('dnsqualify 按需任务');
 	default:
 		return _('任务');
 	}
@@ -895,6 +948,7 @@ return view.extend({
 	render: function() {
 		deferAfterPaint(function() {
 			refreshStatus();
+			refreshDNSOptimization();
 			resumeTaskIfNeeded();
 		}, 600);
 
@@ -943,6 +997,9 @@ return view.extend({
 				liveTaskButton(_('启动并接管'), callRuntimeStartTakeover, 'cbi-button-apply'),
 				commandButton(_('重启'), callRuntimeRestart),
 				commandButton(_('停止'), callRuntimeStop, 'cbi-button-reset')
+			])),
+			section(_('DNS 默认选择与最佳化'), E('div', { 'id': 'localclash-dns-optimization-body' }, [
+				advancedStatusLoadingTable()
 			])),
 			section(_('高级组件维护'), actionRow([
 				liveTaskButton(_('更新 localClash'), function() { return callComponentUpdateAsync('localclash'); }),

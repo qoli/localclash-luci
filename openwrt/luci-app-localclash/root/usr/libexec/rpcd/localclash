@@ -1,6 +1,7 @@
 #!/bin/sh
 
 CORE="${LOCALCLASH_CORE:-/usr/local/bin/localclash}"
+DNSQUALIFY="${LOCALCLASH_DNSQUALIFY:-/usr/local/bin/dnsqualify}"
 STATE_DIR="${LOCALCLASH_STATE_DIR:-/root/localclash}"
 SERVICE="/etc/init.d/localclash-mcp"
 LOG="/tmp/localclash-helper.log"
@@ -687,6 +688,10 @@ write_task_stale_result() {
 		subscription_set)
 			message="订阅设置任务已中断，请重试。"
 			action="重新保存订阅设置。"
+			;;
+		dnsqualify)
+			message="dnsqualify 按需任务已中断，请重试。"
+			action="重新运行 dnsqualify。"
 			;;
 		*)
 			message="任务已中断，请重试。"
@@ -2676,6 +2681,159 @@ config_render() {
 	call_core config render --json
 }
 
+dnsqualify_config_path() {
+	local workdir
+	workdir="$(resolve_state_dir)" || return 1
+	printf '%s\n' "$workdir/dnsqualify.json"
+}
+
+dnsqualify_status() {
+	local config version scope candidate source transport endpoint generated installed
+	config="$(dnsqualify_config_path)" || return 1
+	installed=false
+	[ -x "$DNSQUALIFY" ] && installed=true
+	if [ ! -f "$config" ]; then
+		ok '"status":{"enabled":false,"mode":"default","scope":"geosite:cn"},"binary_installed":'"$installed"
+		return 0
+	fi
+	version="$(jsonfilter -i "$config" -e '@.version' 2>/dev/null || true)"
+	scope="$(jsonfilter -i "$config" -e '@.scope' 2>/dev/null || true)"
+	candidate="$(jsonfilter -i "$config" -e '@.resolver.candidate_id' 2>/dev/null || true)"
+	source="$(jsonfilter -i "$config" -e '@.resolver.source' 2>/dev/null || true)"
+	transport="$(jsonfilter -i "$config" -e '@.resolver.transport' 2>/dev/null || true)"
+	endpoint="$(jsonfilter -i "$config" -e '@.resolver.endpoint' 2>/dev/null || true)"
+	generated="$(jsonfilter -i "$config" -e '@.measurement.generated_at' 2>/dev/null || true)"
+	if [ "$version" != "1" ] || [ "$scope" != "geosite:cn" ] ||
+		[ -z "$candidate" ] || [ -z "$source" ] || [ -z "$transport" ] ||
+		[ -z "$endpoint" ] || [ -z "$generated" ]; then
+		fail "dnsqualify_config_invalid" "dnsqualify 配置存在但不完整；Core 渲染也会明确拒绝该配置。"
+		return 1
+	fi
+	ok '"status":{"enabled":true,"mode":"dnsqualify","scope":"geosite:cn","resolver":{"candidate_id":"'"$(json_escape "$candidate")"'","source":"'"$(json_escape "$source")"'","transport":"'"$(json_escape "$transport")"'","endpoint":"'"$(json_escape "$endpoint")"'"},"generated_at":"'"$(json_escape "$generated")"'"},"binary_installed":'"$installed"
+}
+
+dnsqualify_run() {
+	local config backup had_config result_tmp render_tmp test_tmp
+	config="$(dnsqualify_config_path)" || return 1
+	[ -x "$DNSQUALIFY" ] || {
+		fail "dnsqualify_binary_missing" "未安装独立 dnsqualify 程序；localClash Core 不包含该能力。"
+		return 1
+	}
+	mkdir -p "$(dirname "$config")" || {
+		fail "dnsqualify_state_dir_failed" "无法建立 dnsqualify 配置目录。"
+		return 1
+	}
+	backup="/tmp/localclash-dnsqualify-backup.$$.json"
+	had_config=false
+	if [ -f "$config" ]; then
+		cp "$config" "$backup" || return 1
+		had_config=true
+	fi
+	result_tmp="/tmp/localclash-dnsqualify-result.$$.json"
+	render_tmp="/tmp/localclash-dns-render.$$.json"
+	test_tmp="/tmp/localclash-dns-test.$$.json"
+	log_line "dnsqualify：用户按需启动独立 DNS 测试与配置生成"
+	if ! "$DNSQUALIFY" --output "$config" --json > "$result_tmp" 2>>"$LOG"; then
+		rm -f "$backup" "$result_tmp" "$render_tmp" "$test_tmp"
+		fail "dnsqualify_run_failed" "独立 dnsqualify 测试失败；现有配置保持不变。"
+		return 1
+	fi
+	if ! call_core config render --json > "$render_tmp" ||
+		! call_core mihomo config-test --json > "$test_tmp"; then
+		if ! dnsqualify_restore "$backup" "$had_config" "$config"; then
+			rm -f "$backup" "$result_tmp" "$render_tmp" "$test_tmp"
+			fail "dnsqualify_rollback_failed" "dnsqualify 配置验证失败，且无法确认旧配置已恢复；请勿重启 Mihomo。"
+			return 1
+		fi
+		rm -f "$backup" "$result_tmp" "$render_tmp" "$test_tmp"
+		fail "dnsqualify_validation_failed" "dnsqualify 输出未通过 Core 渲染或 Mihomo 验证，已恢复原配置。"
+		return 1
+	fi
+	ok '"changed":true,"restart_required":true,"summary":"独立 dnsqualify 已生成并验证配置；请重启 Mihomo 后生效。","dnsqualify":'"$(cat "$result_tmp")"',"render":'"$(cat "$render_tmp")"',"config_test":'"$(cat "$test_tmp")"
+	rm -f "$backup" "$result_tmp" "$render_tmp" "$test_tmp"
+}
+
+dnsqualify_restore() {
+	local backup had_config config
+	backup="$1"
+	had_config="$2"
+	config="$3"
+	if [ "$had_config" = "true" ]; then
+		cp "$backup" "$config" || return 1
+	else
+		rm -f "$config" || return 1
+	fi
+	if ! call_core config render --json >/tmp/localclash-dns-rollback-render.$$.json 2>>"$LOG" ||
+		! call_core mihomo config-test --json >/tmp/localclash-dns-rollback-test.$$.json 2>>"$LOG"; then
+		rm -f /tmp/localclash-dns-rollback-render.$$.json /tmp/localclash-dns-rollback-test.$$.json
+		return 1
+	fi
+	rm -f /tmp/localclash-dns-rollback-render.$$.json /tmp/localclash-dns-rollback-test.$$.json
+}
+
+dnsqualify_reset_run() {
+	local config backup render_tmp test_tmp
+	config="$(dnsqualify_config_path)" || return 1
+	[ -f "$config" ] || {
+		ok '"changed":false,"summary":"DNS 最佳化本来就是关闭状态。"'
+		return 0
+	}
+	backup="/tmp/localclash-dnsqualify-backup.$$.json"
+	cp "$config" "$backup" || return 1
+	render_tmp="/tmp/localclash-dns-render.$$.json"
+	test_tmp="/tmp/localclash-dns-test.$$.json"
+	if ! rm -f "$config" ||
+		! call_core config render --json > "$render_tmp" ||
+		! call_core mihomo config-test --json > "$test_tmp"; then
+		if ! dnsqualify_restore "$backup" true "$config"; then
+			rm -f "$backup" "$render_tmp" "$test_tmp"
+			fail "dnsqualify_reset_rollback_failed" "删除 dnsqualify 配置失败，且无法确认原配置已恢复；请勿重启 Mihomo。"
+			return 1
+		fi
+		rm -f "$backup" "$render_tmp" "$test_tmp"
+		fail "dnsqualify_reset_failed" "无法安全删除 dnsqualify 配置，已恢复变更前状态。"
+		return 1
+	fi
+	ok '"changed":true,"restart_required":true,"summary":"已删除 dnsqualify 配置并恢复 Core 默认 DNS 选择；请重启 Mihomo 后生效。","render":'"$(cat "$render_tmp")"',"config_test":'"$(cat "$test_tmp")"
+	rm -f "$backup" "$render_tmp" "$test_tmp"
+}
+
+start_dnsqualify_task() {
+	local action summary result rc bg_pid
+	action="$1"
+	summary="$2"
+	clear_stale_lock
+	if [ -d "$LOCK_DIR" ]; then
+		printf '{"ok":true,"started":false,"running":true,"summary":"另一个 localClash 任务正在运行。"}\n'
+		return 0
+	fi
+	rm -f "$TASK_STATUS" "$TASK_RESULT" "$TASK_INPUT" "$TASK_PID"
+	: > "$LOG"
+	printf '%s\n' "$action" > "$TASK_INPUT"
+	write_task_running "$summary" "dnsqualify"
+	(
+		result="$("$0" call dnsqualify_task_run 2>>"$LOG")"
+		rc=$?
+		[ -n "$result" ] || result='{"ok":false,"code":"empty_task_result","message":"DNS 任务没有产生 JSON 结果。","details":{},"next_actions":[]}'
+		printf '%s\n' "$result" > "$TASK_RESULT"
+		write_task_done "$rc" "$result"
+		rm -f "$TASK_INPUT" "$TASK_PID"
+	) >/dev/null 2>&1 &
+	bg_pid="$!"
+	write_task_pid "$bg_pid"
+	ok '"started":true,"running":true,"summary":"DNS 任务已启动。"'
+}
+
+dnsqualify_task_run() {
+	local action
+	action="$(cat "$TASK_INPUT" 2>/dev/null || true)"
+	case "$action" in
+		optimize) with_lock dnsqualify_run ;;
+		reset) with_lock dnsqualify_reset_run ;;
+		*) fail "dns_task_invalid" "DNS 任务类型无效。"; return 1 ;;
+	esac
+}
+
 reset() {
 	if runtime_running; then
 		fail "runtime_running" "Mihomo 运行时正在运行，请先停止运行时再执行完整重置。"
@@ -3240,6 +3398,9 @@ case "$method" in
   "luci_update_async": {},
   "apply": {},
   "config_render": {},
+  "dnsqualify_status": {},
+  "dnsqualify_run_async": {},
+  "dnsqualify_reset_async": {},
   "runtime_start": {},
   "runtime_start_takeover": {},
   "runtime_restart": {},
@@ -3291,6 +3452,10 @@ JSON
 	luci_update_run) luci_update_run ;;
 	apply) with_lock apply_state ;;
 	config_render) with_lock config_render ;;
+	dnsqualify_status) dnsqualify_status ;;
+	dnsqualify_run_async) start_dnsqualify_task optimize "独立 dnsqualify 正在按需测试并生成配置。" ;;
+	dnsqualify_reset_async) start_dnsqualify_task reset "正在删除 dnsqualify 配置并验证 Core 默认配置。" ;;
+	dnsqualify_task_run) dnsqualify_task_run ;;
 	runtime_start) runtime_start ;;
 	runtime_start_takeover) start_runtime_takeover ;;
 	runtime_start_takeover_run) with_lock runtime_start_takeover_run ;;

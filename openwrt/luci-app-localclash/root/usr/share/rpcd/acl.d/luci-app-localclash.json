@@ -3,7 +3,7 @@
     "description": "Grant LuCI access to localClash rpcd helper methods",
     "read": {
       "ubus": {
-        "localclash": [ "status", "subscription_get", "service_status", "bootstrap_logs", "task_status", "bootstrap_task_status", "boot_restore_status", "takeover_status", "core_update_check", "luci_update_check", "mcp_help", "one_click_update_preferences" ]
+        "localclash": [ "status", "subscription_get", "service_status", "bootstrap_logs", "task_status", "bootstrap_task_status", "boot_restore_status", "takeover_status", "core_update_check", "luci_update_check", "mcp_help", "one_click_update_preferences", "dnsqualify_status" ]
       }
     },
     "write": {
@@ -20,6 +20,8 @@
           "luci_update_async",
           "apply",
           "config_render",
+          "dnsqualify_run_async",
+          "dnsqualify_reset_async",
           "runtime_start",
           "runtime_start_takeover",
           "runtime_restart",
