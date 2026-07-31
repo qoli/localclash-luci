@@ -133,6 +133,11 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 	if err := validateCandidates(candidates); err != nil {
 		return Report{}, err
 	}
+	emitProgress(opts, ProgressEvent{
+		Stage:          ProgressCandidatesReady,
+		CandidateCount: len(candidates),
+		TestCaseCount:  len(opts.TestCases),
+	})
 
 	report := Report{
 		Version:        ReportVersion,
@@ -171,6 +176,14 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 	}()
 
 	for round := 0; round < opts.Samples; round++ {
+		emitProgress(opts, ProgressEvent{
+			Stage:          ProgressDNSRound,
+			Completed:      round + 1,
+			Total:          opts.Samples,
+			CandidateCount: len(candidates),
+			TestCaseCount:  len(opts.TestCases),
+			AttemptCount:   len(candidates) * len(opts.TestCases),
+		})
 		for testIndex, test := range opts.TestCases {
 			for candidateOffset := 0; candidateOffset < len(candidates); candidateOffset++ {
 				candidateIndex := (round + testIndex + candidateOffset) % len(candidates)
@@ -233,6 +246,17 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 			}
 		}
 	}
+	dnsSuccesses := 0
+	for _, probe := range report.Probes {
+		if probe.Success {
+			dnsSuccesses++
+		}
+	}
+	emitProgress(opts, ProgressEvent{
+		Stage:        ProgressDNSComplete,
+		AttemptCount: len(report.Probes),
+		SuccessCount: dnsSuccesses,
+	})
 	report.Summaries = summarize(candidates, opts.TestCases, report.Probes)
 	if opts.ServiceBytes > 0 {
 		report.ServiceResults, report.ServiceSummaries, report.GroupSummaries, report.Qualifications = qualifyServices(ctx, opts, candidates, report.Probes)
@@ -244,6 +268,12 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 	report.DurationMS = milliseconds(finished.Sub(started))
 	report.Observations = buildObservations(report)
 	return report, nil
+}
+
+func emitProgress(opts Options, event ProgressEvent) {
+	if opts.Progress != nil {
+		opts.Progress(event)
+	}
 }
 
 func normalizeOptions(opts Options) Options {

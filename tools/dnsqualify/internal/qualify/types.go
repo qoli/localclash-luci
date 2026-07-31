@@ -256,6 +256,27 @@ type Options struct {
 	ServiceCatalogSource *ServiceCatalogSource
 	IncludeGlobalControl bool
 	Now                  func() time.Time
+	Progress             func(ProgressEvent)
+}
+
+type ProgressStage string
+
+const (
+	ProgressCandidatesReady ProgressStage = "candidates_ready"
+	ProgressDNSRound        ProgressStage = "dns_round"
+	ProgressDNSComplete     ProgressStage = "dns_complete"
+	ProgressServiceProbe    ProgressStage = "service_probe"
+	ProgressServiceComplete ProgressStage = "service_complete"
+)
+
+type ProgressEvent struct {
+	Stage          ProgressStage
+	Completed      int
+	Total          int
+	CandidateCount int
+	TestCaseCount  int
+	AttemptCount   int
+	SuccessCount   int
 }
 
 type exchangeFunc func(context.Context, Candidate, []byte, time.Duration) ([]byte, error)

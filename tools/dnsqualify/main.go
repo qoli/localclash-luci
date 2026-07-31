@@ -79,6 +79,11 @@ func run(args []string) error {
 	}
 	opts.ServiceCatalogSource = &source
 	opts.ServiceCatalog = &catalog
+	progress := newProgressLogger(os.Stderr, time.Now)
+	progress.log("正在发现 WAN 与公共 DNS 候选")
+	opts.Progress = progress.event
+	stopHeartbeat := progress.startHeartbeat()
+	defer stopHeartbeat()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
@@ -90,6 +95,7 @@ func run(args []string) error {
 	if err != nil {
 		return fmt.Errorf("encode measurement report: %w", err)
 	}
+	progress.log("正在根据测试结果选择符合条件的 DNS")
 	now := time.Now()
 	config, plan, err := selection.Generate(report, reportData, candidateID, now)
 	if err != nil {
@@ -98,6 +104,7 @@ func run(args []string) error {
 	if err := selection.Write(outputPath, config); err != nil {
 		return err
 	}
+	progress.log(fmt.Sprintf("配置已写入，选用 %s", config.Resolver.CandidateID))
 
 	result := struct {
 		Output         string           `json:"output"`

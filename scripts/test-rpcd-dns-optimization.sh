@@ -29,6 +29,7 @@ while [ "$#" -gt 0 ]; do
 	esac
 done
 [ -n "$output" ] || exit 2
+printf '2026-08-01T06:16:32+08:00 dnsqualify 进度：仍在运行：正在进行 DNS 基础测试，第 1/3 轮；已用时 15 秒\n' >&2
 cat > "$output" <<'JSON'
 {
   "version": 1,
@@ -123,6 +124,7 @@ printf '%s\n' "$result" | grep -q '"restart_required":true' || fail_test "succes
 grep -q '"candidate_id": "dnspod-udp"' "${STATE_DIR}/dnsqualify.json" || fail_test "standalone config was not preserved"
 grep -q '^config render --json$' "${tmp_dir}/trace" || fail_test "Core did not consume config through normal render"
 grep -q '^mihomo config-test --json$' "${tmp_dir}/trace" || fail_test "rendered config was not tested"
+grep -q 'dnsqualify 进度：仍在运行' "${LOG}" || fail_test "dnsqualify stderr progress was not preserved in the live task log"
 if grep -q '^dns ' "${tmp_dir}/trace"; then
 	fail_test "LuCI called a forbidden Core DNS command"
 fi

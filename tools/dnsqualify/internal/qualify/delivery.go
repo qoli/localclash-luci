@@ -17,13 +17,19 @@ import (
 
 func qualifyServices(ctx context.Context, opts Options, candidates []Candidate, probes []ProbeResult) ([]ServiceResult, []ServiceSummary, []ServiceGroupSummary, []CandidateQualification) {
 	results := []ServiceResult{}
-	for _, serviceProbe := range opts.ServiceCatalog.Probes {
+	for probeIndex, serviceProbe := range opts.ServiceCatalog.Probes {
 		ipCandidates := serviceIPCandidates(serviceProbe, probes)
 		ips := make([]string, 0, len(ipCandidates))
 		for ip := range ipCandidates {
 			ips = append(ips, ip)
 		}
 		sort.Strings(ips)
+		emitProgress(opts, ProgressEvent{
+			Stage:        ProgressServiceProbe,
+			Completed:    probeIndex + 1,
+			Total:        len(opts.ServiceCatalog.Probes),
+			AttemptCount: len(ips) * opts.ServiceSamples,
+		})
 		for round := 1; round <= opts.ServiceSamples; round++ {
 			for _, ip := range ips {
 				candidateIDs := make([]string, 0, len(ipCandidates[ip]))
@@ -35,6 +41,17 @@ func qualifyServices(ctx context.Context, opts Options, candidates []Candidate, 
 			}
 		}
 	}
+	serviceSuccesses := 0
+	for _, result := range results {
+		if result.Success {
+			serviceSuccesses++
+		}
+	}
+	emitProgress(opts, ProgressEvent{
+		Stage:        ProgressServiceComplete,
+		AttemptCount: len(results),
+		SuccessCount: serviceSuccesses,
+	})
 	summaries := summarizeServices(candidates, opts.ServiceCatalog.Probes, results)
 	groupSummaries := summarizeServiceGroups(candidates, opts.ServiceCatalog.Groups, summaries)
 	return results, summaries, groupSummaries, qualifyCandidates(candidates, opts.ServiceCatalog.Groups, groupSummaries)

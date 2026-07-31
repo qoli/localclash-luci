@@ -53,6 +53,7 @@ func TestRunComparesUDPAnswers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var progress []ProgressEvent
 	report, err := Run(context.Background(), Options{
 		Samples: 2,
 		Timeout: time.Second,
@@ -69,6 +70,9 @@ func TestRunComparesUDPAnswers(t *testing.T) {
 			QTypeName:     "A",
 			ExpectedRCode: 0,
 		}},
+		Progress: func(event ProgressEvent) {
+			progress = append(progress, event)
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -81,6 +85,12 @@ func TestRunComparesUDPAnswers(t *testing.T) {
 	}
 	if len(report.Summaries) != 1 || report.Summaries[0].SuccessRate != 1 {
 		t.Fatalf("summaries = %+v", report.Summaries)
+	}
+	if len(progress) != 4 || progress[0].Stage != ProgressCandidatesReady || progress[1].Stage != ProgressDNSRound || progress[2].Stage != ProgressDNSRound || progress[3].Stage != ProgressDNSComplete {
+		t.Fatalf("progress = %+v", progress)
+	}
+	if progress[3].AttemptCount != 2 || progress[3].SuccessCount != 2 {
+		t.Fatalf("DNS completion progress = %+v", progress[3])
 	}
 }
 
