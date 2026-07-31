@@ -55,10 +55,56 @@ function formatText(text) {
 	});
 }
 
+function copyText(text) {
+	if (navigator.clipboard && navigator.clipboard.writeText)
+		return navigator.clipboard.writeText(text);
+
+	var textarea = document.createElement('textarea');
+	textarea.value = text;
+	document.body.appendChild(textarea);
+	textarea.select();
+	document.execCommand('copy');
+	document.body.removeChild(textarea);
+	return Promise.resolve();
+}
+
+function taskLogClipboardText(title, statusLine, logOutput, resultOutput) {
+	return [
+		'# ' + String(title || _('localClash 任务日志')),
+		'',
+		'## ' + _('状态'),
+		statusLine.textContent || '-',
+		'',
+		'## ' + _('完整日志'),
+		logOutput.textContent || '-',
+		'',
+		'## ' + _('任务结果'),
+		resultOutput.textContent || '-'
+	].join('\n');
+}
+
 function showTaskModal(title, cancellable) {
 	var logOutput = E('pre', { 'class': 'localclash-task-log' }, [ _('等待任务输出…') ]);
 	var statusLine = E('p', { 'class': 'localclash-task-status' }, [ _('正在启动任务…') ]);
 	var resultOutput = E('pre', { 'class': 'localclash-result localclash-task-result' }, []);
+	var copyButton = E('button', {
+		'type': 'button',
+		'class': 'btn cbi-button',
+		'click': function() {
+			var originalLabel = _('复制日志');
+			copyText(taskLogClipboardText(title, statusLine, logOutput, resultOutput)).then(function() {
+				copyButton.textContent = _('已复制');
+				window.setTimeout(function() {
+					copyButton.textContent = originalLabel;
+				}, 1500);
+			}).catch(function() {
+				copyButton.textContent = _('复制失败');
+				window.setTimeout(function() {
+					copyButton.textContent = originalLabel;
+				}, 1500);
+			});
+		}
+	}, [ _('复制日志') ]);
 	var cancelButton = E('button', {
 		'type': 'button',
 		'class': 'btn cbi-button-negative',
@@ -91,13 +137,14 @@ function showTaskModal(title, cancellable) {
 		statusLine,
 		logOutput,
 		resultOutput,
-		E('div', { 'class': 'right' }, [ cancelButton, closeButton ])
+		E('div', { 'class': 'right' }, [ copyButton, cancelButton, closeButton ])
 	]);
 
 	return {
 		logOutput: logOutput,
 		statusLine: statusLine,
 		resultOutput: resultOutput,
+		copyButton: copyButton,
 		cancelButton: cancelButton,
 		closeButton: closeButton
 	};
@@ -169,11 +216,6 @@ function liveTaskButton(label, handler, extraClass) {
 				}
 				modal.cancelButton.disabled = true;
 				modal.resultOutput.textContent = JSON.stringify(finalResult, null, 2);
-				if (finalResult && finalResult.ok === true)
-					window.setTimeout(function() {
-						ui.hideModal();
-						window.location.reload();
-					}, 900);
 			}).catch(function(err) {
 				window.clearInterval(timer);
 				if (!timer)

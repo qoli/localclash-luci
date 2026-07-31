@@ -843,18 +843,102 @@ run_with_heartbeat() {
 }
 
 fetch_single_url() {
-	local url output
+	local url output downloader stderr_file started completed elapsed rc bytes host line
 	url="$1"
 	output="$2"
+	host="$(download_url_host "$url")"
+	stderr_file="${output}.fetch-stderr.$$"
+	started="$(now_epoch)"
+	rm -f "$stderr_file"
 	if command -v uclient-fetch >/dev/null 2>&1; then
-		fetch_with_watchdog "$url" uclient-fetch -T "$FETCH_TIMEOUT" -q -O "$output" "$url"
+		downloader="uclient-fetch"
+		log_line "下载：开始 downloader=$downloader host=$host timeout=${FETCH_TIMEOUT}s"
+		fetch_with_watchdog "$url" uclient-fetch -T "$FETCH_TIMEOUT" -q -O "$output" "$url" 2>"$stderr_file"
+		rc=$?
 	elif command -v wget >/dev/null 2>&1; then
-		fetch_with_watchdog "$url" wget -T "$FETCH_TIMEOUT" -q -O "$output" "$url"
+		downloader="wget"
+		log_line "下载：开始 downloader=$downloader host=$host timeout=${FETCH_TIMEOUT}s"
+		fetch_with_watchdog "$url" wget -T "$FETCH_TIMEOUT" -q -O "$output" "$url" 2>"$stderr_file"
+		rc=$?
 	elif command -v curl >/dev/null 2>&1; then
-		fetch_with_watchdog "$url" curl --max-time "$FETCH_TIMEOUT" -fsSL "$url" -o "$output"
+		downloader="curl"
+		log_line "下载：开始 downloader=$downloader host=$host timeout=${FETCH_TIMEOUT}s"
+		fetch_with_watchdog "$url" curl --max-time "$FETCH_TIMEOUT" -fsSL "$url" -o "$output" 2>"$stderr_file"
+		rc=$?
 	else
+		log_line "下载：失败 reason=downloader_missing host=$host"
 		return 1
 	fi
+	if [ -s "$stderr_file" ]; then
+		while IFS= read -r line; do
+			log_line "下载器[$downloader]：$line"
+		done < "$stderr_file"
+	fi
+	completed="$(now_epoch)"
+	elapsed=$((completed - started))
+	[ "$elapsed" -ge 0 ] 2>/dev/null || elapsed=0
+	if [ -f "$output" ]; then
+		bytes="$(wc -c < "$output" 2>/dev/null | tr -d ' ')"
+	else
+		bytes=0
+	fi
+	case "$bytes" in
+		""|*[!0-9]*) bytes=0 ;;
+	esac
+	if [ "$rc" -eq 0 ]; then
+		log_line "下载：成功 downloader=$downloader host=$host elapsed=${elapsed}s bytes=$bytes exit_code=$rc"
+	else
+		if [ "$downloader" = "uclient-fetch" ] && grep -q '^Failed to send request: Operation not permitted$' "$stderr_file" 2>/dev/null; then
+			log_line "下载：诊断 reason=connect_failed detail=uclient-fetch将内部连接错误码1误显示为Operation_not_permitted"
+		fi
+		log_download_dns_context "$host"
+		log_line "下载：失败 downloader=$downloader host=$host elapsed=${elapsed}s bytes=$bytes exit_code=$rc"
+	fi
+	rm -f "$stderr_file"
+	return "$rc"
+}
+
+download_url_host() {
+	local authority
+	authority="${1#*://}"
+	authority="${authority%%/*}"
+	authority="${authority##*@}"
+	case "$authority" in
+		\[*\]*)
+			authority="${authority#\[}"
+			printf '%s\n' "${authority%%\]*}"
+			;;
+		*)
+			printf '%s\n' "${authority%%:*}"
+			;;
+	esac
+}
+
+log_download_dns_context() {
+	local host dns_output dns_rc dns_summary
+	host="$1"
+	if [ -z "$host" ]; then
+		log_line "下载：DNS诊断 status=skipped reason=host_missing"
+		return 0
+	fi
+	if ! command -v nslookup >/dev/null 2>&1; then
+		log_line "下载：DNS诊断 host=$host status=unavailable reason=nslookup_missing"
+		return 0
+	fi
+	if command -v timeout >/dev/null 2>&1; then
+		dns_output="$(timeout 3 nslookup "$host" 2>&1)"
+		dns_rc=$?
+	else
+		dns_output="$(nslookup "$host" 2>&1)"
+		dns_rc=$?
+	fi
+	dns_summary="$(printf '%s\n' "$dns_output" |
+		sed -n '/^Name:/p; /^Address [0-9][0-9]*:/p; /^Address:/p' |
+		tr '\r\n\t' '   ' |
+		sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//' |
+		cut -c 1-600)"
+	[ -n "$dns_summary" ] || dns_summary="no_address"
+	log_line "下载：DNS诊断 host=$host exit_code=$dns_rc result=$dns_summary"
 }
 
 fetch_with_watchdog() {
@@ -2945,9 +3029,21 @@ bootstrap_assets() {
 
 bootstrap_logs() {
 	if [ -f "$LOG" ]; then
-		tail -n 80 "$LOG" | sed 's/"/\\"/g' | awk 'BEGIN{printf "{\"ok\":true,\"logs\":["} {printf "%s\"%s\"", sep, $0; sep=","} END{print "]}" }'
+		awk '
+			BEGIN { printf "{\"ok\":true,\"complete\":true,\"logs\":[" }
+			{
+				gsub(/\\/, "\\\\")
+				gsub(/"/, "\\\"")
+				gsub(/\t/, "\\t")
+				gsub(/\r/, "\\r")
+				printf "%s\"%s\"", sep, $0
+				sep=","
+				count++
+			}
+			END { printf "],\"line_count\":%d}\n", count }
+		' "$LOG"
 	else
-		printf '{"ok":true,"logs":[]}\n'
+		printf '{"ok":true,"complete":true,"logs":[],"line_count":0}\n'
 	fi
 }
 
