@@ -14,6 +14,7 @@ MIRROR_CACHE_DIR="/tmp/localclash-mirror-cache"
 MCP_ADDR="${LOCALCLASH_MCP_ADDR:-0.0.0.0:8765}"
 MCP_HELP="/usr/share/localclash/mcp-help.txt"
 MANIFEST_URL="${LOCALCLASH_RELEASE_MANIFEST:-https://github.com/qoli/localClash/releases/latest/download/localclash-release-manifest.json}"
+DNSQUALIFY_MANIFEST_URL="${LOCALCLASH_DNSQUALIFY_RELEASE_MANIFEST:-https://github.com/qoli/localclash-luci/releases/latest/download/dnsqualify-release-manifest.json}"
 LUCI_RELEASE_API="${LOCALCLASH_LUCI_RELEASE_API:-https://api.github.com/repos/qoli/localclash-luci/releases/latest}"
 GITHUB_MIRROR="${LOCALCLASH_GITHUB_MIRROR:-auto}"
 GITHUB_RELEASE_MIRRORS="${LOCALCLASH_GITHUB_RELEASE_MIRRORS:-https://gh-proxy.com/https://github.com https://ghproxy.imciel.com/https://github.com https://gitproxy.mrhjx.cn/https://github.com https://gh.jasonzeng.dev/https://github.com https://gh.monlor.com/https://github.com https://gh.noki.icu/https://github.com https://ghfast.top/https://github.com}"
@@ -2005,7 +2006,7 @@ start_one_click_update() {
 }
 
 one_click_update_run() {
-	local tmpdir payload snapshot version sync_default_policy runtime_was_running takeover_was_effective profile_mode luci_changed subscription_ready subscription_refresh_failed subscription_cache_used subscription_refresh_json policy_template_sync_json mihomo_changed dashboard_changed restart_strategy runtime_recovered takeover_recovered mcp_healthy current_mode current_core
+	local tmpdir payload snapshot version sync_default_policy runtime_was_running takeover_was_effective profile_mode luci_changed subscription_ready subscription_refresh_failed subscription_cache_used subscription_refresh_json policy_template_sync_json dnsqualify_json mihomo_changed dashboard_changed restart_strategy runtime_recovered takeover_recovered mcp_healthy current_mode current_core
 	tmpdir="$(one_click_update_state_dir)"
 	if [ "${ONE_CLICK_UPDATE_RESUME:-0}" = "1" ]; then
 		snapshot="$tmpdir/snapshot.json"
@@ -2156,6 +2157,7 @@ one_click_update_run() {
 	subscription_cache_used=false
 	subscription_refresh_json='null'
 	policy_template_sync_json='{"ok":true,"changed":false,"skipped":true,"summary":"未选择同步最新默认策略。"}'
+	dnsqualify_json='null'
 	mihomo_changed=false
 	dashboard_changed=false
 	restart_strategy="skipped"
@@ -2168,6 +2170,14 @@ one_click_update_run() {
 		rm -rf "$tmpdir"
 		return 1
 	fi
+
+	if ! run_with_heartbeat "一键更新：正在更新 dnsqualify" "$tmpdir/dnsqualify.json" dnsqualify_install; then
+		log_line "一键更新：dnsqualify 更新失败"
+		cat "$tmpdir/dnsqualify.json"
+		rm -rf "$tmpdir"
+		return 1
+	fi
+	dnsqualify_json="$(cat "$tmpdir/dnsqualify.json")"
 
 	if ! service_status > "$tmpdir/mcp-service.json"; then
 		log_line "一键更新：MCP 服务状态读取失败"
@@ -2383,7 +2393,7 @@ JSON
 		return 1
 	fi
 	log_line "一键更新：已完成"
-	printf '{"ok":true,"changed":true,"summary":"一键更新已完成。","minimal_outage":{"runtime_kept_until_final_switch":true,"restart_strategy":"%s","runtime_was_running":%s,"runtime_recovered":%s,"takeover_was_effective":%s,"takeover_recovered":%s},"luci":%s,"core":%s,"mihomo":%s,"dashboard":%s,"policy_template_sync":%s,"subscription":{"configured":%s,"refresh_failed":%s,"used_cached_artifact":%s,"refresh":%s},"mcp_service":%s}\n' \
+	printf '{"ok":true,"changed":true,"summary":"一键更新已完成。","minimal_outage":{"runtime_kept_until_final_switch":true,"restart_strategy":"%s","runtime_was_running":%s,"runtime_recovered":%s,"takeover_was_effective":%s,"takeover_recovered":%s},"luci":%s,"core":%s,"dnsqualify":%s,"mihomo":%s,"dashboard":%s,"policy_template_sync":%s,"subscription":{"configured":%s,"refresh_failed":%s,"used_cached_artifact":%s,"refresh":%s},"mcp_service":%s}\n' \
 		"$(json_escape "$restart_strategy")" \
 		"$runtime_was_running" \
 		"$runtime_recovered" \
@@ -2391,6 +2401,7 @@ JSON
 		"$takeover_recovered" \
 		"$(cat "$tmpdir/luci.json")" \
 		"$(cat "$tmpdir/core.json")" \
+		"$dnsqualify_json" \
 		"$(cat "$tmpdir/mihomo.json")" \
 		"$(cat "$tmpdir/dashboard.json")" \
 		"$policy_template_sync_json" \
@@ -2771,13 +2782,149 @@ dnsqualify_config_path() {
 	printf '%s\n' "$workdir/dnsqualify.json"
 }
 
+dnsqualify_installed_version() {
+	[ -x "$DNSQUALIFY" ] || return 1
+	"$DNSQUALIFY" --version 2>/dev/null | sed -n 's/^dnsqualify \(v[^ ]*\)$/\1/p' | head -n 1
+}
+
+dnsqualify_install() {
+	local arch tmpdir manifest binary manifest_schema asset_os asset_url asset_sha asset_version current_sha reported_version install_dir tmp_binary
+	if ! command -v jsonfilter >/dev/null 2>&1; then
+		fail "jsonfilter_missing" "需要 jsonfilter 解析 dnsqualify Release 清单。"
+		return 1
+	fi
+	if ! command -v sha256sum >/dev/null 2>&1; then
+		fail "sha256sum_missing" "需要 sha256sum 验证 dnsqualify 二进制文件。"
+		return 1
+	fi
+	arch="$(router_arch)" || {
+		fail "dnsqualify_unsupported_arch" "dnsqualify 不支持此路由器架构。"
+		return 1
+	}
+	tmpdir="$(mktemp -d /tmp/localclash-dnsqualify-install.XXXXXX)" || {
+		fail "tmpdir_failed" "无法创建 dnsqualify 安装临时目录。"
+		return 1
+	}
+	manifest="$tmpdir/manifest.json"
+	binary="$tmpdir/dnsqualify"
+	log_line "dnsqualify：正在读取 LuCI Release 清单"
+	if ! fetch_manifest "$DNSQUALIFY_MANIFEST_URL" "$manifest"; then
+		rm -rf "$tmpdir"
+		fail "dnsqualify_manifest_download_failed" "无法下载 dnsqualify Release 清单。"
+		return 1
+	fi
+	manifest_schema="$(jsonfilter -i "$manifest" -e '@.schema_version' 2>/dev/null)"
+	asset_os="$(jsonfilter -i "$manifest" -e "@.assets[@.arch=\"$arch\"].os" 2>/dev/null)"
+	asset_url="$(jsonfilter -i "$manifest" -e "@.assets[@.arch=\"$arch\"].url" 2>/dev/null)"
+	asset_sha="$(jsonfilter -i "$manifest" -e "@.assets[@.arch=\"$arch\"].sha256" 2>/dev/null)"
+	asset_version="$(jsonfilter -i "$manifest" -e '@.version' 2>/dev/null)"
+	if [ "$manifest_schema" != "1" ]; then
+		rm -rf "$tmpdir"
+		fail_with_details "dnsqualify_manifest_schema_unsupported" "dnsqualify Release 清单 schema 不受支持。" '"schema_version":"'"$(json_escape "$manifest_schema")"'"'
+		return 1
+	fi
+	if [ "$asset_os" != "linux" ] || [ -z "$asset_url" ] ||
+		[ -z "$asset_sha" ] || [ -z "$asset_version" ]; then
+		rm -rf "$tmpdir"
+		fail "dnsqualify_manifest_asset_missing" "dnsqualify Release 清单中没有匹配此路由器的完整资产。"
+		return 1
+	fi
+	case "$asset_version" in
+		v[0-9]*.[0-9]*.[0-9]*-[0-9]*) ;;
+		*)
+			rm -rf "$tmpdir"
+			fail "dnsqualify_manifest_version_invalid" "dnsqualify Release 清单版本格式无效。"
+			return 1
+			;;
+	esac
+	case "$asset_url" in
+		"https://github.com/qoli/localclash-luci/releases/download/$asset_version/dnsqualify-linux-$arch") ;;
+		*)
+			rm -rf "$tmpdir"
+			fail "dnsqualify_manifest_url_invalid" "dnsqualify Release 清单资产来源无效。"
+			return 1
+			;;
+	esac
+	case "$asset_sha" in
+		*[!0-9a-f]*|"")
+			rm -rf "$tmpdir"
+			fail "dnsqualify_manifest_checksum_invalid" "dnsqualify Release 清单 sha256 格式无效。"
+			return 1
+			;;
+	esac
+	if [ "${#asset_sha}" -ne 64 ]; then
+		rm -rf "$tmpdir"
+		fail "dnsqualify_manifest_checksum_invalid" "dnsqualify Release 清单 sha256 长度无效。"
+		return 1
+	fi
+	current_sha=""
+	if [ -x "$DNSQUALIFY" ]; then
+		current_sha="$(sha256sum "$DNSQUALIFY" 2>/dev/null | awk '{print $1; exit}')"
+		if [ -z "$current_sha" ]; then
+			rm -rf "$tmpdir"
+			fail "dnsqualify_installed_checksum_failed" "无法计算已安装 dnsqualify 的 sha256。"
+			return 1
+		fi
+	fi
+	if [ -n "$current_sha" ] && [ "$current_sha" = "$asset_sha" ]; then
+		rm -rf "$tmpdir"
+		ok '"changed":false,"summary":"dnsqualify 已是当前 LuCI Release 版本。","dnsqualify":{"installed":true,"path":"'"$(json_escape "$DNSQUALIFY")"'","version":"'"$(json_escape "$asset_version")"'","arch":"'"$(json_escape "$arch")"'","sha256":"'"$(json_escape "$current_sha")"'"}}'
+		return 0
+	fi
+	log_line "dnsqualify：正在下载 ${asset_version}（${arch}）"
+	if ! fetch_url_verified "$asset_url" "$binary" "$asset_sha"; then
+		rm -rf "$tmpdir"
+		fail_with_details "dnsqualify_download_failed" "dnsqualify 下载失败或 sha256 校验不通过。" '"version":"'"$(json_escape "$asset_version")"'","arch":"'"$(json_escape "$arch")"'","expected_sha":"'"$(json_escape "$asset_sha")"'"'
+		return 1
+	fi
+	chmod 755 "$binary"
+	reported_version="$("$binary" --version 2>/dev/null || true)"
+	if [ "$reported_version" != "dnsqualify $asset_version" ]; then
+		rm -rf "$tmpdir"
+		fail_with_details "dnsqualify_version_mismatch" "dnsqualify 二进制版本与 Release 清单不一致。" '"expected":"'"$(json_escape "$asset_version")"'","reported":"'"$(json_escape "$reported_version")"'"'
+		return 1
+	fi
+	install_dir="$(dirname "$DNSQUALIFY")"
+	if ! mkdir -p "$install_dir"; then
+		rm -rf "$tmpdir"
+		fail "dnsqualify_install_failed" "无法创建 dnsqualify 安装目录。"
+		return 1
+	fi
+	tmp_binary="$DNSQUALIFY.tmp.$$"
+	if ! cp "$binary" "$tmp_binary" || ! chmod 755 "$tmp_binary" || ! mv "$tmp_binary" "$DNSQUALIFY"; then
+		rm -f "$tmp_binary"
+		rm -rf "$tmpdir"
+		fail "dnsqualify_install_failed" "无法原子安装 dnsqualify 二进制文件。"
+		return 1
+	fi
+	rm -rf "$tmpdir"
+	log_line "dnsqualify：已安装 ${asset_version}（${arch}）"
+	ok '"changed":true,"summary":"dnsqualify 已安装。","dnsqualify":{"installed":true,"path":"'"$(json_escape "$DNSQUALIFY")"'","version":"'"$(json_escape "$asset_version")"'","arch":"'"$(json_escape "$arch")"'","sha256":"'"$(json_escape "$asset_sha")"'"}}'
+}
+
+dnsqualify_ensure() {
+	local installed_version
+	if [ -x "$DNSQUALIFY" ]; then
+		installed_version="$(dnsqualify_installed_version 2>/dev/null || true)"
+		if [ -n "$installed_version" ]; then
+			ok '"changed":false,"summary":"dnsqualify 已安装。","dnsqualify":{"installed":true,"path":"'"$(json_escape "$DNSQUALIFY")"'","version":"'"$(json_escape "$installed_version")"'"}}'
+			return 0
+		fi
+	fi
+	dnsqualify_install
+}
+
 dnsqualify_status() {
-	local config version scope candidate source transport endpoint generated installed
+	local config version scope candidate source transport endpoint generated installed binary_version
 	config="$(dnsqualify_config_path)" || return 1
 	installed=false
-	[ -x "$DNSQUALIFY" ] && installed=true
+	binary_version=""
+	if [ -x "$DNSQUALIFY" ]; then
+		installed=true
+		binary_version="$(dnsqualify_installed_version 2>/dev/null || true)"
+	fi
 	if [ ! -f "$config" ]; then
-		ok '"status":{"enabled":false,"mode":"default","scope":"geosite:cn"},"binary_installed":'"$installed"
+		ok '"status":{"enabled":false,"mode":"default","scope":"geosite:cn"},"binary_installed":'"$installed"',"binary_version":"'"$(json_escape "$binary_version")"'"'
 		return 0
 	fi
 	version="$(jsonfilter -i "$config" -e '@.version' 2>/dev/null || true)"
@@ -2793,17 +2940,20 @@ dnsqualify_status() {
 		fail "dnsqualify_config_invalid" "dnsqualify 配置存在但不完整；Core 渲染也会明确拒绝该配置。"
 		return 1
 	fi
-	ok '"status":{"enabled":true,"mode":"dnsqualify","scope":"geosite:cn","resolver":{"candidate_id":"'"$(json_escape "$candidate")"'","source":"'"$(json_escape "$source")"'","transport":"'"$(json_escape "$transport")"'","endpoint":"'"$(json_escape "$endpoint")"'"},"generated_at":"'"$(json_escape "$generated")"'"},"binary_installed":'"$installed"
+	ok '"status":{"enabled":true,"mode":"dnsqualify","scope":"geosite:cn","resolver":{"candidate_id":"'"$(json_escape "$candidate")"'","source":"'"$(json_escape "$source")"'","transport":"'"$(json_escape "$transport")"'","endpoint":"'"$(json_escape "$endpoint")"'"},"generated_at":"'"$(json_escape "$generated")"'"},"binary_installed":'"$installed"',"binary_version":"'"$(json_escape "$binary_version")"'"'
 }
 
 dnsqualify_run() {
-	local config backup had_config result_tmp render_tmp test_tmp
+	local config backup had_config install_tmp result_tmp render_tmp test_tmp
 	config="$(dnsqualify_config_path)" || return 1
-	[ -x "$DNSQUALIFY" ] || {
-		fail "dnsqualify_binary_missing" "未安装独立 dnsqualify 程序；localClash Core 不包含该能力。"
+	install_tmp="/tmp/localclash-dnsqualify-install-result.$$.json"
+	if ! dnsqualify_ensure > "$install_tmp"; then
+		cat "$install_tmp"
+		rm -f "$install_tmp"
 		return 1
-	}
+	fi
 	mkdir -p "$(dirname "$config")" || {
+		rm -f "$install_tmp"
 		fail "dnsqualify_state_dir_failed" "无法建立 dnsqualify 配置目录。"
 		return 1
 	}
@@ -2818,23 +2968,23 @@ dnsqualify_run() {
 	test_tmp="/tmp/localclash-dns-test.$$.json"
 	log_line "dnsqualify：用户按需启动独立 DNS 测试与配置生成"
 	if ! "$DNSQUALIFY" --output "$config" --json > "$result_tmp" 2>>"$LOG"; then
-		rm -f "$backup" "$result_tmp" "$render_tmp" "$test_tmp"
+		rm -f "$backup" "$install_tmp" "$result_tmp" "$render_tmp" "$test_tmp"
 		fail "dnsqualify_run_failed" "独立 dnsqualify 测试失败；现有配置保持不变。"
 		return 1
 	fi
 	if ! call_core config render --json > "$render_tmp" ||
 		! call_core mihomo config-test --json > "$test_tmp"; then
 		if ! dnsqualify_restore "$backup" "$had_config" "$config"; then
-			rm -f "$backup" "$result_tmp" "$render_tmp" "$test_tmp"
+			rm -f "$backup" "$install_tmp" "$result_tmp" "$render_tmp" "$test_tmp"
 			fail "dnsqualify_rollback_failed" "dnsqualify 配置验证失败，且无法确认旧配置已恢复；请勿重启 Mihomo。"
 			return 1
 		fi
-		rm -f "$backup" "$result_tmp" "$render_tmp" "$test_tmp"
+		rm -f "$backup" "$install_tmp" "$result_tmp" "$render_tmp" "$test_tmp"
 		fail "dnsqualify_validation_failed" "dnsqualify 输出未通过 Core 渲染或 Mihomo 验证，已恢复原配置。"
 		return 1
 	fi
-	ok '"changed":true,"restart_required":true,"summary":"独立 dnsqualify 已生成并验证配置；请重启 Mihomo 后生效。","dnsqualify":'"$(cat "$result_tmp")"',"render":'"$(cat "$render_tmp")"',"config_test":'"$(cat "$test_tmp")"
-	rm -f "$backup" "$result_tmp" "$render_tmp" "$test_tmp"
+	ok '"changed":true,"restart_required":true,"summary":"独立 dnsqualify 已生成并验证配置；请重启 Mihomo 后生效。","install":'"$(cat "$install_tmp")"',"dnsqualify":'"$(cat "$result_tmp")"',"render":'"$(cat "$render_tmp")"',"config_test":'"$(cat "$test_tmp")"
+	rm -f "$backup" "$install_tmp" "$result_tmp" "$render_tmp" "$test_tmp"
 }
 
 dnsqualify_restore() {

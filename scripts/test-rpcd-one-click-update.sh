@@ -202,6 +202,11 @@ bootstrap_core() {
 	printf '{"ok":true,"changed":true,"summary":"core updated"}\n'
 }
 
+dnsqualify_install() {
+	trace "dnsqualify_install"
+	printf '{"ok":true,"changed":true,"summary":"dnsqualify updated"}\n'
+}
+
 service_status() {
 	trace "service_status"
 	printf '{"ok":true,"mcp":{"healthy":true},"summary":"service running"}\n'
@@ -307,6 +312,7 @@ assert_json "$result"
 printf '%s\n' "$result" | grep -q '"ok":true' || fail_test "one_click_update_run failed: ${result}"
 printf '%s\n' "$result" | grep -q '"restart_strategy":"process_restart"' || fail_test "restart strategy mismatch: ${result}"
 printf '%s\n' "$result" | grep -q '"takeover_recovered":true' || fail_test "takeover was not recovered: ${result}"
+printf '%s\n' "$result" | grep -q '"dnsqualify":{"ok":true,"changed":true' || fail_test "dnsqualify update result missing: ${result}"
 one_click_update_luci_changed "$result" || fail_test "LuCI changed marker was not detected for service reload"
 [ ! -e "$LOCK_DIR" ] || fail_test "successful handoff did not clean the task lock"
 [ ! -e "$state_handoff_dir" ] || fail_test "successful handoff did not clean the state directory"
@@ -318,6 +324,7 @@ call_core takeover status --json
 luci_update
 one_click_update_reexec
 bootstrap_core
+dnsqualify_install
 service_status
 call_core component update mihomo --json
 call_core component update dashboard --json
@@ -441,6 +448,7 @@ call_core takeover status --json
 luci_update
 one_click_update_reexec
 bootstrap_core
+dnsqualify_install
 service_status
 call_core component update mihomo --json
 call_core component update dashboard --json
@@ -477,6 +485,7 @@ call_core takeover status --json
 luci_update
 one_click_update_reexec
 bootstrap_core
+dnsqualify_install
 service_status
 call_core component update mihomo --json
 call_core component update dashboard --json

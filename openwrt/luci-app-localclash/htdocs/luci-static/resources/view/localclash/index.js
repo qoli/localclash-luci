@@ -506,14 +506,14 @@ function dnsOptimizationBody(data) {
 			E('tbody', {}, [
 				statusRow(_('当前模式'), status.enabled === true ? _('dnsqualify 配置') : _('Core 默认选择（WAN → AliDNS）')),
 				statusRow(_('作用范围'), status.scope || 'geosite:cn'),
-				statusRow(_('独立程序'), data && data.binary_installed === true ? _('已安装') : _('未安装')),
+				statusRow(_('独立程序'), data && data.binary_installed === true ? formatText(_('已安装（%s）'), data.binary_version || _('版本未知')) : _('未安装（运行时将从 LuCI Release 安装）')),
 				statusRow(_('配置 DNS'), status.enabled === true ? formatText(_('%s（%s / %s）'), resolver.endpoint || '-', resolver.source || '-', resolver.transport || '-') : '-'),
 				statusRow(_('候选 ID'), resolver.candidate_id || '-'),
 				statusRow(_('配置生成时间'), status.generated_at || '-')
 			])
 		]),
 		E('p', { 'class': 'localclash-muted' }, [
-			_('dnsqualify 不是 Core 的主动行为。只有用户按下按钮时，LuCI 才会启动独立 dnsqualify 程序；该程序自行完成测试并只输出 dnsqualify.json。Core 不包含测试或评分能力，只在配置存在时严格读取并套用；不会改变节点域名解析。')
+			_('dnsqualify 由 LuCI 发布和安装，但不是 Core 的主动行为。只有用户按下按钮时，LuCI 才会启动独立程序；程序自行完成测试并只输出 dnsqualify.json。Core 不包含测试或评分能力，只在配置存在时严格读取并套用；不会改变节点域名解析。')
 		]),
 		actionRow([
 			liveTaskButton(status.enabled === true ? _('重新运行 dnsqualify') : _('运行 dnsqualify'), callDNSOptimizationRunAsync, 'cbi-button-apply'),

@@ -17,6 +17,10 @@ mkdir -p "${STATE_DIR}"
 
 cat > "${DNSQUALIFY}" <<'SH'
 #!/bin/sh
+if [ "${1:-}" = "--version" ]; then
+	printf 'dnsqualify v0.1.0-41\n'
+	exit 0
+fi
 output=""
 while [ "$#" -gt 0 ]; do
 	case "$1" in
@@ -97,13 +101,20 @@ call_core() {
 
 installed_dnsqualify="${DNSQUALIFY}"
 DNSQUALIFY="${tmp_dir}/missing-dnsqualify"
+dnsqualify_ensure() {
+	fail "dnsqualify_manifest_download_failed" "无法下载 dnsqualify Release 清单。"
+	return 1
+}
 set +e
 missing_result="$(dnsqualify_run)"
 missing_rc=$?
 set -e
 [ "$missing_rc" -ne 0 ] || fail_test "missing standalone binary returned success"
-printf '%s\n' "$missing_result" | grep -q '"code":"dnsqualify_binary_missing"' || fail_test "missing binary returned wrong error: ${missing_result}"
+printf '%s\n' "$missing_result" | grep -q '"code":"dnsqualify_manifest_download_failed"' || fail_test "missing binary install failure returned wrong error: ${missing_result}"
 DNSQUALIFY="${installed_dnsqualify}"
+dnsqualify_ensure() {
+	ok '"changed":false,"summary":"dnsqualify 已安装。","dnsqualify":{"installed":true,"version":"v0.1.0-41"}}'
+}
 
 : > "${tmp_dir}/trace"
 result="$(dnsqualify_run)"
@@ -118,6 +129,7 @@ fi
 
 status_result="$(dnsqualify_status)"
 printf '%s\n' "$status_result" | grep -q '"mode":"dnsqualify"' || fail_test "status did not report standalone config: ${status_result}"
+printf '%s\n' "$status_result" | grep -q '"binary_version":"v0.1.0-41"' || fail_test "status did not report binary version: ${status_result}"
 
 printf '{"marker":"old"}\n' > "${STATE_DIR}/dnsqualify.json"
 touch "${tmp_dir}/fail-config-test"

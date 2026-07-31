@@ -171,7 +171,8 @@ localClash 现在提供 `一键更新`：更新 LuCI 界面、localClash 核心�
 - 默认对 `geosite:cn` 优先使用可确认来源并能完成基本 DNS 交换的 WAN DNS。
 - 无法确认 WAN DNS 来源，或列出的 WAN DNS 都不可用时，才明确回退到
   AliDNS；页面会显示回退原因。
-- `dnsqualify` 是独立二进制，不属于 localClash Core，也不会定时或自动运行。
+- `dnsqualify` 是由 LuCI Release 提供和校验安装的独立二进制，不属于
+  localClash Core，也不会定时或自动运行。
 - 只有用户按下 `运行 dnsqualify` 时，LuCI 才会启动它；它自行比较 WAN 与公共
   DNS 的网站连通性和知名服务 CDN 速度，并只输出 `dnsqualify.json`。
 - Core 不理解测试报告或候选评分，只在 `dnsqualify.json` 存在时严格验证并
@@ -179,6 +180,8 @@ localClash 现在提供 `一键更新`：更新 LuCI 界面、localClash 核心�
 - CDN 速度只用于最佳化排序，不是 WAN DNS 的默认准入门槛。
 - `删除 dnsqualify 配置` 会回到 WAN DNS → AliDNS 回退的 Core 默认行为。
 - 节点域名解析不会被这项最佳化修改；生效前仍需由用户明确重启 Mihomo。
+- LuCI 一键更新会按路由器架构更新 `dnsqualify`；如果程序尚未安装，首次按下
+  `运行 dnsqualify` 也会从同一 LuCI Release 安装并验证 SHA-256。
 
 ## 常见问题
 

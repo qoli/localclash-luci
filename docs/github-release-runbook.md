@@ -1,10 +1,11 @@
 # GitHub Release Runbook
 
 This runbook publishes a new `localclash-luci` GitHub Release with both OpenWrt
-package formats:
+package formats and the LuCI-owned `dnsqualify` helper:
 
 - OpenWrt 24.10 and older: `.ipk` / `opkg`
 - OpenWrt 25.12 and newer: `.apk` / `apk`
+- Linux amd64 and arm64: standalone `dnsqualify` binaries selected by LuCI
 
 The LuCI package and the `localClash` Go core are separate release channels. Do
 not publish a new LuCI release only because the core has a new version. The LuCI
@@ -73,13 +74,6 @@ If any check fails, fix it before continuing.
 
 ## 3. Build Both Package Formats
 
-Build the OpenWrt 24 `.ipk` and OpenWrt 25 `.apk` artifacts:
-
-```sh
-./scripts/build-openwrt-ipk.sh
-./scripts/build-openwrt-apk.sh
-```
-
 Read package metadata from the Makefile and define artifact paths:
 
 ```sh
@@ -91,12 +85,23 @@ ipk="dist/${pkg_name}_${pkg_version}-${pkg_release}_all.ipk"
 apk="dist/${pkg_name}-${pkg_version}-r${pkg_release}.apk"
 ```
 
+Build the OpenWrt 24 `.ipk`, OpenWrt 25 `.apk`, and both dnsqualify assets:
+
+```sh
+./scripts/build-openwrt-ipk.sh
+./scripts/build-openwrt-apk.sh
+./scripts/build-dnsqualify-assets.sh "$tag"
+```
+
 Confirm the expected files exist:
 
 ```sh
 test -s "$ipk"
 test -s "$apk"
-ls -lh "$ipk" "$apk"
+test -s dist/dnsqualify-linux-amd64
+test -s dist/dnsqualify-linux-arm64
+test -s dist/dnsqualify-release-manifest.json
+ls -lh "$ipk" "$apk" dist/dnsqualify-linux-* dist/dnsqualify-release-manifest.json
 ```
 
 ## 4. Generate Checksums
@@ -108,6 +113,8 @@ shasum -a 256 "$ipk" > "${ipk}.sha256"
 shasum -a 256 "$apk" > "${apk}.sha256"
 shasum -a 256 -c "${ipk}.sha256"
 shasum -a 256 -c "${apk}.sha256"
+shasum -a 256 -c dist/dnsqualify-linux-amd64.sha256
+shasum -a 256 -c dist/dnsqualify-linux-arm64.sha256
 ```
 
 `dist/` is ignored by git. The artifacts are uploaded to GitHub Release, not
@@ -145,6 +152,7 @@ Changes:
 Artifacts:
 - OpenWrt 24.10 and older: $(basename "$ipk")
 - OpenWrt 25.12 and newer: $(basename "$apk")
+- LuCI-managed DNS qualification: dnsqualify-linux-amd64 / dnsqualify-linux-arm64
 EOF
 ```
 
@@ -170,6 +178,11 @@ gh release create "$tag" \
   "${ipk}.sha256" \
   "$apk" \
   "${apk}.sha256" \
+  dist/dnsqualify-linux-amd64 \
+  dist/dnsqualify-linux-amd64.sha256 \
+  dist/dnsqualify-linux-arm64 \
+  dist/dnsqualify-linux-arm64.sha256 \
+  dist/dnsqualify-release-manifest.json \
   --title "localclash-luci ${tag}" \
   --notes-file "$notes_file" \
   --target "$commit" \
@@ -195,6 +208,11 @@ luci-app-localclash_<version>-<release>_all.ipk
 luci-app-localclash_<version>-<release>_all.ipk.sha256
 luci-app-localclash-<version>-r<release>.apk
 luci-app-localclash-<version>-r<release>.apk.sha256
+dnsqualify-linux-amd64
+dnsqualify-linux-amd64.sha256
+dnsqualify-linux-arm64
+dnsqualify-linux-arm64.sha256
+dnsqualify-release-manifest.json
 ```
 
 The release should be:
