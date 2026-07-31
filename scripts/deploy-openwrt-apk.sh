@@ -37,16 +37,18 @@ docker run --rm \
 	sh -lc "
 		set -euo pipefail
 		apk --allow-untrusted verify '/work/${apk_rel}'
-		apk adbdump '/work/${apk_rel}' | grep -q 'name: ${pkg_name}'
-		apk adbdump '/work/${apk_rel}' | grep -q 'version: ${apk_version}'
-		apk adbdump '/work/${apk_rel}' | grep -q 'arch: noarch'
-		apk --cache=no --allow-untrusted manifest '/work/${apk_rel}' | grep -q '  usr/libexec/rpcd/localclash$'
-		apk --cache=no --allow-untrusted manifest '/work/${apk_rel}' | grep -q '  usr/share/luci/menu.d/luci-app-localclash.json$'
-		apk --cache=no --allow-untrusted manifest '/work/${apk_rel}' | grep -q '  usr/share/rpcd/acl.d/luci-app-localclash.json$'
-		apk --cache=no --allow-untrusted manifest '/work/${apk_rel}' | grep -q '  usr/share/localclash/mcp-help.txt$'
-		apk --cache=no --allow-untrusted manifest '/work/${apk_rel}' | grep -q '  www/luci-static/resources/view/localclash/index.js$'
-		apk --cache=no --allow-untrusted manifest '/work/${apk_rel}' | grep -q '  www/luci-static/resources/view/localclash/overview.js$'
-		apk --cache=no --allow-untrusted manifest '/work/${apk_rel}' | grep -q '  www/luci-static/resources/view/localclash/subscription.js$'
+		apk adbdump '/work/${apk_rel}' > /tmp/localclash-apk-metadata.txt
+		grep -q 'name: ${pkg_name}' /tmp/localclash-apk-metadata.txt
+		grep -q 'version: ${apk_version}' /tmp/localclash-apk-metadata.txt
+		grep -q 'arch: noarch' /tmp/localclash-apk-metadata.txt
+		apk --cache=no --allow-untrusted manifest '/work/${apk_rel}' > /tmp/localclash-apk-manifest.txt
+		grep -q '  usr/libexec/rpcd/localclash$' /tmp/localclash-apk-manifest.txt
+		grep -q '  usr/share/luci/menu.d/luci-app-localclash.json$' /tmp/localclash-apk-manifest.txt
+		grep -q '  usr/share/rpcd/acl.d/luci-app-localclash.json$' /tmp/localclash-apk-manifest.txt
+		grep -q '  usr/share/localclash/mcp-help.txt$' /tmp/localclash-apk-manifest.txt
+		grep -q '  www/luci-static/resources/view/localclash/index.js$' /tmp/localclash-apk-manifest.txt
+		grep -q '  www/luci-static/resources/view/localclash/overview.js$' /tmp/localclash-apk-manifest.txt
+		grep -q '  www/luci-static/resources/view/localclash/subscription.js$' /tmp/localclash-apk-manifest.txt
 	"
 
 printf 'Uploading %s to %s:%s\n' "${apk_name}" "${target}" "${remote_apk}"

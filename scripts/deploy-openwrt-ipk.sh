@@ -47,13 +47,14 @@ docker run --rm \
 		grep -qx 'Package: ${pkg_name}' control
 		grep -qx 'Version: ${pkg_version}-${pkg_release}' control
 		grep -qx 'Architecture: all' control
-		tar -tzf data.tar.gz | grep -qx './usr/libexec/rpcd/localclash'
-		tar -tzf data.tar.gz | grep -qx './usr/share/luci/menu.d/luci-app-localclash.json'
-		tar -tzf data.tar.gz | grep -qx './usr/share/rpcd/acl.d/luci-app-localclash.json'
-		tar -tzf data.tar.gz | grep -qx './usr/share/localclash/mcp-help.txt'
-		tar -tzf data.tar.gz | grep -qx './www/luci-static/resources/view/localclash/index.js'
-		tar -tzf data.tar.gz | grep -qx './www/luci-static/resources/view/localclash/overview.js'
-		tar -tzf data.tar.gz | grep -qx './www/luci-static/resources/view/localclash/subscription.js'
+		tar -tzf data.tar.gz > data-files.txt
+		grep -qx './usr/libexec/rpcd/localclash' data-files.txt
+		grep -qx './usr/share/luci/menu.d/luci-app-localclash.json' data-files.txt
+		grep -qx './usr/share/rpcd/acl.d/luci-app-localclash.json' data-files.txt
+		grep -qx './usr/share/localclash/mcp-help.txt' data-files.txt
+		grep -qx './www/luci-static/resources/view/localclash/index.js' data-files.txt
+		grep -qx './www/luci-static/resources/view/localclash/overview.js' data-files.txt
+		grep -qx './www/luci-static/resources/view/localclash/subscription.js' data-files.txt
 	"
 
 printf 'Uploading %s to %s:%s\n' "${ipk_name}" "${target}" "${remote_ipk}"
