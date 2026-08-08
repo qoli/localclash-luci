@@ -324,14 +324,24 @@ deletion paths through RPC. This keeps LuCI and CLI behavior predictable.
 
 ### 9. MCP Connection Guidance
 
-Show copyable guidance that a user can paste into an Agent conversation. The
-guidance should help the Agent configure localClash MCP first, then use it. It
-must not assume the Agent already has localClash MCP tools visible.
+Show copyable guidance that a user can paste into an Agent conversation. For
+Codex, the guidance must install or update the official
+`localclash-mcp-route-operator` companion skill and then configure localClash
+MCP. The skill governs route planning, observability, and mutation boundaries;
+MCP connects the Agent to the real router. Neither substitutes for the other,
+and the guidance must not assume either is already available.
 
 Example:
 
 ```text
-Please connect this Agent session to the router localClash MCP.
+Please install the official localClash companion skill and connect this Agent
+session to the router localClash MCP.
+
+For Codex, install or update `localclash-mcp-route-operator` from:
+https://github.com/qoli/localClash/tree/main/.codex/skills/localclash-mcp-route-operator
+
+If a localClash checkout is available, run from its root:
+scripts/install-codex-skill.sh
 
 MCP endpoint: http://192.168.6.1:8765/mcp
 
@@ -360,9 +370,13 @@ When prompting OpenCode, explicitly say: use localclash.
 
 After MCP is configured, refresh or restart the current Agent session until the
 localClash MCP tools are visible. Then call localClash tools_list first, followed
-by environment_inspect. Use the reported safety_level before making changes:
-read-only checks may run directly; writes, runtime changes, and router network
-takeover changes must explain their impact and wait for user confirmation.
+by environment_inspect. Observe durable intent, loaded Mihomo state, active
+connections, and bounded logs as separate evidence layers. Service-specific
+routes should use service-owned exits. If a draft touches a shared/default
+group, stop before apply and show the exact group, current behavior, blast
+radius, and dedicated-exit alternative. Continue only after explicit user
+confirmation naming that shared mutation. Treat config writes, runtime load,
+service restart, and router takeover as separate authorizations.
 
 Do not search or read the local /Volumes/Data/Github/localClash source checkout
 as a substitute for connecting to the router MCP instance.

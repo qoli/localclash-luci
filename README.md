@@ -131,6 +131,19 @@
 
 点击 `打开 Dashboard` 可以进入 Mihomo Dashboard，查看节点、连接和规则命中情况。
 
+## 让 Agent 管理 localClash
+
+概览页底部提供 `Agent Skill 与 MCP 接入`。点击 `复制 Skill + MCP 指令`，把完整内容发送给 Codex、Claude Code 或 OpenCode。
+
+如果使用 Codex，建议同时安装 localClash 官方配套的 `localclash-mcp-route-operator` Skill。Skill 会引导 Agent：
+
+- 先从配置意图、Mihomo 已加载状态、当前连接和限定时间日志收集证据。
+- 为单一服务、应用或游戏建立专用策略出口，不随意覆盖“自动选择”等共享或默认策略组。
+- Draft 一旦触及 shared/default group 就停止套用；只有你明确确认具体共享变更后，才允许继续。
+- 把配置写入、运行时加载、服务重启和路由器网络接管视为不同授权。
+
+Skill 与 MCP 缺一不可：Skill 约束 Agent 如何规划和操作，MCP 才是连接真实路由器、读取状态与执行已授权变更的通道。LuCI 提供的复制文本会同时引导这两步，并自动带入当前路由器的 MCP 地址。
+
 ## 以后怎么更新
 
 localClash 现在提供 `一键更新`：更新 LuCI 界面、localClash 核心、Mihomo 核心和 Dashboard，并自动刷新已保存订阅、重建配置，最后恢复运行时和网络接管。

@@ -268,13 +268,22 @@ fi
 
 ### 5. MCP 连接测试
 
-LuCI 页面给用户复制的 MCP 引导应帮助 Agent 配置 MCP，而不是让 Agent 去本
-地源码仓库猜项目结构。
+LuCI 页面给用户复制的接入引导应帮助 Codex 安装或更新官方配套 Skill，再让
+Agent 配置 MCP；不能让 Agent 去本地源码仓库猜项目结构，也不能把读取源码当
+成连接真实路由器 MCP 的替代方案。
 
 推荐给 Agent 的指令形态：
 
 ```text
-请把当前 Agent 会话连接到路由器上的 localClash MCP：
+请为当前 Agent 会话安装 localClash 官方配套 Skill，并连接路由器上的 localClash MCP。
+
+Codex 应安装或更新 localclash-mcp-route-operator：
+https://github.com/qoli/localClash/tree/main/.codex/skills/localclash-mcp-route-operator
+
+已有 localClash 源码时，在仓库根目录运行：
+scripts/install-codex-skill.sh
+
+然后连接 MCP：
 http://192.168.6.1:8765/mcp
 
 Claude Code 可以先执行：
@@ -298,9 +307,11 @@ http://192.168.6.1:8765/mcp
   }
 }
 
-连接完成并刷新会话后，先调用 localClash tools_list，再调用
-environment_inspect。之后根据 safety_level 决定是否只读检查、写配置，或
-等待我确认后再执行运行时和网络接管操作。
+安装 Skill、连接 MCP 并刷新会话后，先调用 localClash tools_list，再调用
+environment_inspect。之后分别观测配置意图、已加载状态、连接和限定时间日志。
+服务路由优先使用专用策略出口；Draft 触及 shared/default group 时必须停止套
+用，展示具体影响和专用出口替代方案，只有用户明确点名确认后才可继续。配置写
+入、运行时加载、服务重启和网络接管分别等待授权。
 
 不要把读取本机 /Volumes/Data/Github/localClash 源码当成连接路由器 MCP 的
 替代方案。

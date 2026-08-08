@@ -36,4 +36,6 @@
 
 不要。
 
-如果要让 Agent 管理路由器上的 localClash，请在 LuCI 页面里复制 MCP 连接提示，让 Agent 连接真实路由器 MCP。
+如果要让 Agent 管理路由器上的 localClash，请在 LuCI 概览页复制 `Skill + MCP` 接入提示。使用 Codex 时先安装官方 `localclash-mcp-route-operator` Skill，再连接真实路由器 MCP。
+
+Skill 负责让 Agent 优先建立服务专用策略出口、按配置意图/已加载状态/连接/日志分层观测，并在 Draft 触及 shared/default group 时停止套用、等待你的明确确认。MCP 才是读取和操作真实路由器的通道；读取本地源码不能替代 MCP。

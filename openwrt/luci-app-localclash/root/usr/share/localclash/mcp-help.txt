@@ -1,4 +1,12 @@
-请为当前 Agent 会话接入路由器上的 localClash MCP。
+请为当前 Agent 会话安装 localClash 官方配套 Skill，并接入路由器上的 localClash MCP。
+
+如果你使用 Codex，请先安装或更新 `localclash-mcp-route-operator` Skill：
+
+- Skill 来源：https://github.com/qoli/localClash/tree/main/.codex/skills/localclash-mcp-route-operator
+- 已有 localClash 源码时，在仓库根目录运行：scripts/install-codex-skill.sh
+- 没有源码时，使用 Codex 的 skill-installer 从上述 GitHub 路径安装。
+
+安装完成后，请刷新或重新打开当前 Codex 任务，并确认该 Skill 可用。Skill 负责约束 Agent 如何规划、观测和变更路由；MCP 负责连接真实路由器，两者不能互相替代。
 
 MCP 地址：http://192.168.6.1:8765/mcp
 
@@ -25,4 +33,11 @@ http://192.168.6.1:8765/mcp
 
 在 OpenCode 对话中需要使用时，可以明确说明：use localclash。
 
-配置完成后，请刷新或重启当前 Agent 会话，直到可以看到 localClash MCP 工具。工具可见后，先调用 localClash MCP 的 tools_list，再调用 environment_inspect。根据 environment_inspect 返回的 safety_level 决定下一步：只读检查可以直接执行；写入、运行时、路由器网络接管等变更必须先说明影响并等待用户确认。
+MCP 配置完成后，请刷新或重启当前 Agent 会话，直到可以看到 localClash MCP 工具。工具可见后，先调用 localClash MCP 的 tools_list，再调用 environment_inspect。
+
+后续操作必须遵守这些边界：
+
+1. 先观测再变更，并区分持久配置意图、Mihomo 已加载状态、当前连接和限定时间日志；不要只凭配置推断实际流量。
+2. 服务、应用或游戏应优先使用自己拥有的专用策略出口，不要为了单一服务覆盖“自动选择”等共享或默认策略组。
+3. Draft 一旦触及 shared/default group，必须停止套用，先展示具体组、当前行为、影响范围和专用出口替代方案；只有用户明确点名确认该共享变更后才可继续。
+4. 写入配置、加载运行时、重启服务或接管路由器网络是不同授权，不得互相推定；执行前应分别说明影响并等待确认。

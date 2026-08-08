@@ -1274,14 +1274,14 @@ function mcpGuidanceBody(help) {
 	var rows = Math.max(10, text.split(/\r?\n/).length + 2);
 
 	return E('div', {}, [
-		E('p', { 'class': 'localclash-muted' }, [ _('将这段文字复制给 Agent，用于配置并安全接入路由器上的 localClash MCP。') ]),
+		E('p', { 'class': 'localclash-muted' }, [ _('将这段文字复制给 Agent，用于安装官方配套 Skill，并安全接入路由器上的 localClash MCP。Skill 提供路由规划与观测边界，MCP 连接真实路由器。') ]),
 		E('textarea', {
 			'class': 'cbi-input-textarea localclash-copybox',
 			'readonly': 'readonly',
 			'rows': rows
 		}, [ text ]),
 		actionRow([
-			commandButton(_('复制 MCP 指令'), function() {
+			commandButton(_('复制 Skill + MCP 指令'), function() {
 				return copyText(text).then(function() {
 					return { ok: true, copied: true };
 				});
@@ -1291,7 +1291,7 @@ function mcpGuidanceBody(help) {
 }
 
 function mcpGuidance(help) {
-	return section(_('MCP 接入指令'), E('div', { 'id': 'localclash-overview-mcp-body' }, [
+	return section(_('Agent Skill 与 MCP 接入'), E('div', { 'id': 'localclash-overview-mcp-body' }, [
 		mcpGuidanceBody(help)
 	]), 'localclash-mcp-help');
 }
