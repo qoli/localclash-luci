@@ -186,6 +186,9 @@ localClash 现在提供 `一键更新`：更新 LuCI 界面、localClash 核心�
   AliDNS；页面会显示回退原因。
 - `dnsqualify` 是由 LuCI Release 提供和校验安装的独立二进制，不属于
   localClash Core，也不会定时或自动运行。
+- LuCI CI 只从 `release/dnsqualify-source.json` 固定的
+  [`qoli/dnsqualify`](https://github.com/qoli/dnsqualify) commit 构建该二进制，
+  不使用浮动分支或仓库内嵌源码。
 - 只有用户按下 `运行 dnsqualify` 时，LuCI 才会启动它；它自行比较 WAN 与公共
   DNS 的网站连通性和知名服务 CDN 速度，并只输出 `dnsqualify.json`。
 - Core 不理解测试报告或候选评分，只在 `dnsqualify.json` 存在时严格验证并

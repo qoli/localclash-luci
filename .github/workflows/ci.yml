@@ -20,10 +20,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Prepare pinned dnsqualify source
+        run: python3 scripts/prepare-dnsqualify-source.py
+
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: tools/dnsqualify/go.mod
+          go-version-file: .build/dnsqualify-source/go.mod
           cache: false
 
       - name: Verify source
@@ -36,11 +39,12 @@ jobs:
           sh -n openwrt/luci-app-localclash/root/usr/libexec/rpcd/localclash
           sh -n packaging/istore/install.sh
           python3 -m py_compile scripts/resolve-core-release.py
-          python3 -m unittest scripts/test_resolve_core_release.py
+          python3 -m py_compile scripts/prepare-dnsqualify-source.py
+          python3 -m unittest scripts/test_resolve_core_release.py scripts/test_prepare_dnsqualify_source.py
           git diff --check
 
       - name: Test dnsqualify
-        working-directory: tools/dnsqualify
+        working-directory: .build/dnsqualify-source
         run: |
           go test ./...
           go vet ./...

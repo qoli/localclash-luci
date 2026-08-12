@@ -21,6 +21,8 @@ expected_tag="v${pkg_version}-${pkg_release}"
 rm -rf "${repo_root}/dist" "${repo_root}/.build"
 mkdir -p "${repo_root}/dist"
 
+python3 "${repo_root}/scripts/prepare-dnsqualify-source.py"
+
 "${repo_root}/scripts/build-openwrt-ipk.sh"
 "${repo_root}/scripts/build-openwrt-apk.sh"
 "${repo_root}/scripts/build-dnsqualify-assets.sh" "$release_tag"

@@ -14,9 +14,11 @@
 
 源码压缩包由 GitHub 自动生成，不计入上述 allow-list。
 
-LuCI 和 Core 仍是两个独立 Release channel。普通 LuCI 安装包不会内置 Core；
-iStore `.run` 是明确的离线 bundle，因此只使用 `release/core-release.json`
-固定的 Core tag。更新 Core lock 不代表必须发布 LuCI，发布决定仍以 LuCI 变更为准。
+LuCI、Core 和 dnsqualify 是三个独立源码与 Release channel。普通 LuCI 安装包
+不会内置 Core；iStore `.run` 是明确的离线 bundle，因此只使用
+`release/core-release.json` 固定的 Core tag。LuCI Release 构建的 dnsqualify
+二进制则只来自 `release/dnsqualify-source.json` 固定的公开仓库 commit。更新任一
+source lock 不代表必须发布 LuCI，发布决定仍以 LuCI 变更为准。
 
 ## CI 分工
 
@@ -24,7 +26,7 @@ iStore `.run` 是明确的离线 bundle，因此只使用 `release/core-release.
 
 1. JavaScript、rpcd shell、installer 和 Python 语法检查；
 2. 全部 rpcd helper 测试；
-3. dnsqualify test 和 vet；
+3. 按 source lock 获取并验证 dnsqualify 的精确 commit，再执行 test 和 vet；
 4. 构建 IPK、APK、dnsqualify 和两个 `.run`；
 5. 验证精确资产集合、全部 SHA-256 和 Makeself 内容；
 6. 在无网络 Docker 容器安装 x86_64 bundle，并验证架构不匹配时明确失败；
@@ -66,12 +68,22 @@ Core manifest 本身还必须严格声明相同 tag、官方仓库 URL、Linux a
 Makeself 同理由 `release/makeself-release.json` 固定版本、官方 Release URL 和
 SHA-256。升级时必须在单独变更中验证两个架构的 `.run`。
 
+## 2.1 更新 dnsqualify Source Pin
+
+只有需要让 LuCI CI 与下一版 Release 使用不同 dnsqualify 源码时，才修改
+`release/dnsqualify-source.json`。`repository` 和 `clone_url` 必须指向
+`qoli/dnsqualify`，`commit` 必须是完整的 40 字符小写 Git SHA；禁止使用
+`main`、tag、`latest` 或 LuCI 内嵌源码。
+
+`scripts/prepare-dnsqualify-source.py` 会获取该 commit，并验证 checkout 的
+origin、HEAD 与干净工作树。任何缺失或不一致都会直接失败。
+
 ## 3. 本地验证
 
 常规开发至少运行聚焦测试：
 
 ```sh
-python3 -m unittest scripts/test_resolve_core_release.py
+python3 -m unittest scripts/test_resolve_core_release.py scripts/test_prepare_dnsqualify_source.py
 
 for file in openwrt/luci-app-localclash/htdocs/luci-static/resources/view/localclash/*.js; do
   node --check "$file"
@@ -84,7 +96,8 @@ for test_script in scripts/test-rpcd-*.sh scripts/test-hotplug-takeover-restore.
   bash "$test_script"
 done
 
-(cd tools/dnsqualify && go test ./... && go vet ./...)
+python3 scripts/prepare-dnsqualify-source.py
+(cd .build/dnsqualify-source && go test ./... && go vet ./...)
 ```
 
 需要本地构建完整候选产物时：

@@ -16,9 +16,13 @@ case "$tag" in
 esac
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source_dir="${repo_root}/tools/dnsqualify"
+source_dir="${repo_root}/.build/dnsqualify-source"
 dist_dir="${repo_root}/dist"
 release_base="https://github.com/qoli/localclash-luci/releases/download/${tag}"
+
+source_metadata="$(python3 "${repo_root}/scripts/prepare-dnsqualify-source.py" --verify-only)"
+source_repository="$(printf '%s' "$source_metadata" | python3 -c 'import json, sys; print(json.load(sys.stdin)["repository"])')"
+source_commit="$(printf '%s' "$source_metadata" | python3 -c 'import json, sys; print(json.load(sys.stdin)["commit"])')"
 
 mkdir -p "$dist_dir"
 
@@ -44,6 +48,10 @@ arm64_sha="$(awk '{print $1; exit}' "${dist_dir}/dnsqualify-linux-arm64.sha256")
 	printf '{\n'
 	printf '  "schema_version": 1,\n'
 	printf '  "version": "%s",\n' "$tag"
+	printf '  "source": {\n'
+	printf '    "repository": "%s",\n' "$source_repository"
+	printf '    "commit": "%s"\n' "$source_commit"
+	printf '  },\n'
 	printf '  "assets": [\n'
 	printf '    {\n'
 	printf '      "os": "linux",\n'

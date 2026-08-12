@@ -46,6 +46,29 @@ if ! diff -u "$expected_assets" "$actual_assets"; then
 	exit 1
 fi
 
+python3 - \
+	"$dist_dir/dnsqualify-release-manifest.json" \
+	"$repo_root/release/dnsqualify-source.json" \
+	"$release_tag" <<'PY'
+import json
+import pathlib
+import sys
+
+manifest = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+source_lock = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
+release_tag = sys.argv[3]
+if manifest.get("schema_version") != 1:
+    raise SystemExit("dnsqualify release manifest schema_version must be 1")
+if manifest.get("version") != release_tag:
+    raise SystemExit("dnsqualify release manifest version does not match the release tag")
+expected_source = {
+    "repository": source_lock.get("repository"),
+    "commit": source_lock.get("commit"),
+}
+if manifest.get("source") != expected_source:
+    raise SystemExit("dnsqualify release manifest source does not match the pinned lock")
+PY
+
 (
 	cd "$dist_dir"
 	for checksum in *.sha256; do
