@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "repository": "qoli/localClash",
+  "tag": "v0.1.51",
+  "manifest_url": "https://github.com/qoli/localClash/releases/download/v0.1.51/localclash-release-manifest.json",
+  "manifest_sha256": "66e69cef2ebba740b0450328c861a33a3f62f9593a4b7e41bb0228b16eed9331"
+}

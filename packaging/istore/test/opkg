@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+[ "$#" = 2 ] || {
+	printf 'mock-opkg: expected exactly two arguments\n' >&2
+	exit 1
+}
+[ "$1" = install ] || {
+	printf 'mock-opkg: only local install is allowed, got %s\n' "$1" >&2
+	exit 1
+}
+[ -f "$2" ] || {
+	printf 'mock-opkg: package does not exist: %s\n' "$2" >&2
+	exit 1
+}
+printf '%s\n' "$*" > /tmp/mock-opkg.args

@@ -1,249 +1,153 @@
 # GitHub Release Runbook
 
-This runbook publishes a new `localclash-luci` GitHub Release with both OpenWrt
-package formats and the LuCI-owned `dnsqualify` helper:
+本仓库使用 GitHub Actions 构建和发布 LuCI Release。Release tag 是唯一发布
+入口；CI 不自动修改版本、不自动创建 tag，也不会覆盖已经公开的 Release。
 
-- OpenWrt 24.10 and older: `.ipk` / `opkg`
-- OpenWrt 25.12 and newer: `.apk` / `apk`
-- Linux amd64 and arm64: standalone `dnsqualify` binaries selected by LuCI
+## 发布产物
 
-The LuCI package and the `localClash` Go core are separate release channels. Do
-not publish a new LuCI release only because the core has a new version. The LuCI
-helper downloads the latest core from the core release manifest at runtime.
+每个 Release 必须包含以下 13 个仓库自有产物：
 
-## Preconditions
+- OpenWrt 24.10 及更早版本使用的 `.ipk` 和 SHA-256；
+- OpenWrt 25.12 及更新版本使用的 `.apk` 和 SHA-256；
+- Linux amd64、arm64 的 `dnsqualify`、SHA-256 和 Release manifest；
+- iStoreOS x86_64、aarch64 离线 `.run` 和 SHA-256。
 
-- `main` is the intended release branch.
-- The working tree is clean except for the release bump you are about to make.
-- `gh auth status` is healthy for `github.com/qoli/localclash-luci`.
-- Docker is available for the package build scripts.
-- The change being released touches the LuCI UI, rpcd helper, ACL, menu,
-  package metadata, package scripts, or docs that should ship with a LuCI
-  package release.
+源码压缩包由 GitHub 自动生成，不计入上述 allow-list。
+
+LuCI 和 Core 仍是两个独立 Release channel。普通 LuCI 安装包不会内置 Core；
+iStore `.run` 是明确的离线 bundle，因此只使用 `release/core-release.json`
+固定的 Core tag。更新 Core lock 不代表必须发布 LuCI，发布决定仍以 LuCI 变更为准。
+
+## CI 分工
+
+`.github/workflows/ci.yml` 在 pull request 和 `main` push 上执行：
+
+1. JavaScript、rpcd shell、installer 和 Python 语法检查；
+2. 全部 rpcd helper 测试；
+3. dnsqualify test 和 vet；
+4. 构建 IPK、APK、dnsqualify 和两个 `.run`；
+5. 验证精确资产集合、全部 SHA-256 和 Makeself 内容；
+6. 在无网络 Docker 容器安装 x86_64 bundle，并验证架构不匹配时明确失败；
+7. 上传保留 7 天的候选 Actions artifact，不创建 Release。
+
+`.github/workflows/release.yml` 对 tag 重新执行同一套检查，全部成功后才创建
+GitHub Release。已存在 Release、tag 与 Makefile 版本不一致、tag commit 不一致，
+都会直接失败。
+
+## 1. 准备版本提交
+
+确认 `main` 是预期分支，工作树没有无关修改，并检查最近 Release：
 
 ```sh
-git status --short
-git branch --show-current
+git status --short --branch
 gh auth status
 gh release list --limit 5
 ```
 
-## 1. Choose the Next Package Release
-
-The release tag follows the OpenWrt package version:
+修改 `openwrt/luci-app-localclash/Makefile` 的 `PKG_RELEASE`。版本映射必须是：
 
 ```text
 PKG_VERSION:=0.1.0
-PKG_RELEASE:=14
-tag: v0.1.0-14
-ipk: luci-app-localclash_0.1.0-14_all.ipk
-apk: luci-app-localclash-0.1.0-r14.apk
+PKG_RELEASE:=44
+tag: v0.1.0-44
 ```
 
-Check the latest published release and bump `PKG_RELEASE` in
-`openwrt/luci-app-localclash/Makefile`.
+不得复用已有 tag 或覆盖旧 Release。
+
+## 2. 更新离线 Bundle Core Pin
+
+只有需要让新的 iStore 离线包携带不同 Core 时，才修改
+`release/core-release.json`。必须填写精确 tag manifest URL 和该 manifest 的
+SHA-256；禁止填写 `latest`、镜像地址或未校验 URL。
+
+Core manifest 本身还必须严格声明相同 tag、官方仓库 URL、Linux amd64/arm64
+资产和 base assets。`scripts/resolve-core-release.py` 会验证这些 invariant。
+
+Makeself 同理由 `release/makeself-release.json` 固定版本、官方 Release URL 和
+SHA-256。升级时必须在单独变更中验证两个架构的 `.run`。
+
+## 3. 本地验证
+
+常规开发至少运行聚焦测试：
 
 ```sh
-gh release list --limit 5
-$EDITOR openwrt/luci-app-localclash/Makefile
-```
+python3 -m unittest scripts/test_resolve_core_release.py
 
-Update README release references when they name the current latest LuCI package.
-
-```sh
-$EDITOR README.md
-```
-
-Do not reuse an existing tag or overwrite an older public package release. Bump
-the package release and publish a new GitHub Release instead.
-
-## 2. Verify Source Before Packaging
-
-Run the lightweight checks before building artifacts:
-
-```sh
-for f in openwrt/luci-app-localclash/htdocs/luci-static/resources/view/localclash/*.js; do
-  node --check "$f"
+for file in openwrt/luci-app-localclash/htdocs/luci-static/resources/view/localclash/*.js; do
+  node --check "$file"
 done
 
 sh -n openwrt/luci-app-localclash/root/usr/libexec/rpcd/localclash
-git diff --check
+sh -n packaging/istore/install.sh
+
+for test_script in scripts/test-rpcd-*.sh scripts/test-hotplug-takeover-restore.sh; do
+  bash "$test_script"
+done
+
+(cd tools/dnsqualify && go test ./... && go vet ./...)
 ```
 
-If any check fails, fix it before continuing.
-
-## 3. Build Both Package Formats
-
-Read package metadata from the Makefile and define artifact paths:
+需要本地构建完整候选产物时：
 
 ```sh
-pkg_name="$(awk -F':=' '/^PKG_NAME:=/ { print $2; exit }' openwrt/luci-app-localclash/Makefile)"
-pkg_version="$(awk -F':=' '/^PKG_VERSION:=/ { print $2; exit }' openwrt/luci-app-localclash/Makefile)"
-pkg_release="$(awk -F':=' '/^PKG_RELEASE:=/ { print $2; exit }' openwrt/luci-app-localclash/Makefile)"
-tag="v${pkg_version}-${pkg_release}"
-ipk="dist/${pkg_name}_${pkg_version}-${pkg_release}_all.ipk"
-apk="dist/${pkg_name}-${pkg_version}-r${pkg_release}.apk"
+tag="$(awk -F':=' '/^PKG_VERSION:=/ { version=$2 } /^PKG_RELEASE:=/ { release=$2 } END { print "v" version "-" release }' openwrt/luci-app-localclash/Makefile)"
+export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+scripts/build-release-assets.sh "$tag"
+scripts/test-istore-installer.sh "$tag"
 ```
 
-Build the OpenWrt 24 `.ipk`, OpenWrt 25 `.apk`, and both dnsqualify assets:
+构建脚本只接受与 Makefile 完全一致的 tag。`dist/` 和 `.build/` 是本地生成
+目录，不得提交。
+
+## 4. 提交并等待 Main CI
+
+提交并推送源代码后，等待 `CI` workflow 成功。核对候选 artifact，而不是只看
+单个 build step。失败必须在源代码或脚本中修复；不得从本机手工上传替代产物。
+
+## 5. 创建并推送 Tag
+
+再次确认 `main` commit、版本和 CI run 后创建 tag：
 
 ```sh
-./scripts/build-openwrt-ipk.sh
-./scripts/build-openwrt-apk.sh
-./scripts/build-dnsqualify-assets.sh "$tag"
+tag="v<PKG_VERSION>-<PKG_RELEASE>"
+git tag "$tag"
+git push origin "$tag"
 ```
 
-Confirm the expected files exist:
+推送 tag 会启动 `Release` workflow。CI 不会替用户执行这一步。
+
+如需对已经存在但尚未公开 Release 的 tag 重跑，可从 Actions 手动运行
+`Release` 并输入该 tag。workflow 始终 checkout 该 tag，不会改用 `main`。
+
+## 6. 发布后验证
+
+等待 workflow 成功后核对：
 
 ```sh
-test -s "$ipk"
-test -s "$apk"
-test -s dist/dnsqualify-linux-amd64
-test -s dist/dnsqualify-linux-arm64
-test -s dist/dnsqualify-release-manifest.json
-ls -lh "$ipk" "$apk" dist/dnsqualify-linux-* dist/dnsqualify-release-manifest.json
-```
-
-## 4. Generate Checksums
-
-Generate checksum sidecar files next to the artifacts:
-
-```sh
-shasum -a 256 "$ipk" > "${ipk}.sha256"
-shasum -a 256 "$apk" > "${apk}.sha256"
-shasum -a 256 -c "${ipk}.sha256"
-shasum -a 256 -c "${apk}.sha256"
-shasum -a 256 -c dist/dnsqualify-linux-amd64.sha256
-shasum -a 256 -c dist/dnsqualify-linux-arm64.sha256
-```
-
-`dist/` is ignored by git. The artifacts are uploaded to GitHub Release, not
-committed.
-
-## 5. Commit and Push the Release Bump
-
-Commit only the source/docs version bump and any intended release changes:
-
-```sh
-git status --short
-git add README.md openwrt/luci-app-localclash/Makefile
-git commit -m "Bump LuCI package release to ${pkg_version}-${pkg_release}"
-git push origin main
-commit="$(git rev-parse HEAD)"
-```
-
-If the release includes a functional change commit immediately before the bump,
-make sure both commits are pushed before creating the release.
-
-## 6. Write Release Notes
-
-Use a notes file instead of passing escaped newlines to `gh release create`.
-Escaped `\n` text can end up published literally.
-
-```sh
-notes_file="$(mktemp /tmp/localclash-luci-release-notes.XXXXXX.md)"
-cat > "$notes_file" <<EOF
-LuCI package release ${tag}.
-
-Changes:
-- <short user-facing change 1>
-- <short user-facing change 2>
-
-Artifacts:
-- OpenWrt 24.10 and older: $(basename "$ipk")
-- OpenWrt 25.12 and newer: $(basename "$apk")
-- LuCI-managed DNS qualification: dnsqualify-linux-amd64 / dnsqualify-linux-arm64
-EOF
-```
-
-Keep notes focused on LuCI package changes. Do not list core-only changes unless
-the LuCI package was changed to support them.
-
-## 7. Create the GitHub Release
-
-Confirm the tag does not already exist:
-
-```sh
-if gh release view "$tag" >/dev/null 2>&1; then
-  echo "release already exists: $tag" >&2
-  exit 1
-fi
-```
-
-Create the release and upload all four assets:
-
-```sh
-gh release create "$tag" \
-  "$ipk" \
-  "${ipk}.sha256" \
-  "$apk" \
-  "${apk}.sha256" \
-  dist/dnsqualify-linux-amd64 \
-  dist/dnsqualify-linux-amd64.sha256 \
-  dist/dnsqualify-linux-arm64 \
-  dist/dnsqualify-linux-arm64.sha256 \
-  dist/dnsqualify-release-manifest.json \
-  --title "localclash-luci ${tag}" \
-  --notes-file "$notes_file" \
-  --target "$commit" \
-  --latest
-```
-
-## 8. Verify the Published Release
-
-Verify the release is published, latest, has all assets, and the tag points to
-the intended commit:
-
-```sh
-gh release view "$tag"
-gh release list --limit 3
+gh run list --workflow Release --limit 5
+gh release view "$tag" --json tagName,isDraft,isPrerelease,assets,url
 git ls-remote --tags origin "$tag"
-git status --short
 ```
 
-Expected assets:
+必须确认：
 
-```text
-luci-app-localclash_<version>-<release>_all.ipk
-luci-app-localclash_<version>-<release>_all.ipk.sha256
-luci-app-localclash-<version>-r<release>.apk
-luci-app-localclash-<version>-r<release>.apk.sha256
-dnsqualify-linux-amd64
-dnsqualify-linux-amd64.sha256
-dnsqualify-linux-arm64
-dnsqualify-linux-arm64.sha256
-dnsqualify-release-manifest.json
-```
+- workflow 成功，Release 不是 draft 或 prerelease；
+- tag 指向已审核的 commit；
+- 自有资产数量和名称与 CI allow-list 完全一致；
+- 每个 `.sha256` 都能校验对应产物；
+- 两个 `.run` 通过 `--info`、`--list`、`--check` 和 `--noexec`；
+- x86_64 和 aarch64 的真实 iStoreOS 验收已完成后，才对外宣称两个架构可用。
 
-The release should be:
+发布后如发现资产错误，增加 `PKG_RELEASE` 并发布新版本。不要 clobber、移动或
+重新绑定已经公开的 tag。
 
-- `draft: false`
-- `prerelease: false`
-- marked `Latest` in `gh release list`
-- tagged at the pushed release bump commit
+## iStore 离线安装边界
 
-## 9. Fixups
+iStore `.run` 是 Makeself 自解压 shell archive，只面向 iStoreOS/opkg，不替代
+OpenWrt 25 的 APK。bundle 包含 LuCI IPK、固定 Core、对应架构 dnsqualify、Core
+base assets、manifest 和 checksums。
 
-If notes formatting is wrong, edit notes in place:
-
-```sh
-gh release edit "$tag" --notes-file "$notes_file"
-```
-
-If an asset upload was interrupted but the tag and release are correct, upload
-the missing asset:
-
-```sh
-gh release upload "$tag" "$missing_asset"
-```
-
-If an asset is wrong, prefer publishing a new package release. Only use
-`--clobber` before anyone could reasonably consume the release:
-
-```sh
-gh release upload "$tag" "$fixed_asset" --clobber
-```
-
-If the tag points to the wrong commit or the release was created for the wrong
-package version, stop and publish a new package release. Do not silently retarget
-an already-public release.
+installer 不运行 `opkg update`，不访问网络，也不选择 `latest`。它会在安装前
+验证 root、必要系统命令、架构、全部 SHA-256 和基础文件完整性。任何条件不满足
+都明确失败，不会改为在线下载。官方 policy/rule 文件采用逐文件原子更新，已有的
+额外用户文件会保留。安装过程不会写入订阅、策略或网络接管状态。

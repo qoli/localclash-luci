@@ -1,0 +1,113 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to build, for example v0.1.0-44"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: localclash-luci-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  test-and-release:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Validate immutable release input
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_tag="$(awk -F':=' '/^PKG_VERSION:=/ { version=$2 } /^PKG_RELEASE:=/ { release=$2 } END { print "v" version "-" release }' openwrt/luci-app-localclash/Makefile)"
+          test "$RELEASE_TAG" = "$expected_tag" || {
+            printf 'release tag %s does not match package metadata %s\n' "$RELEASE_TAG" "$expected_tag" >&2
+            exit 1
+          }
+          test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$(git rev-parse HEAD)" || {
+            printf 'checked-out commit does not match tag %s\n' "$RELEASE_TAG" >&2
+            exit 1
+          }
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            printf 'public release already exists and will not be overwritten: %s\n' "$RELEASE_TAG" >&2
+            exit 1
+          fi
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: tools/dnsqualify/go.mod
+          cache: false
+
+      - name: Verify source
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in openwrt/luci-app-localclash/htdocs/luci-static/resources/view/localclash/*.js; do
+            node --check "$file"
+          done
+          sh -n openwrt/luci-app-localclash/root/usr/libexec/rpcd/localclash
+          sh -n packaging/istore/install.sh
+          python3 -m py_compile scripts/resolve-core-release.py
+          python3 -m unittest scripts/test_resolve_core_release.py
+          git diff --check
+
+      - name: Test dnsqualify
+        working-directory: tools/dnsqualify
+        run: |
+          go test ./...
+          go vet ./...
+
+      - name: Test rpcd helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          for test_script in scripts/test-rpcd-*.sh scripts/test-hotplug-takeover-restore.sh; do
+            bash -n "$test_script"
+            bash "$test_script"
+          done
+
+      - name: Build and verify release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          scripts/build-release-assets.sh "$RELEASE_TAG"
+          scripts/test-istore-installer.sh "$RELEASE_TAG"
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: localclash-luci ${{ env.RELEASE_TAG }}
+          generate_release_notes: true
+          make_latest: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/dnsqualify-linux-amd64
+            dist/dnsqualify-linux-amd64.sha256
+            dist/dnsqualify-linux-arm64
+            dist/dnsqualify-linux-arm64.sha256
+            dist/dnsqualify-release-manifest.json
+            dist/luci-app-localclash-*.apk
+            dist/luci-app-localclash-*.apk.sha256
+            dist/luci-app-localclash_*.ipk
+            dist/luci-app-localclash_*.ipk.sha256
+            dist/localclash-istore-*.run
+            dist/localclash-istore-*.run.sha256

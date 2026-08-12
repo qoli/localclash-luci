@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: localclash-luci-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: tools/dnsqualify/go.mod
+          cache: false
+
+      - name: Verify source
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in openwrt/luci-app-localclash/htdocs/luci-static/resources/view/localclash/*.js; do
+            node --check "$file"
+          done
+          sh -n openwrt/luci-app-localclash/root/usr/libexec/rpcd/localclash
+          sh -n packaging/istore/install.sh
+          python3 -m py_compile scripts/resolve-core-release.py
+          python3 -m unittest scripts/test_resolve_core_release.py
+          git diff --check
+
+      - name: Test dnsqualify
+        working-directory: tools/dnsqualify
+        run: |
+          go test ./...
+          go vet ./...
+
+      - name: Test rpcd helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          for test_script in scripts/test-rpcd-*.sh scripts/test-hotplug-takeover-restore.sh; do
+            bash -n "$test_script"
+            bash "$test_script"
+          done
+
+      - name: Build and verify release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$(awk -F':=' '/^PKG_VERSION:=/ { version=$2 } /^PKG_RELEASE:=/ { release=$2 } END { print "v" version "-" release }' openwrt/luci-app-localclash/Makefile)"
+          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          scripts/build-release-assets.sh "$tag"
+          scripts/test-istore-installer.sh "$tag"
+
+      - name: Upload package candidates
+        uses: actions/upload-artifact@v4
+        with:
+          name: localclash-luci-candidate-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7

@@ -1342,6 +1342,27 @@ LuCI bootstrap helper consumes the manifest
 The LuCI package and the localClash core release are separate channels. Updating
 the UI package should not require rebuilding router-specific Go binaries.
 
+### CI 和 iStore 离线 Bundle
+
+仓库验证和 Release 发布由 GitHub Actions 负责：
+
+- `.github/workflows/ci.yml` 在 pull request 和 `main` push 上测试源码并构建
+  候选产物，但不发布 Release。
+- `.github/workflows/release.yml` 只接受与 `PKG_VERSION`、`PKG_RELEASE` 完全
+  一致的已有不可变 tag；重新构建全部产物，并在精确资产 allow-list 通过后发布。
+- `scripts/build-release-assets.sh` 是本地和 CI 共用的入口。workflow 不得重新
+  实现打包或 checksum 规则。
+
+iStore `.run` 是面向 iStoreOS/opkg 的 Makeself 自解压 archive，与 OpenWrt 25
+的 APK 路径保持分离。每个架构的 bundle 包含 LuCI IPK、由
+`release/core-release.json` 固定的 Core Release、匹配的 `dnsqualify`、Core
+base assets、installer、bundle manifest 和 checksums。
+
+离线 installer 不得运行 `opkg update`、读取 `latest`、使用 Release 镜像或下载
+替代文件。缺少命令、架构不匹配、checksum 无效、base assets 不完整或包管理器
+失败都是终止错误。安装 bundle 不得写入订阅、策略选择、生成的运行时配置或
+路由器接管状态。
+
 ## Development Checklist
 
 The first implementation is complete only when all of these are true:
