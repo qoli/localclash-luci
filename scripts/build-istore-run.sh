@@ -30,7 +30,7 @@ expected_tag="v${pkg_version}-${pkg_release}"
 	exit 1
 }
 
-for command_name in curl python3 shasum stat touch; do
+for command_name in curl python3 shasum touch; do
 	command -v "$command_name" >/dev/null 2>&1 || {
 		printf 'required build command is missing: %s\n' "$command_name" >&2
 		exit 1
@@ -77,7 +77,11 @@ download_verified() {
 		printf 'SHA-256 mismatch for %s: expected %s, got %s\n' "$output" "$expected_sha" "$actual_sha" >&2
 		exit 1
 	}
-	actual_size="$(stat -f '%z' "$output" 2>/dev/null || stat -c '%s' "$output")"
+	actual_size="$(python3 - "$output" <<'PY'
+import pathlib, sys
+print(pathlib.Path(sys.argv[1]).stat().st_size)
+PY
+)"
 	[ "$actual_size" = "$expected_size" ] || {
 		printf 'size mismatch for %s: expected %s, got %s\n' "$output" "$expected_size" "$actual_size" >&2
 		exit 1
