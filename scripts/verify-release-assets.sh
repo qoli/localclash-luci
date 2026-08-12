@@ -49,6 +49,12 @@ fi
 (
 	cd "$dist_dir"
 	for checksum in *.sha256; do
+		expected_name="${checksum%.sha256}"
+		listed_name="$(awk 'NR == 1 { print $2 }' "$checksum")"
+		[ "$listed_name" = "$expected_name" ] || {
+			printf '%s must reference basename %s, got %s\n' "$checksum" "$expected_name" "$listed_name" >&2
+			exit 1
+		}
 		shasum -a 256 -c "$checksum"
 	done
 )

@@ -31,7 +31,10 @@ for arch in amd64 arm64; do
 			-ldflags "-s -w -X main.version=${tag}" \
 			-o "${dist_dir}/${name}" .
 	)
-	shasum -a 256 "${dist_dir}/${name}" > "${dist_dir}/${name}.sha256"
+	(
+		cd "$dist_dir"
+		shasum -a 256 "$name" > "$name.sha256"
+	)
 done
 
 amd64_sha="$(awk '{print $1; exit}' "${dist_dir}/dnsqualify-linux-amd64.sha256")"
