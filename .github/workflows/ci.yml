@@ -38,9 +38,12 @@ jobs:
           done
           sh -n openwrt/luci-app-localclash/root/usr/libexec/rpcd/localclash
           sh -n packaging/istore/install.sh
+          python3 -m py_compile scripts/generate-release-notes.py
           python3 -m py_compile scripts/resolve-core-release.py
           python3 -m py_compile scripts/prepare-dnsqualify-source.py
-          python3 -m unittest scripts/test_resolve_core_release.py scripts/test_prepare_dnsqualify_source.py
+          python3 -m unittest scripts/test_generate_release_notes.py scripts/test_resolve_core_release.py scripts/test_prepare_dnsqualify_source.py
+          release_tag="$(awk -F':=' '/^PKG_VERSION:=/ { version=$2 } /^PKG_RELEASE:=/ { release=$2 } END { print "v" version "-" release }' openwrt/luci-app-localclash/Makefile)"
+          scripts/generate-release-notes.py "$release_tag" /tmp/localclash-luci-release-notes.md
           git diff --check
 
       - name: Test dnsqualify

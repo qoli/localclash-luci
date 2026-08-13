@@ -67,9 +67,10 @@ jobs:
           done
           sh -n openwrt/luci-app-localclash/root/usr/libexec/rpcd/localclash
           sh -n packaging/istore/install.sh
+          python3 -m py_compile scripts/generate-release-notes.py
           python3 -m py_compile scripts/resolve-core-release.py
           python3 -m py_compile scripts/prepare-dnsqualify-source.py
-          python3 -m unittest scripts/test_resolve_core_release.py scripts/test_prepare_dnsqualify_source.py
+          python3 -m unittest scripts/test_generate_release_notes.py scripts/test_resolve_core_release.py scripts/test_prepare_dnsqualify_source.py
           git diff --check
 
       - name: Test dnsqualify
@@ -94,12 +95,14 @@ jobs:
           export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
           scripts/build-release-assets.sh "$RELEASE_TAG"
           scripts/test-istore-installer.sh "$RELEASE_TAG"
+          scripts/generate-release-notes.py "$RELEASE_TAG" dist/release-notes.md
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           name: localclash-luci ${{ env.RELEASE_TAG }}
+          body_path: dist/release-notes.md
           generate_release_notes: true
           make_latest: true
           fail_on_unmatched_files: true

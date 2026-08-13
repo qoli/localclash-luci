@@ -36,6 +36,11 @@ source lock 不代表必须发布 LuCI，发布决定仍以 LuCI 变更为准。
 GitHub Release。已存在 Release、tag 与 Makefile 版本不一致、tag commit 不一致，
 都会直接失败。
 
+Release 页面顶部的普通用户下载指南由
+`scripts/generate-release-notes.py` 根据 tag 和 Makefile 包版本生成。指南直接列出
+IPK、APK 及两个 iStoreOS 离线包的用途和下载链接；GitHub 自动生成的 changelog
+保留在指南下方。不要在 workflow 里手写版本化资产 URL。
+
 ## 1. 准备版本提交
 
 确认 `main` 是预期分支，工作树没有无关修改，并检查最近 Release：
@@ -83,7 +88,7 @@ origin、HEAD 与干净工作树。任何缺失或不一致都会直接失败。
 常规开发至少运行聚焦测试：
 
 ```sh
-python3 -m unittest scripts/test_resolve_core_release.py scripts/test_prepare_dnsqualify_source.py
+python3 -m unittest scripts/test_generate_release_notes.py scripts/test_resolve_core_release.py scripts/test_prepare_dnsqualify_source.py
 
 for file in openwrt/luci-app-localclash/htdocs/luci-static/resources/view/localclash/*.js; do
   node --check "$file"
