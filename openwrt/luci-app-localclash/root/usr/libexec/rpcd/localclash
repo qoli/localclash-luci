@@ -30,6 +30,8 @@ BOOT_RESTORE_MAX_UPTIME="${LOCALCLASH_BOOT_RESTORE_MAX_UPTIME:-300}"
 PROC_UPTIME="${LOCALCLASH_PROC_UPTIME:-/proc/uptime}"
 HELPER_SELF="${LOCALCLASH_HELPER_SELF:-$0}"
 MCP_HEALTH_ATTEMPTS="${LOCALCLASH_MCP_HEALTH_ATTEMPTS:-30}"
+LUCI_UPDATE_MAX_ATTEMPTS=3
+LUCI_UPDATE_RETRY_DELAY=2
 
 json_escape() {
 	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
@@ -464,6 +466,31 @@ luci_update_check() {
 	ok '"changed":false,"summary":"LuCI 更新检查完成。","current_version":"'"$(json_escape "$current_version")"'","latest_version":"'"$(json_escape "$asset_version")"'","release_tag":"'"$(json_escape "$tag")"'","relation":"'"$(json_escape "$version_relation")"'","update_available":'"$update_available"',"checked_at":'"$(now_epoch)"',"luci_package":{"installed":true,"name":"luci-app-localclash","version":"'"$(json_escape "$current_version")"'","manager":"'"$(json_escape "$manager")"'","latest_url":"https://github.com/qoli/localclash-luci/releases/latest","release_api":"'"$(json_escape "$LUCI_RELEASE_API")"'"}}'
 }
 
+luci_update_retry() {
+	local label attempt rc
+	label="$1"
+	shift
+	attempt=1
+	while [ "$attempt" -le "$LUCI_UPDATE_MAX_ATTEMPTS" ]; do
+		if "$@"; then
+			if [ "$attempt" -gt 1 ]; then
+				log_line "LuCI 更新：${label}在第 ${attempt}/${LUCI_UPDATE_MAX_ATTEMPTS} 次尝试成功"
+			fi
+			return 0
+		else
+			rc=$?
+		fi
+		if [ "$attempt" -ge "$LUCI_UPDATE_MAX_ATTEMPTS" ]; then
+			log_line "LuCI 更新：${label}失败，已达到 ${LUCI_UPDATE_MAX_ATTEMPTS} 次尝试上限"
+			return "$rc"
+		fi
+		attempt=$((attempt + 1))
+		log_line "LuCI 更新：${label}失败，${LUCI_UPDATE_RETRY_DELAY}s 后进行第 ${attempt}/${LUCI_UPDATE_MAX_ATTEMPTS} 次尝试"
+		sleep "$LUCI_UPDATE_RETRY_DELAY"
+	done
+	return 1
+}
+
 luci_update() {
 	local manager tmpdir release asset_url asset_version current_version version_relation sha_url package sha_file expected actual install_log tag rc install_excerpt
 	log_line "LuCI 更新：开始"
@@ -487,7 +514,7 @@ luci_update() {
 	sha_file="$tmpdir/luci-app-localclash.sha256"
 	install_log="$tmpdir/install.log"
 	log_line "LuCI 更新：正在读取最新 Release"
-	if ! fetch_url "$LUCI_RELEASE_API" "$release"; then
+	if ! luci_update_retry "读取最新 Release" fetch_url "$LUCI_RELEASE_API" "$release"; then
 		rm -rf "$tmpdir"
 		fail "luci_release_download_failed" "无法读取 localclash-luci 最新 Release。"
 		return 1
@@ -527,7 +554,7 @@ luci_update() {
 		fi
 	fi
 	log_line "LuCI 更新：正在下载 ${tag:-latest} 校验文件"
-	if ! fetch_url_direct_first "$sha_url" "$sha_file"; then
+	if ! luci_update_retry "下载校验文件" fetch_url_direct_first "$sha_url" "$sha_file"; then
 		rm -rf "$tmpdir"
 		fail "luci_package_download_failed" "无法下载 LuCI 安装包校验文件。"
 		return 1
@@ -539,7 +566,7 @@ luci_update() {
 		return 1
 	fi
 	log_line "LuCI 更新：正在下载 ${tag:-latest} 安装包"
-	if ! fetch_url_verified_direct_first "$asset_url" "$package" "$expected"; then
+	if ! luci_update_retry "下载并校验安装包" fetch_url_verified_direct_first "$asset_url" "$package" "$expected"; then
 		rm -rf "$tmpdir"
 		fail_with_details "luci_package_checksum_failed" "LuCI 安装包下载失败或 sha256 校验失败，可能是 GitHub 镜像尚未同步最新 Release。" '"expected_sha":"'"$(json_escape "$expected")"'","target_version":"'"$(json_escape "$asset_version")"'"'
 		return 1

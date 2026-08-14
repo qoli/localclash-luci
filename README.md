@@ -156,7 +156,7 @@ localClash 现在提供 `一键更新`：更新 LuCI 界面、localClash 核心�
 
 在 `概览` 页点击 `一键更新`。更新准备阶段会尽量保持当前运行时继续工作；只有最后切换 Mihomo 运行时并恢复接管时，可能会短暂断网。
 
-一键更新采用两阶段交接：LuCI 安装包发生更新时，旧 helper 会先保存任务快照，再以同一个任务 PID 重新执行磁盘上的新版 helper；新版 helper 校验任务锁、状态版本和执行阶段后，才继续更新 localClash 核心。localClash 核心完成原子替换后，流程立即执行 `/etc/init.d/localclash-mcp restart`，再更新基础资源，并在限定次数内同时确认 procd 的 `mcp` instance 正在运行和 MCP 健康检查通过。这里不会用 PID、进程名称或运行中二进制的 sha256 来猜测是否需要重启；服务脚本写入、重启或 readiness 检查失败时，任务都会明确失败并停止后续步骤。
+一键更新采用两阶段交接：LuCI 安装包发生更新时，旧 helper 会先保存任务快照，再以同一个任务 PID 重新执行磁盘上的新版 helper；新版 helper 校验任务锁、状态版本和执行阶段后，才继续更新 localClash 核心。LuCI Release 信息、checksum 和安装包下载／校验遇到临时失败时，每个阶段最多尝试 3 次（首次尝试加 2 次自动重试）；套件安装和服务操作失败仍会明确停止，不会盲目重跑。localClash 核心完成原子替换后，流程立即执行 `/etc/init.d/localclash-mcp restart`，再更新基础资源，并在限定次数内同时确认 procd 的 `mcp` instance 正在运行和 MCP 健康检查通过。这里不会用 PID、进程名称或运行中二进制的 sha256 来猜测是否需要重启；服务脚本写入、重启或 readiness 检查失败时，任务都会明确失败并停止后续步骤。
 
 独立执行 LuCI 更新时，package `postinst` 不负责 localClash 进程生命周期；更新任务会主动调用磁盘上的新版 helper 重启 `localclash-mcp`。一键更新则由交接后的新版 helper 在核心替换后执行唯一一次权威重启，避免 package 安装阶段先重启旧核心。
 

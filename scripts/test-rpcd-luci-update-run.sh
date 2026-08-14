@@ -15,6 +15,10 @@ LOG="${tmp_dir}/helper.log"
 TRACE="${tmp_dir}/trace"
 export TRACE
 
+sleep() {
+	:
+}
+
 fail_test() {
 	printf 'test-rpcd-luci-update-run: %s\n' "$*" >&2
 	exit 1
@@ -72,6 +76,28 @@ capture_luci_update_run() {
 	result_rc=$?
 	set -e
 }
+
+retry_probe() {
+	printf 'attempt\n' >> "$TRACE"
+	[ "$(wc -l < "$TRACE" | tr -d ' ')" -ge "${RETRY_PROBE_SUCCEEDS_AT:-999}" ]
+}
+
+: > "$TRACE"
+RETRY_PROBE_SUCCEEDS_AT=3
+export RETRY_PROBE_SUCCEEDS_AT
+luci_update_retry "测试下载" retry_probe || fail_test "retry helper did not recover on the third attempt"
+unset RETRY_PROBE_SUCCEEDS_AT
+[ "$(wc -l < "$TRACE" | tr -d ' ')" -eq 3 ] || fail_test "retry helper did not stop after third-attempt success"
+grep -q '测试下载在第 3/3 次尝试成功' "$LOG" || fail_test "retry recovery was not logged"
+
+: > "$TRACE"
+set +e
+luci_update_retry "测试下载" retry_probe
+retry_rc=$?
+set -e
+[ "$retry_rc" -ne 0 ] || fail_test "retry helper returned success after three failures"
+[ "$(wc -l < "$TRACE" | tr -d ' ')" -eq 3 ] || fail_test "retry helper exceeded the three-attempt cap"
+grep -q '测试下载失败，已达到 3 次尝试上限' "$LOG" || fail_test "retry exhaustion was not logged"
 
 : > "$TRACE"
 result="$(luci_update_run)"
