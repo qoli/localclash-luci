@@ -11,6 +11,7 @@ TAKEOVER_LOG_KEEP_BYTES="${LOCALCLASH_TAKEOVER_LOG_KEEP_BYTES:-131072}"
 TAKEOVER_LOG_LOCK_DIR="${LOCALCLASH_TAKEOVER_LOG_LOCK_DIR:-/tmp/localclash-takeover-events.lock}"
 BOOT_ID_FILE="${LOCALCLASH_BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}"
 LOCK_DIR="/tmp/localclash-helper.lock"
+UPDATE_CHECK_LOCK_BASE="${LOCALCLASH_UPDATE_CHECK_LOCK_BASE:-/tmp/localclash-update-check}"
 TASK_STATUS="/tmp/localclash-task-status.json"
 TASK_RESULT="/tmp/localclash-task-result.json"
 TASK_INPUT="/tmp/localclash-task-input.json"
@@ -893,6 +894,44 @@ with_lock() {
 	"$@"
 	rc=$?
 	rm -rf "$LOCK_DIR" 2>/dev/null || true
+	trap - EXIT INT TERM
+	return "$rc"
+}
+
+with_update_check_lock() {
+	local kind lock_dir lock_pid rc
+	kind="$1"
+	shift
+	case "$kind" in
+		core|luci) ;;
+		*)
+			fail "update_check_kind_invalid" "更新检查类型无效。"
+			return 1
+			;;
+	esac
+	lock_dir="${UPDATE_CHECK_LOCK_BASE}.${kind}"
+	if [ -d "$lock_dir" ]; then
+		lock_pid="$(cat "$lock_dir/pid" 2>/dev/null || true)"
+		case "$lock_pid" in
+			''|*[!0-9]*) lock_pid="" ;;
+		esac
+		if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null; then
+			log_line "更新检查：拒绝重叠 kind=$kind owner_pid=$lock_pid"
+			fail "${kind}_update_check_in_progress" "同类型更新检查仍在运行，请等待当前检查完成后再试。"
+			return 1
+		fi
+		rm -rf "$lock_dir"
+	fi
+	if ! mkdir "$lock_dir" 2>/dev/null; then
+		log_line "更新检查：锁竞争 kind=$kind"
+		fail "${kind}_update_check_in_progress" "同类型更新检查刚刚开始，请等待当前检查完成后再试。"
+		return 1
+	fi
+	printf '%s\n' "$$" > "$lock_dir/pid"
+	trap 'rm -rf "$lock_dir" 2>/dev/null || true' EXIT INT TERM
+	"$@"
+	rc=$?
+	rm -rf "$lock_dir"
 	trap - EXIT INT TERM
 	return "$rc"
 }
@@ -4158,8 +4197,8 @@ JSON
 	one_click_update_preferences_set) one_click_update_preferences_set ;;
 	one_click_update_run) with_lock one_click_update_run ;;
 	one_click_update_resume) one_click_update_resume ;;
-	core_update_check) core_update_check ;;
-	luci_update_check) luci_update_check ;;
+	core_update_check) with_update_check_lock core core_update_check ;;
+	luci_update_check) with_update_check_lock luci luci_update_check ;;
 	luci_update_async) start_luci_update ;;
 	luci_update_run) luci_update_run ;;
 	apply) with_lock apply_state ;;
