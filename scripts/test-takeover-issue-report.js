@@ -7,7 +7,16 @@ const path = require('path');
 const repoRoot = path.resolve(__dirname, '..');
 const modulePath = path.join(repoRoot, 'openwrt/luci-app-localclash/htdocs/luci-static/resources/localclash/takeover-issue-report.js');
 const source = fs.readFileSync(modulePath, 'utf8');
-const report = new Function(source)();
+const baseclass = {
+	extend: function(prototype) {
+		function TakeoverIssueReport() {}
+		TakeoverIssueReport.prototype = prototype;
+		return TakeoverIssueReport;
+	}
+};
+const ReportModule = new Function('baseclass', source)(baseclass);
+assert.strictEqual(typeof ReportModule, 'function');
+const report = new ReportModule();
 
 const fixture = {
 	ok: true,

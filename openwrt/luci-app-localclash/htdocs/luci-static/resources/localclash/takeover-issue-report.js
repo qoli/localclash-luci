@@ -1,5 +1,7 @@
 'use strict';
 
+'require baseclass';
+
 var GITHUB_NEW_ISSUE_URL = 'https://github.com/qoli/localclash-luci/issues/new';
 var GITHUB_ISSUE_URL_MAX = 7500;
 
@@ -189,7 +191,7 @@ function buildGitHubIssue(logs) {
 	};
 }
 
-return {
+return baseclass.extend({
 	buildFullReport: fullReport,
 	buildGitHubIssue: buildGitHubIssue
-};
+});
