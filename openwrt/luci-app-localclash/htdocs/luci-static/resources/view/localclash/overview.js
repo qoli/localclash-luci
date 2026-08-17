@@ -1421,7 +1421,7 @@ function takeoverGitHubIssueButton() {
 }
 
 function takeoverGitHubLoginConfirmation(button) {
-	return E('label', { 'class': 'localclash-inline-check' }, [
+	return E('label', { 'class': 'localclash-inline-check localclash-github-login-confirmation' }, [
 		E('input', {
 			'id': 'localclash-github-login-confirmed',
 			'type': 'checkbox',
@@ -1529,6 +1529,7 @@ return view.extend({
 				'.localclash-view .localclash-inline-check input{grid-area:box;margin:0}',
 				'.localclash-view .localclash-inline-check-title{grid-area:title;font-weight:600}',
 				'.localclash-view .localclash-inline-check-help{grid-area:help;color:#667085;font-size:.92em}',
+				'.localclash-view .localclash-github-login-confirmation{padding-left:1em}',
 				'.localclash-view .localclash-muted{color:#667085;line-height:1.55}',
 				'.localclash-view .localclash-copybox{box-sizing:border-box;width:calc(100% - 2rem);min-height:16rem;margin:1rem;padding:1rem;font-family:monospace;line-height:1.45;resize:vertical}',
 				'.localclash-view table.table th,.localclash-view table.table td{text-align:left;height:70px;vertical-align:middle;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}',
