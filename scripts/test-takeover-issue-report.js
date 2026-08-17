@@ -6,7 +6,9 @@ const path = require('path');
 
 const repoRoot = path.resolve(__dirname, '..');
 const modulePath = path.join(repoRoot, 'openwrt/luci-app-localclash/htdocs/luci-static/resources/localclash/takeover-issue-report.js');
+const overviewPath = path.join(repoRoot, 'openwrt/luci-app-localclash/htdocs/luci-static/resources/view/localclash/overview.js');
 const source = fs.readFileSync(modulePath, 'utf8');
+const overviewSource = fs.readFileSync(overviewPath, 'utf8');
 const baseclass = {
 	extend: function(prototype) {
 		function TakeoverIssueReport() {}
@@ -17,6 +19,12 @@ const baseclass = {
 const ReportModule = new Function('baseclass', source)(baseclass);
 assert.strictEqual(typeof ReportModule, 'function');
 const report = new ReportModule();
+
+assert(overviewSource.includes("'id': 'localclash-github-login-confirmed'"));
+assert(overviewSource.includes("button.disabled = true;\n\tbutton.setAttribute('aria-disabled', 'true');"));
+assert(overviewSource.includes("button.disabled = ev.target.checked !== true;"));
+assert(overviewSource.includes("!loginCheckbox || loginCheckbox.checked !== true"));
+assert(overviewSource.includes("_('我已登入 GitHub')"));
 
 const fixture = {
 	ok: true,

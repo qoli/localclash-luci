@@ -1351,17 +1351,17 @@ function takeoverIssueCopyButton() {
 
 function takeoverGitHubIssueButton() {
 	var label = _('到 GitHub 回报 Issue');
-
-	return E('button', {
+	var button = E('button', {
 		'type': 'button',
 		'class': 'btn cbi-button cbi-button-action localclash-button',
 		'click': function(ev) {
 			ev.preventDefault();
 			var button = ev.currentTarget;
+			var loginCheckbox = document.getElementById('localclash-github-login-confirmed');
 			var issueWindow;
-			if (button.disabled)
+			if (button.disabled || !loginCheckbox || loginCheckbox.checked !== true)
 				return null;
-			if (!window.confirm(_('LuCI 将把经过遮罩的接管诊断预填到 GitHub，并把完整报告复制到剪贴板。提交前仍请检查隐私信息。继续？')))
+			if (!window.confirm(_('你已确认登入 GitHub。LuCI 将把经过遮罩的接管诊断预填到 GitHub，并把完整报告复制到剪贴板。提交前仍请检查隐私信息。继续？')))
 				return null;
 
 			issueWindow = window.open('about:blank', '_blank');
@@ -1374,6 +1374,7 @@ function takeoverGitHubIssueButton() {
 				catch (e) {}
 			}
 
+			loginCheckbox.disabled = true;
 			takeoverIssueButtonBusy(button, true, label);
 			return takeoverIssueLogs().then(function(logs) {
 				var issue = takeoverIssueReport.buildGitHubIssue(logs);
@@ -1408,19 +1409,45 @@ function takeoverGitHubIssueButton() {
 				showError(err);
 			}).finally(function() {
 				takeoverIssueButtonBusy(button, false, label);
+				loginCheckbox.disabled = false;
+				button.disabled = loginCheckbox.checked !== true;
+				button.setAttribute('aria-disabled', button.disabled ? 'true' : 'false');
 			});
 		}
 	}, [ label ]);
+	button.disabled = true;
+	button.setAttribute('aria-disabled', 'true');
+	return button;
+}
+
+function takeoverGitHubLoginConfirmation(button) {
+	return E('label', { 'class': 'localclash-inline-check' }, [
+		E('input', {
+			'id': 'localclash-github-login-confirmed',
+			'type': 'checkbox',
+			'change': function(ev) {
+				button.disabled = ev.target.checked !== true;
+				button.setAttribute('aria-disabled', button.disabled ? 'true' : 'false');
+			}
+		}),
+		E('span', { 'class': 'localclash-inline-check-title' }, [ _('我已登入 GitHub') ]),
+		E('span', { 'class': 'localclash-inline-check-help' }, [
+			_('GitHub 要求登入后才能建立 Issue；勾选后才会启用回报按钮。')
+		])
+	]);
 }
 
 function takeoverIssueReportSection() {
+	var githubButton = takeoverGitHubIssueButton();
+
 	return section(_('Takeover Issue 回报'), E('div', { 'class': 'localclash-takeover-issue-report' }, [
 		E('p', { 'class': 'localclash-muted' }, [
-			_('如果网络接管再次失效，可复制完整报告，或直接打开 localclash-luci 的 GitHub New Issue。GitHub 按钮会预填问题模板和最近的有界诊断；请检查内容后再按 Submit new issue。')
+			_('如果网络接管再次失效，可复制完整报告，或直接打开 localclash-luci 的 GitHub New Issue。使用 GitHub 回报前必须先登入 GitHub；按钮会预填问题模板和最近的有界诊断，请检查内容后再按 Submit new issue。')
 		]),
+		takeoverGitHubLoginConfirmation(githubButton),
 		actionRow([
 			takeoverIssueCopyButton(),
-			takeoverGitHubIssueButton()
+			githubButton
 		])
 	]), 'localclash-takeover-issue');
 }
