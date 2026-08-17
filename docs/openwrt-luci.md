@@ -904,6 +904,7 @@ runtime_start
 runtime_restart
 runtime_stop
 takeover_status
+takeover_logs
 takeover_apply
 takeover_stop
 reset
@@ -991,6 +992,28 @@ Method contracts:
 - `runtime_restart`: no input. Calls `localclash runtime restart --json`.
 - `runtime_stop`: no input. Calls `localclash runtime stop --json`.
 - `takeover_status`: no input. Calls `localclash takeover status --json`.
+- `takeover_logs`: no input. Returns the bounded persistent LuCI takeover event
+  journal together with a current read-only snapshot of policy routes, the
+  `utun` link, localClash-owned fw4/nft rules, expected listeners, recent
+  fw4/netifd system events, and the current Core takeover status. The helper
+  captures kernel/firewall facts before calling Core status so workspace
+  bootstrap cannot replace the first observed state. The journal records boot
+  ID, uptime, trigger source, repair markers, action result, and exact exit code;
+  it is private, rotates at 256 KiB while retaining the newest 128 KiB, and must
+  not retain subscription URIs, generated scripts, or complete configs. The
+  response reports `complete: false` when any snapshot source is unavailable or
+  malformed. Copied snapshots and system events redact URLs, MAC addresses,
+  IPv4 addresses, and IPv6 addresses, but the UI must still warn that interface
+  names or hostnames may remain.
+- The overview page ends with a `Takeover Issue` report section. Its copy action
+  writes the complete generated Markdown report to the browser clipboard. Its
+  GitHub action opens `qoli/localclash-luci` New Issue with a prepared title,
+  the repository `takeover-report.md` template, and a recent bounded diagnostic
+  body; it also attempts to copy the complete report and must disclose clipboard
+  refusal. The GitHub body uses an allowlist for Core status and must not include
+  local DNS addresses or domains. The encoded URL must stay below the local safety
+  limit to avoid GitHub `414 URI Too Long`. LuCI must not store a GitHub token or
+  submit the issue without the user's final review on GitHub.
 - `takeover_apply`: no input. Calls `localclash takeover apply --json`.
 - `takeover_stop`: no input. Calls `localclash takeover stop --json`.
 - `config_reset`: no input. Calls `localclash reset --json`.

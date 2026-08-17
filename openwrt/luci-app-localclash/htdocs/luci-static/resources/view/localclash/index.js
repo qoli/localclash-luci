@@ -88,6 +88,12 @@ var callTakeoverStatus = rpc.declare({
 	expect: { '': {} }
 });
 
+var callTakeoverLogs = rpc.declare({
+	object: 'localclash',
+	method: 'takeover_logs',
+	expect: { '': {} }
+});
+
 var callTakeoverApply = rpc.declare({
 	object: 'localclash',
 	method: 'takeover_apply',
@@ -539,19 +545,37 @@ function section(title, body) {
 
 function showResult(title, result, options) {
 	var shouldAutoClose = result && result.ok === true && !(options && options.keepOpen);
+	var resultText = JSON.stringify(result, null, 2);
+	var actions = [];
+
+	if (options && options.copyResult) {
+		actions.push(E('button', {
+			'type': 'button',
+			'class': 'btn cbi-button',
+			'click': function(ev) {
+				var button = ev.currentTarget;
+				if (options.privacyConfirm && !window.confirm(_('接管诊断可能包含接口名、主机名或网络地址。确认复制？')))
+					return;
+				copyText(resultText).then(function() {
+					button.textContent = _('已复制');
+				}).catch(function() {
+					button.textContent = _('复制失败');
+				});
+			}
+		}, [ _('复制接管诊断') ]));
+	}
+	actions.push(E('button', {
+		'type': 'button',
+		'class': 'btn',
+		'click': function() {
+			ui.hideModal();
+			window.location.reload();
+		}
+	}, [ _('关闭') ]));
 
 	ui.showModal(title, [
-		E('pre', { 'class': 'localclash-result' }, [ JSON.stringify(result, null, 2) ]),
-		E('div', { 'class': 'right' }, [
-			E('button', {
-				'type': 'button',
-				'class': 'btn',
-				'click': function() {
-					ui.hideModal();
-					window.location.reload();
-				}
-			}, [ _('关闭') ])
-		])
+		E('pre', { 'class': 'localclash-result' }, [ resultText ]),
+		E('div', { 'class': 'right' }, actions)
 	]);
 
 	if (shouldAutoClose)
@@ -630,7 +654,7 @@ function taskLogClipboardText(title, statusLine, logOutput, resultOutput) {
 	].join('\n');
 }
 
-function showTaskModal(title, cancellable) {
+function showTaskModal(title, cancellable, options) {
 	var logOutput = E('pre', { 'class': 'localclash-task-log' }, [ _('等待任务输出…') ]);
 	var statusLine = E('p', { 'class': 'localclash-task-status' }, [ _('正在启动任务…') ]);
 	var resultOutput = E('pre', { 'class': 'localclash-result localclash-task-result' }, []);
@@ -639,6 +663,8 @@ function showTaskModal(title, cancellable) {
 		'class': 'btn cbi-button',
 		'click': function() {
 			var originalLabel = _('复制日志');
+			if (options && options.privacyConfirm && !window.confirm(_('接管诊断可能包含接口名、主机名或网络地址。确认复制？')))
+				return;
 			copyText(taskLogClipboardText(title, statusLine, logOutput, resultOutput)).then(function() {
 				copyButton.textContent = _('已复制');
 				window.setTimeout(function() {
@@ -737,7 +763,7 @@ function markTaskSeen(task) {
 function trackTask(title, startPromise, options) {
 	options = options || {};
 	var startedAt = options.startedAt ? options.startedAt * 1000 : Date.now();
-	var modal = showTaskModal(title, options.cancellable !== false);
+	var modal = showTaskModal(title, options.cancellable !== false, options);
 	var timer;
 
 	function updateLogs() {
@@ -878,7 +904,7 @@ function commandButton(label, handler, extraClass, options) {
 				return null;
 
 			function openProgressModal() {
-				modal = showTaskModal(label);
+				modal = showTaskModal(label, false, options);
 				modal.logOutput.textContent = _('命令已发送，正在等待路由器返回结果…');
 				progressTimer = window.setInterval(function() {
 					var elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
@@ -973,7 +999,7 @@ function bootRestoreSummary(bootRestore) {
 function bootRestoreControls() {
 	return E('div', {}, [
 		E('p', { 'class': 'localclash-muted' }, [
-			_('启用后，路由器重启时会自动启动 localClash runtime 并恢复网络接管。关闭时，重启不会恢复接管；同次开机内的 firewall reload 仍会依本次接管记录自动修复。')
+				_('启用后，路由器重启时会自动启动 localClash runtime 并恢复网络接管。关闭时，重启不会恢复接管；同次开机内的 WAN 接口事件会尝试修复接管，单独的 firewall reload 仍可能需要手动重新应用。')
 		]),
 		actionRow([
 			commandButton(_('开机自动恢复'), callBootRestoreEnable, 'cbi-button-apply'),
@@ -1051,7 +1077,8 @@ return view.extend({
 			])),
 			section(_('网络接管'), actionRow([
 				commandButton(_('应用接管'), callTakeoverApply, 'cbi-button-apply'),
-				commandButton(_('停止接管'), callTakeoverStop, 'cbi-button-reset')
+				commandButton(_('停止接管'), callTakeoverStop, 'cbi-button-reset'),
+				commandButton(_('查看接管日志'), callTakeoverLogs, null, { keepOpen: true, copyResult: true, privacyConfirm: true })
 			])),
 			section(_('开机自动恢复'), bootRestoreControls()),
 			section(_('维护'), actionRow([

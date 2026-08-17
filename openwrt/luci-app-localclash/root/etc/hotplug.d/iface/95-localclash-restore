@@ -23,9 +23,27 @@ umask 077
 printf '%s\n' "$TOKEN" > "$STAMP_TMP" || exit 1
 mv -f "$STAMP_TMP" "$STAMP" || exit 1
 
+takeover_trace() {
+	LOCALCLASH_TAKEOVER_EVENT_ID="$TOKEN" "$HELPER" call takeover_trace iface_hotplug "$1" \
+		action "${ACTION:-unknown}" interface "${INTERFACE:-unknown}" device "${DEVICE:-unknown}" \
+		token "$TOKEN" delay_seconds "$RESTORE_DELAY" result "${2:-}" exit_code "${3:-}" >/dev/null 2>&1 || true
+}
+
+takeover_trace scheduled
+
 (
 	sleep "$RESTORE_DELAY"
 	LATEST_TOKEN="$(cat "$STAMP" 2>/dev/null)" || exit 1
-	[ "$LATEST_TOKEN" = "$TOKEN" ] || exit 0
-	"$HELPER" call takeover_restore >/dev/null 2>&1
+	if [ "$LATEST_TOKEN" != "$TOKEN" ]; then
+		takeover_trace superseded
+		exit 0
+	fi
+	takeover_trace restore_started
+	if LOCALCLASH_TAKEOVER_EVENT_ID="$TOKEN" LOCALCLASH_TAKEOVER_RESTORE_SOURCE=iface_hotplug "$HELPER" call takeover_restore >/dev/null 2>&1; then
+		rc=0
+		takeover_trace restore_finished success "$rc"
+	else
+		rc=$?
+		takeover_trace restore_finished failure "$rc"
+	fi
 ) &
