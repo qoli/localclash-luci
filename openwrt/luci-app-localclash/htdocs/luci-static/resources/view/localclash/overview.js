@@ -804,6 +804,16 @@ function runtimeRunning(status) {
 	return componentInstalled(runtime, [ 'runtime', 'mihomo' ]);
 }
 
+function takeoverFailureText(failure) {
+	var code = failure && failure.code ? String(failure.code) : '';
+	var message = failure && failure.message ? String(failure.message) : String(failure || '');
+
+	if (/timeout|timed out|router_takeover_status_timeout/i.test(code + ' ' + message))
+		return _('状态查询超时（实际接管状态未知，请重试）');
+
+	return formatText(_('状态查询失败（实际接管状态未知）：%s'), message || code || _('未知错误'));
+}
+
 function takeoverState(takeover) {
 	if (takeover && takeover.pending === true)
 		return _('检查中…');
@@ -811,6 +821,8 @@ function takeoverState(takeover) {
 	var state = stringState(takeover);
 
 	if (takeover && typeof takeover === 'object') {
+		if (takeover.ok === false)
+			return takeoverFailureText(takeover);
 		if (takeover.status && typeof takeover.status === 'object') {
 			if (takeover.status.effective === true)
 				return _('已生效');
@@ -825,8 +837,6 @@ function takeoverState(takeover) {
 			return _('已生效');
 		if (takeover.active === false || takeover.running === false || takeover.enabled === false)
 			return _('未生效');
-		if (takeover.ok === false)
-			return takeover.code || _('不可用');
 	}
 
 	if (/active|enabled|running/.test(state))
@@ -856,7 +866,7 @@ function refreshTakeoverStatus() {
 		if (hero)
 			hero.textContent = text;
 	}).catch(function(err) {
-		var text = err.message || String(err);
+		var text = takeoverFailureText(err);
 		var cell = document.getElementById('localclash-overview-takeover-status');
 		var hero = document.getElementById('localclash-overview-takeover-hero');
 
@@ -897,8 +907,9 @@ function refreshOverviewStatus() {
 		updateBootstrapStartButton();
 		lastOverviewStatusData = data.ok === false && data.error ? null : data;
 		replaceContent('localclash-overview-summary-body', data.ok === false && data.error ? summaryErrorTable(data.error) : summaryTable(data, takeover, task, state));
-		refreshOneClickUpdateCheck(lastOverviewStatusData);
-		return refreshTakeoverStatus();
+		return refreshTakeoverStatus().then(function() {
+			return refreshOneClickUpdateCheck(lastOverviewStatusData);
+		});
 	});
 }
 
