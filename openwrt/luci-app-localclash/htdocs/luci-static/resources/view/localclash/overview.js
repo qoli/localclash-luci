@@ -189,6 +189,12 @@ function section(title, body, extraClass) {
 	]);
 }
 
+function namedControl(node, id) {
+	node.setAttribute('id', id);
+	node.setAttribute('name', id);
+	return node;
+}
+
 function showResult(title, result, options) {
 	var shouldAutoClose = result && result.ok === true && !(options && options.keepOpen);
 	var resultText = JSON.stringify(result, null, 2);
@@ -613,13 +619,13 @@ function subscriptionUris() {
 }
 
 function selectedBootstrapCore() {
-	var checkbox = document.getElementById('localclash-bootstrap-smart');
-	return checkbox && checkbox.checked ? 'smart' : 'meta';
+	var selected = document.querySelector('input[name="localclash-bootstrap-core"]:checked');
+	return selected ? selected.value : 'meta';
 }
 
 function selectedBootstrapTemplate() {
-	var checkbox = document.getElementById('localclash-bootstrap-minimal');
-	return checkbox && checkbox.checked ? 'minimal' : 'localclash-default';
+	var selected = document.querySelector('input[name="localclash-bootstrap-template"]:checked');
+	return selected ? selected.value : 'localclash-default';
 }
 
 function updateBootstrapStartButton() {
@@ -666,19 +672,57 @@ function bootstrapStartButton(requiresSubscription) {
 
 function bootstrapOptions() {
 	return E('div', { 'class': 'localclash-bootstrap-options' }, [
-		E('label', { 'class': 'localclash-check-option' }, [
-			E('input', {
-				'id': 'localclash-bootstrap-smart',
-				'type': 'checkbox'
-			}),
-			_('使用 Smart 核心')
+		E('fieldset', { 'class': 'localclash-choice-group' }, [
+			E('legend', {}, [ _('Mihomo 核心') ]),
+			E('label', { 'class': 'localclash-choice-option' }, [
+				E('input', {
+					'type': 'radio',
+					'name': 'localclash-bootstrap-core',
+					'value': 'meta',
+					'checked': 'checked'
+				}),
+				E('span', {}, [
+					E('strong', {}, [ _('Meta（推荐）') ]),
+					E('small', {}, [ _('兼容性优先，适合大多数路由器。') ])
+				])
+			]),
+			E('label', { 'class': 'localclash-choice-option' }, [
+				E('input', {
+					'type': 'radio',
+					'name': 'localclash-bootstrap-core',
+					'value': 'smart'
+				}),
+				E('span', {}, [
+					E('strong', {}, [ _('Smart') ]),
+					E('small', {}, [ _('使用 Smart 核心的自动选择能力。') ])
+				])
+			])
 		]),
-		E('label', { 'class': 'localclash-check-option' }, [
-			E('input', {
-				'id': 'localclash-bootstrap-minimal',
-				'type': 'checkbox'
-			}),
-			_('使用 minimal 配置')
+		E('fieldset', { 'class': 'localclash-choice-group' }, [
+			E('legend', {}, [ _('配置方案') ]),
+			E('label', { 'class': 'localclash-choice-option' }, [
+				E('input', {
+					'type': 'radio',
+					'name': 'localclash-bootstrap-template',
+					'value': 'localclash-default',
+					'checked': 'checked'
+				}),
+				E('span', {}, [
+					E('strong', {}, [ _('默认策略（推荐）') ]),
+					E('small', {}, [ _('使用完整的 localClash 默认策略。') ])
+				])
+			]),
+			E('label', { 'class': 'localclash-choice-option' }, [
+				E('input', {
+					'type': 'radio',
+					'name': 'localclash-bootstrap-template',
+					'value': 'minimal'
+				}),
+				E('span', {}, [
+					E('strong', {}, [ _('精简配置') ]),
+					E('small', {}, [ _('只保留必要配置，适合自行维护策略。') ])
+				])
+			])
 		])
 	]);
 }
@@ -865,6 +909,7 @@ function refreshTakeoverStatus() {
 			cell.textContent = text;
 		if (hero)
 			hero.textContent = text;
+		updateStatePanelTakeoverAppearance(text, false);
 	}).catch(function(err) {
 		var text = takeoverFailureText(err);
 		var cell = document.getElementById('localclash-overview-takeover-status');
@@ -874,7 +919,34 @@ function refreshTakeoverStatus() {
 			cell.textContent = text;
 		if (hero)
 			hero.textContent = text;
+		updateStatePanelTakeoverAppearance(text, true);
 	});
+}
+
+function updateStatePanelTakeoverAppearance(text, failed) {
+	var panel = document.getElementById('localclash-state-panel');
+	var badge;
+	var tableLabel = document.getElementById('localclash-overview-takeover-status');
+	var tableBadge = tableLabel ? tableLabel.parentNode : null;
+	var tone;
+
+	if (!panel)
+		return;
+
+	badge = panel.querySelector('.localclash-status-badge');
+	tone = failed ? 'danger' : (text === _('已生效') ? 'success' : 'warning');
+	[ 'success', 'warning', 'danger', 'info', 'neutral' ].forEach(function(name) {
+		panel.classList.remove('localclash-state-panel-' + name);
+		if (badge)
+			badge.classList.remove('localclash-status-' + name);
+		if (tableBadge)
+			tableBadge.classList.remove('localclash-status-' + name);
+	});
+	panel.classList.add('localclash-state-panel-' + tone);
+	if (badge)
+		badge.classList.add('localclash-status-' + tone);
+	if (tableBadge)
+		tableBadge.classList.add('localclash-status-' + tone);
 }
 
 function refreshOverviewStatus() {
@@ -903,6 +975,7 @@ function refreshOverviewStatus() {
 			state = classify(data, takeover, task);
 		}
 
+		replaceContent('localclash-overview-state', statePanel(state));
 		replaceContent('localclash-overview-actions', primaryActions(state));
 		updateBootstrapStartButton();
 		lastOverviewStatusData = data.ok === false && data.error ? null : data;
@@ -967,7 +1040,7 @@ function classify(data, takeover, task) {
 		return {
 			id: 'runtime_stopped',
 			title: _('已就绪，尚未启动'),
-			message: _('订阅与组件已就绪。路由器环境会默认启动运行时并接管路由器流量。')
+			message: _('订阅与组件已就绪。启动后，localClash 会运行并接管路由器流量。')
 		};
 	}
 
@@ -978,33 +1051,86 @@ function classify(data, takeover, task) {
 	};
 }
 
-function primaryActions(state) {
-	if (state.id === 'loading') {
-		return actionRow([
-			E('button', {
-				'type': 'button',
-				'class': 'btn cbi-button localclash-button',
-				'disabled': 'disabled',
-				'aria-busy': 'true'
-			}, [ _('正在检查…') ])
-		]);
-	}
+function stateTone(state) {
+	if (!state)
+		return 'neutral';
+	if (state.id === 'running')
+		return 'success';
+	if (state.id === 'status_failed')
+		return 'danger';
+	if (state.id === 'task_running' || state.id === 'loading')
+		return 'info';
+	return 'warning';
+}
 
-	if (state.id === 'status_failed') {
-		return actionRow([
-			commandButton(_('查看日志'), callBootstrapLogs, null, { keepOpen: true }),
+function statusBadge(label, tone, labelAttrs) {
+	return E('span', { 'class': 'localclash-status-badge localclash-status-' + (tone || 'neutral') }, [
+		E('span', { 'class': 'localclash-status-dot', 'aria-hidden': 'true' }, []),
+		E('span', labelAttrs || {}, [ label ])
+	]);
+}
+
+function statePanelActions(state) {
+	if (!state || state.id === 'loading')
+		return [ E('button', {
+			'type': 'button',
+			'class': 'btn cbi-button localclash-button',
+			'disabled': 'disabled',
+			'aria-busy': 'true'
+		}, [ _('正在检查…') ]) ];
+
+	if (state.id === 'running')
+		return [
+			dashboardButton('cbi-button-apply'),
+			commandButton(_('重启'), callRuntimeRestart),
+			runtimeStopButton()
+		];
+
+	if (state.id === 'runtime_stopped')
+		return [ liveTaskButton(_('启动并接管'), callRuntimeStartTakeover, 'cbi-button-apply') ];
+
+	if (state.id === 'task_running')
+		return [ liveTaskButton(_('查看任务输出'), function() {
+			return { ok: true, started: true, running: true };
+		}, 'cbi-button-apply') ];
+
+	if (state.id === 'status_failed')
+		return [
+			commandButton(_('查看日志'), callBootstrapLogs, 'cbi-button-apply', { keepOpen: true }),
 			linkButton(_('进入进阶'), L.url('admin/services/localclash/advanced'))
+		];
+
+	return [];
+}
+
+function statePanel(state) {
+	var message;
+	var actions = statePanelActions(state);
+	var children;
+
+	if (state && state.id === 'running') {
+		message = E('p', { 'class': 'localclash-state-message' }, [
+			_('Mihomo 运行时正在运行，网络接管：'),
+			E('span', { 'id': 'localclash-overview-takeover-hero' }, [ _('检查中…') ])
 		]);
 	}
-
-	if (state.id === 'task_running') {
-		return actionRow([
-			liveTaskButton(_('查看任务输出'), function() {
-				return { ok: true, started: true, running: true };
-			}, 'cbi-button-apply')
-		]);
+	else {
+		message = E('p', { 'class': 'localclash-state-message' }, [ state && state.message ? state.message : '-' ]);
 	}
 
+	children = [
+		E('div', { 'class': 'localclash-state-copy' }, [
+			statusBadge(state && state.title ? state.title : _('状态未知'), stateTone(state)),
+			message
+		])
+	];
+	if (actions.length)
+		children.push(E('div', { 'class': 'localclash-state-actions' }, actions));
+
+	return E('div', { 'id': 'localclash-state-panel', 'class': 'localclash-state-panel localclash-state-panel-' + stateTone(state) }, children);
+}
+
+function primaryActions(state) {
 	if (state.id === 'bootstrap') {
 		return [
 			bootstrapSetupPanel(false),
@@ -1016,10 +1142,6 @@ function primaryActions(state) {
 
 	if (state.id === 'subscription') {
 		return bootstrapSetupPanel(true);
-	}
-
-	if (state.id === 'runtime_stopped') {
-		return [];
 	}
 
 	return [];
@@ -1051,7 +1173,7 @@ function syncDefaultPolicyPreference(data) {
 function summaryActionRow(item, status, actions) {
 	return E('tr', { 'class': 'tr cbi-rowstyle-1' }, [
 		E('td', { 'class': 'td', 'data-title': _('项目') }, [ item ]),
-		E('td', { 'class': 'td', 'data-title': _('目前状态') }, [ statusText(status) ]),
+		E('td', { 'class': 'td', 'data-title': _('目前状态') }, [ typeof status === 'string' ? statusText(status) : status ]),
 		tableActionCell(actions)
 	]);
 }
@@ -1087,14 +1209,15 @@ function oneClickUpdatePreferenceControl() {
 	var checked = syncDefaultPolicyPreference(oneClickUpdatePreferencesData);
 
 	return E('label', { 'class': 'localclash-inline-check' }, [
-		E('input', {
+		namedControl(E('input', {
 			'id': 'localclash-overview-sync-default-policy',
 			'type': 'checkbox',
+			'name': 'localclash-overview-sync-default-policy',
 			'checked': checked ? 'checked' : null,
 			'change': function(ev) {
 				setOneClickUpdatePreference(ev.target.checked === true).catch(showError);
 			}
-		}),
+		}), 'localclash-overview-sync-default-policy'),
 		E('span', { 'class': 'localclash-inline-check-title' }, [ _('同步最新默认策略（推荐）') ]),
 		E('span', { 'class': 'localclash-inline-check-help' }, [
 			_('会用最新内置默认策略完全覆盖本地策略补丁；取消勾选可保留当前本地策略。')
@@ -1103,17 +1226,22 @@ function oneClickUpdatePreferenceControl() {
 }
 
 function oneClickUpdateSection() {
-	return section(_('一键更新'), E('div', { 'class': 'localclash-one-click-update' }, [
-		E('p', { 'class': 'localclash-muted' }, [
-			_('更新 LuCI 界面、localClash 核心、Mihomo 核心和 Dashboard，刷新订阅并在最后恢复运行时和网络接管。')
+	return section(_('更新'), E('div', { 'class': 'localclash-one-click-update' }, [
+		E('div', { 'class': 'localclash-update-row' }, [
+			E('div', { 'class': 'localclash-update-copy' }, [
+				E('span', { 'class': 'localclash-one-click-update-status-title' }, [ _('版本状态') ]),
+				E('span', { 'id': 'localclash-one-click-update-status', 'class': 'localclash-muted' }, [ _('正在检查更新…') ])
+			]),
+			oneClickUpdateButton()
 		]),
-		E('p', { 'class': 'localclash-one-click-update-status' }, [
-			E('span', { 'class': 'localclash-one-click-update-status-title' }, [ _('更新检查') ]),
-			E('span', { 'id': 'localclash-one-click-update-status' }, [ _('正在检查更新…') ])
-		]),
-		actionRow([
-			oneClickUpdateButton(),
-			oneClickUpdatePreferenceControl()
+		E('details', { 'class': 'localclash-inline-details' }, [
+			E('summary', {}, [ _('更新范围与策略选项') ]),
+			E('div', { 'class': 'localclash-details-body' }, [
+				E('p', { 'class': 'localclash-muted' }, [
+					_('更新 LuCI 界面、localClash 核心、Mihomo 核心和 Dashboard，刷新订阅并在最后恢复运行时和网络接管。')
+				]),
+				oneClickUpdatePreferenceControl()
+			])
 		])
 	]), 'localclash-one-click-update-section');
 }
@@ -1229,28 +1357,37 @@ function summaryTable(data, takeover, task, state) {
 	var status = productStatus(data);
 	var bootRestore = data.boot_auto_restore || {};
 	var bootRestoreEnabled = bootRestore && bootRestore.enabled === true;
+	var mihomoRunning = runtimeRunning(status);
+	var dashboardReady = componentInstalled(status, [ 'dashboard', 'ui' ]);
+	var subscriptionReady = subscriptionConfigured(status);
+	var takeoverText = takeoverState(takeover);
+	var takeoverTone = takeover && takeover.pending === true ? 'info' : (takeoverText === _('已生效') ? 'success' : 'warning');
 
 	return E('table', { 'class': 'table cbi-section-table localclash-summary-table' }, [
 		E('tbody', {}, [
 			E('tr', { 'class': 'tr' }, [
-				E('th', { 'class': 'th' }, [ _('项目') ]),
-				E('th', { 'class': 'th' }, [ _('目前状态') ]),
-				E('th', { 'class': 'th cbi-section-actions' }, [])
+				E('th', { 'class': 'th', 'scope': 'col' }, [ _('项目') ]),
+				E('th', { 'class': 'th', 'scope': 'col' }, [ _('目前状态') ]),
+				E('th', { 'class': 'th cbi-section-actions', 'scope': 'col' }, [ _('操作') ])
 			]),
-			summaryActionRow(_('Mihomo 核心'), mihomoSummary(data, status), runtimeActions(state)),
+			summaryActionRow(_('Mihomo 核心'), statusBadge(mihomoSummary(data, status), mihomoRunning ? 'success' : 'warning'), []),
 			E('tr', { 'class': 'tr cbi-rowstyle-1' }, [
 				E('td', { 'class': 'td', 'data-title': _('项目') }, [ _('网络接管') ]),
-				E('td', { 'class': 'td', 'data-title': _('目前状态'), 'id': 'localclash-overview-takeover-status' }, [ takeoverState(takeover) ]),
+				E('td', { 'class': 'td', 'data-title': _('目前状态') }, [
+					statusBadge(takeoverText, takeoverTone, { 'id': 'localclash-overview-takeover-status' })
+				]),
 				tableActionCell([
 					commandButton(_('查看接管日志'), callTakeoverLogs, null, { keepOpen: true, copyResult: true, privacyConfirm: true })
 				])
 			]),
-			summaryActionRow(_('Dashboard'), defaultDashboardURL(), [
+			summaryActionRow(_('Dashboard'), statusBadge(dashboardReady ? _('可用') : _('缺失'), dashboardReady ? 'success' : 'warning'), dashboardReady ? [
 				dashboardButton('cbi-button-action')
+			] : []),
+			summaryActionRow(_('订阅'), statusBadge(subscriptionReady ? _('已配置') : _('缺失'), subscriptionReady ? 'success' : 'warning'), [
+				linkButton(_('编辑'), L.url('admin/services/localclash/subscription'))
 			]),
-			summaryActionRow(_('订阅'), subscriptionConfigured(status) ? _('已配置') : _('缺失'), []),
-			summaryActionRow(_('开机自动恢复'), bootRestoreSummary(bootRestore), [
-				commandButton(_('切换'), bootRestoreEnabled ? callBootRestoreDisable : callBootRestoreEnable, bootRestoreEnabled ? 'cbi-button-reset' : 'cbi-button-apply')
+			summaryActionRow(_('开机自动恢复'), statusBadge(bootRestoreSummary(bootRestore), bootRestoreEnabled ? 'success' : 'neutral'), [
+				commandButton(bootRestoreEnabled ? _('停用') : _('启用'), bootRestoreEnabled ? callBootRestoreDisable : callBootRestoreEnable, bootRestoreEnabled ? null : 'cbi-button-apply')
 			])
 		])
 	]);
@@ -1262,9 +1399,9 @@ function summaryLoadingTable() {
 	return E('table', { 'class': 'table cbi-section-table localclash-summary-table' }, [
 		E('tbody', {}, [
 			E('tr', { 'class': 'tr' }, [
-				E('th', { 'class': 'th' }, [ _('项目') ]),
-				E('th', { 'class': 'th' }, [ _('目前状态') ]),
-				E('th', { 'class': 'th cbi-section-actions' }, [])
+				E('th', { 'class': 'th', 'scope': 'col' }, [ _('项目') ]),
+				E('th', { 'class': 'th', 'scope': 'col' }, [ _('目前状态') ]),
+				E('th', { 'class': 'th cbi-section-actions', 'scope': 'col' }, [ _('操作') ])
 			]),
 			summaryActionRow(_('Mihomo 核心'), pending, []),
 			E('tr', { 'class': 'tr cbi-rowstyle-1' }, [
@@ -1283,9 +1420,9 @@ function summaryErrorTable(message) {
 	return E('table', { 'class': 'table cbi-section-table localclash-summary-table' }, [
 		E('tbody', {}, [
 			E('tr', { 'class': 'tr' }, [
-				E('th', { 'class': 'th' }, [ _('项目') ]),
-				E('th', { 'class': 'th' }, [ _('目前状态') ]),
-				E('th', { 'class': 'th cbi-section-actions' }, [])
+				E('th', { 'class': 'th', 'scope': 'col' }, [ _('项目') ]),
+				E('th', { 'class': 'th', 'scope': 'col' }, [ _('目前状态') ]),
+				E('th', { 'class': 'th cbi-section-actions', 'scope': 'col' }, [ _('操作') ])
 			]),
 			summaryActionRow(_('状态'), _('读取失败'), []),
 			summaryActionRow(_('错误'), message || '-', [])
@@ -1433,14 +1570,15 @@ function takeoverGitHubIssueButton() {
 
 function takeoverGitHubLoginConfirmation(button) {
 	return E('label', { 'class': 'localclash-inline-check localclash-github-login-confirmation' }, [
-		E('input', {
+		namedControl(E('input', {
 			'id': 'localclash-github-login-confirmed',
 			'type': 'checkbox',
+			'name': 'localclash-github-login-confirmed',
 			'change': function(ev) {
 				button.disabled = ev.target.checked !== true;
 				button.setAttribute('aria-disabled', button.disabled ? 'true' : 'false');
 			}
-		}),
+		}), 'localclash-github-login-confirmed'),
 		E('span', { 'class': 'localclash-inline-check-title' }, [ _('我已登入 GitHub') ]),
 		E('span', { 'class': 'localclash-inline-check-help' }, [
 			_('GitHub 要求登入后才能建立 Issue；勾选后才会启用回报按钮。')
@@ -1448,10 +1586,10 @@ function takeoverGitHubLoginConfirmation(button) {
 	]);
 }
 
-function takeoverIssueReportSection() {
+function takeoverIssueReportBody() {
 	var githubButton = takeoverGitHubIssueButton();
 
-	return section(_('Takeover Issue 回报'), E('div', { 'class': 'localclash-takeover-issue-report' }, [
+	return E('div', { 'class': 'localclash-takeover-issue-report' }, [
 		E('p', { 'class': 'localclash-muted' }, [
 			_('如果网络接管再次失效，可复制完整报告，或直接打开 localclash-luci 的 GitHub New Issue。使用 GitHub 回报前必须先登入 GitHub；按钮会预填问题模板和最近的有界诊断，请检查内容后再按 Submit new issue。')
 		]),
@@ -1460,7 +1598,7 @@ function takeoverIssueReportSection() {
 			takeoverIssueCopyButton(),
 			githubButton
 		])
-	]), 'localclash-takeover-issue');
+	]);
 }
 
 function mcpGuidanceBody(help) {
@@ -1472,11 +1610,14 @@ function mcpGuidanceBody(help) {
 
 	return E('div', {}, [
 		E('p', { 'class': 'localclash-muted' }, [ _('将这段文字复制给 Agent，用于安装官方配套 Skill，并安全接入路由器上的 localClash MCP。Skill 提供路由规划与观测边界，MCP 连接真实路由器。') ]),
-		E('textarea', {
-			'class': 'cbi-input-textarea localclash-copybox',
+			namedControl(E('textarea', {
+				'id': 'localclash-mcp-guidance',
+				'name': 'localclash-mcp-guidance',
+				'aria-label': _('Agent Skill 与 MCP 接入指令'),
+				'class': 'cbi-input-textarea localclash-copybox',
 			'readonly': 'readonly',
 			'rows': rows
-		}, [ text ]),
+		}, [ text ]), 'localclash-mcp-guidance'),
 		actionRow([
 			commandButton(_('复制 Skill + MCP 指令'), function() {
 				return copyText(text).then(function() {
@@ -1487,10 +1628,25 @@ function mcpGuidanceBody(help) {
 	]);
 }
 
-function mcpGuidance(help) {
-	return section(_('Agent Skill 与 MCP 接入'), E('div', { 'id': 'localclash-overview-mcp-body' }, [
-		mcpGuidanceBody(help)
-	]), 'localclash-mcp-help');
+function supportAndDiagnostics(help) {
+	return section(_('帮助与诊断'), E('div', { 'class': 'localclash-support-list' }, [
+		E('details', { 'class': 'localclash-support-item' }, [
+			E('summary', {}, [
+				E('span', {}, [ _('Agent Skill 与 MCP 接入') ]),
+				E('small', {}, [ _('复制接入指令') ])
+			]),
+			E('div', { 'id': 'localclash-overview-mcp-body', 'class': 'localclash-support-body' }, [
+				mcpGuidanceBody(help)
+			])
+		]),
+		E('details', { 'class': 'localclash-support-item' }, [
+			E('summary', {}, [
+				E('span', {}, [ _('网络接管问题回报') ]),
+				E('small', {}, [ _('复制诊断或建立 GitHub Issue') ])
+			]),
+			E('div', { 'class': 'localclash-support-body' }, [ takeoverIssueReportBody() ])
+		])
+	]), 'localclash-support');
 }
 
 function refreshMcpGuidance() {
@@ -1522,40 +1678,89 @@ return view.extend({
 		}, 600);
 		deferAfterPaint(refreshMcpGuidance, 1200);
 
-		return E('div', { 'class': 'cbi-map localclash-view localclash-overview' }, [
+			return E('main', {
+				'class': 'cbi-map localclash-view localclash-overview',
+				'role': 'main',
+				'aria-labelledby': 'localclash-overview-title'
+			}, [
 			E('style', {}, [ [
 				'.localclash-view + .cbi-page-actions,.localclash-view ~ .cbi-page-actions,.cbi-page-actions{display:none!important}',
-				'.localclash-view .localclash-section{clear:both;margin-top:1.25rem;padding-bottom:.25rem}',
+				'.localclash-overview{box-sizing:border-box;width:100%;max-width:1240px;margin:0 auto;padding-bottom:2rem}',
+				'.localclash-view .localclash-section{clear:both;margin-top:1rem;padding-bottom:.25rem}',
 				'.localclash-view .localclash-actions{display:flex;flex-wrap:wrap;gap:.625rem;align-items:center;margin:.875rem 0 0 0;padding:1rem}',
 				'.localclash-view .localclash-button{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;float:none;margin:0;min-width:8.5rem;min-height:2.75rem;padding:.7rem 1.05rem;line-height:1.2;text-align:center;white-space:normal}',
 				'.localclash-view .localclash-button:focus{outline:2px solid rgba(73,115,255,.35);outline-offset:2px}',
 				'.localclash-view .localclash-button:active{transform:translateY(1px)}',
 				'.localclash-view .localclash-button.localclash-busy{cursor:wait;opacity:.72}',
-				'.localclash-overview .localclash-setup-panel{margin-top:1rem}',
+				'.localclash-view .localclash-button.cbi-button-apply,.localclash-view .localclash-button.cbi-button-action{border-color:#4c5fc7!important;background:#4c5fc7!important;color:#fff!important}',
+				'.localclash-view .localclash-button.cbi-button-apply:hover,.localclash-view .localclash-button.cbi-button-action:hover{border-color:#4052b5!important;background:#4052b5!important}',
+				'.localclash-view .localclash-button.cbi-button-reset,.localclash-view .localclash-button.localclash-danger{border-color:#c42d4b!important;background:#c42d4b!important;color:#fff!important}',
+				'.localclash-view .localclash-button.cbi-button-reset:hover,.localclash-view .localclash-button.localclash-danger:hover{border-color:#a9233d!important;background:#a9233d!important}',
+				'.localclash-overview .localclash-setup-panel{margin-top:1rem;padding:1rem;border:1px solid rgba(127,127,127,.2);border-radius:.65rem;background:rgba(127,127,127,.04)}',
+				'.localclash-state-panel{display:flex;gap:1.5rem;align-items:center;justify-content:space-between;margin:1rem 0;padding:1.25rem 1.35rem;border:1px solid rgba(127,127,127,.22);border-left-width:4px;border-radius:.75rem;background:rgba(127,127,127,.045)}',
+				'.localclash-state-panel-success{border-left-color:#2e9d62;background:rgba(46,157,98,.07)}',
+				'.localclash-state-panel-warning{border-left-color:#c58a1b;background:rgba(197,138,27,.07)}',
+				'.localclash-state-panel-danger{border-left-color:#c43d4b;background:rgba(196,61,75,.07)}',
+				'.localclash-state-panel-info{border-left-color:#4d6de3;background:rgba(77,109,227,.07)}',
+				'.localclash-state-copy{min-width:0}',
+				'.localclash-state-message{margin:.55rem 0 0 0;color:#596274;line-height:1.5}',
+				'.localclash-state-actions{display:flex;flex:0 0 auto;flex-wrap:wrap;gap:.55rem;justify-content:flex-end}',
+				'.localclash-status-badge{display:inline-flex;align-items:center;gap:.45rem;font-weight:650;line-height:1.35;white-space:nowrap}',
+				'.localclash-status-dot{width:.55rem;height:.55rem;border-radius:50%;background:#8991a4;box-shadow:0 0 0 3px rgba(137,145,164,.12)}',
+				'.localclash-status-success .localclash-status-dot{background:#2e9d62;box-shadow:0 0 0 3px rgba(46,157,98,.13)}',
+				'.localclash-status-warning .localclash-status-dot{background:#c58a1b;box-shadow:0 0 0 3px rgba(197,138,27,.13)}',
+				'.localclash-status-danger .localclash-status-dot{background:#c43d4b;box-shadow:0 0 0 3px rgba(196,61,75,.13)}',
+				'.localclash-status-info .localclash-status-dot{background:#4d6de3;box-shadow:0 0 0 3px rgba(77,109,227,.13)}',
 				'.localclash-view .localclash-textarea{box-sizing:border-box;width:calc(100% - 2rem);min-height:9rem;margin:1rem;padding:1rem;font-family:monospace;line-height:1.45;resize:vertical}',
-				'.localclash-view .localclash-bootstrap-options{display:flex;flex-wrap:wrap;gap:1rem;margin:.75rem 1rem 0 1rem;align-items:center}',
-				'.localclash-view .localclash-check-option{display:inline-flex;gap:.45rem;align-items:center;margin:0;line-height:1.4}',
-				'.localclash-view .localclash-check-option input{margin:0}',
+				'.localclash-view .localclash-bootstrap-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;margin:.75rem 1rem 0 1rem}',
+				'.localclash-choice-group{min-width:0;margin:0;padding:.8rem;border:1px solid rgba(127,127,127,.2);border-radius:.55rem}',
+				'.localclash-choice-group legend{padding:0 .35rem;font-weight:650}',
+				'.localclash-choice-option{display:grid;grid-template-columns:auto 1fr;gap:.55rem;align-items:start;padding:.55rem;border-radius:.4rem;cursor:pointer}',
+				'.localclash-choice-option:hover{background:rgba(127,127,127,.07)}',
+				'.localclash-choice-option input{margin:.2rem 0 0 0}',
+				'.localclash-choice-option strong,.localclash-choice-option small{display:block}',
+				'.localclash-choice-option small{margin-top:.15rem;color:#667085;line-height:1.4}',
 				'.localclash-view .localclash-inline-check{display:inline-grid;grid-template-columns:auto auto;grid-template-areas:"box title" ". help";column-gap:.5rem;row-gap:.15rem;align-items:center;max-width:38rem;margin:0;line-height:1.35;text-align:left;white-space:normal}',
 				'.localclash-view .localclash-inline-check input{grid-area:box;margin:0}',
 				'.localclash-view .localclash-inline-check-title{grid-area:title;font-weight:600}',
 				'.localclash-view .localclash-inline-check-help{grid-area:help;color:#667085;font-size:.92em}',
 				'.localclash-view .localclash-github-login-confirmation{padding-left:1em}',
 				'.localclash-view .localclash-muted{color:#667085;line-height:1.55}',
-				'.localclash-view .localclash-copybox{box-sizing:border-box;width:calc(100% - 2rem);min-height:16rem;margin:1rem;padding:1rem;font-family:monospace;line-height:1.45;resize:vertical}',
-				'.localclash-view table.table th,.localclash-view table.table td{text-align:left;height:70px;vertical-align:middle;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}',
+				'.localclash-view .localclash-copybox{box-sizing:border-box;width:100%;min-height:20rem;margin:.75rem 0;padding:1rem;font-family:monospace;line-height:1.45;resize:vertical}',
+				'.localclash-view table.table th,.localclash-view table.table td{text-align:left;height:52px;vertical-align:middle;overflow:visible;white-space:normal}',
 				'.localclash-view table.table tr.cbi-rowstyle-1,.localclash-view table.table tr.cbi-rowstyle-1 > th,.localclash-view table.table tr.cbi-rowstyle-1 > td{background-color:rgba(255,255,255,.03)}',
 				'.localclash-summary-table tbody th,.localclash-status-table tbody th{text-align:left}',
+				'.localclash-summary-table td:first-child{width:28%;font-weight:600}',
+				'.localclash-summary-table td:nth-child(2){width:32%}',
 				'.localclash-summary-table .cbi-section-actions{white-space:nowrap;text-align:right}',
-				'.localclash-summary-table .localclash-button{min-width:4.25rem;min-height:2.25rem;margin:.125rem;padding:.45rem .7rem;white-space:nowrap}',
-				'.localclash-one-click-update-status{display:flex;flex-wrap:wrap;gap:.45rem;align-items:baseline;margin:.75rem 1rem 0 1rem;line-height:1.45}',
+				'.localclash-summary-table .localclash-button{min-width:4.25rem;min-height:2.2rem;margin:.125rem;padding:.42rem .68rem;white-space:nowrap}',
+				'.localclash-update-row{display:flex;gap:1rem;align-items:center;justify-content:space-between;padding:1rem}',
+				'.localclash-update-copy{display:grid;gap:.25rem;min-width:0}',
 				'.localclash-one-click-update-status-title{font-weight:700}',
+				'.localclash-inline-details{margin:0 1rem .85rem 1rem;border-top:1px solid rgba(127,127,127,.18)}',
+				'.localclash-inline-details summary{padding:.8rem 0;cursor:pointer;font-weight:600}',
+				'.localclash-details-body{padding:0 0 .8rem 0}',
+				'.localclash-support-list{display:grid;gap:.65rem;padding:.75rem 1rem 1rem 1rem}',
+				'.localclash-support-item{border:1px solid rgba(127,127,127,.2);border-radius:.55rem;background:rgba(127,127,127,.035)}',
+				'.localclash-support-item > summary{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1rem;cursor:pointer;font-weight:650;list-style-position:inside}',
+				'.localclash-support-item > summary::after{content:"＋";margin-left:auto;color:#667085;font-size:1.1rem}',
+				'.localclash-support-item[open] > summary::after{content:"−"}',
+				'.localclash-support-item > summary small{color:#667085;font-weight:400}',
+				'.localclash-support-body{padding:0 1rem 1rem 1rem;border-top:1px solid rgba(127,127,127,.16)}',
+				'.localclash-support-body .localclash-actions{padding-left:0;padding-right:0}',
 				'.localclash-result{box-sizing:border-box;width:100%;min-width:0;max-width:100%;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word}',
 				'.localclash-task-status{margin:.25rem 0 1rem 0;line-height:1.45}',
 				'.localclash-task-log{box-sizing:border-box;width:100%;min-width:0;max-width:100%;max-height:48vh;overflow:auto;margin:0 0 1rem 0;padding:1rem;background:#111827;color:#d1d5db;border-radius:6px;white-space:pre-wrap;word-break:break-word}',
 				'.localclash-task-result:empty{display:none}',
 					'@media (max-width: 700px){',
 					'.localclash-view .localclash-button{width:100%;min-width:0}',
+					'.localclash-overview{max-width:none}',
+					'.localclash-state-panel{display:block;padding:1rem}',
+					'.localclash-state-actions{justify-content:stretch;margin-top:1rem}',
+					'.localclash-state-actions .localclash-button{flex:1 1 8rem}',
+					'.localclash-view .localclash-bootstrap-options{grid-template-columns:1fr}',
+					'.localclash-update-row{align-items:stretch;flex-direction:column}',
+					'.localclash-support-item > summary{align-items:flex-start;flex-direction:column;gap:.25rem}',
 					'.localclash-summary-table,.localclash-summary-table tbody,.localclash-summary-table tr,.localclash-summary-table th,.localclash-summary-table td{display:block;width:auto!important;min-width:0}',
 					'.localclash-summary-table tr:first-child{display:none}',
 					'.localclash-summary-table tr{padding:.875rem 1rem}',
@@ -1570,19 +1775,19 @@ return view.extend({
 					'.localclash-result{max-width:100%}',
 					'}'
 				].join('\n') ]),
-			E('h2', {}, [ _('localClash') ]),
+			E('h2', { 'id': 'localclash-overview-title' }, [ _('localClash') ]),
 			E('div', { 'class': 'cbi-map-descr' }, [
 				_('localClash 用于管理路由器上的 Mihomo 运行时、订阅配置、Dashboard 和网络接管。')
+			]),
+			E('div', { 'id': 'localclash-overview-state' }, [ statePanel(state) ]),
+			E('div', { 'id': 'localclash-overview-actions' }, [
+				primaryActions(state)
 			]),
 			section(_('摘要'), E('div', { 'id': 'localclash-overview-summary-body' }, [
 				summaryLoadingTable()
 			]), 'localclash-summary'),
 			oneClickUpdateSection(),
-			E('div', { 'id': 'localclash-overview-actions' }, [
-				primaryActions(state)
-			]),
-			mcpGuidance({ loading: true }),
-			takeoverIssueReportSection()
+			supportAndDiagnostics({ loading: true })
 		]);
 	}
 });
