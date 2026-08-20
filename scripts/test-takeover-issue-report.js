@@ -39,7 +39,7 @@ const fixture = {
 	snapshot_exit_code: 1,
 	snapshot_errors: [ 'route_table_v6_failed' ],
 	events: Array.from({ length: 200 }, (_, i) => JSON.stringify({ event: 'event-' + i, message: 'x'.repeat(160) })),
-	current_snapshot: Array.from({ length: 160 }, (_, i) => i % 2 ? 'ordinary line ' + i : '[section-' + i + '] localClash 0x162 utun'),
+	current_snapshot: Array.from({ length: 160 }, (_, i) => i % 2 ? 'ordinary line ' + i : '[section-' + i + '] localClash 0x6c63 utun'),
 	system_events_available: true,
 	recent_system_events: Array.from({ length: 100 }, (_, i) => '2026-08-17T12:34:' + String(i % 60).padStart(2, '0') + ' fw4 event ' + i + ' ' + 'y'.repeat(120)),
 	current_status_exit_code: 0,

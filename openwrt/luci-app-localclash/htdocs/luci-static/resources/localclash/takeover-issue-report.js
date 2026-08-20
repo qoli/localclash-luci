@@ -23,7 +23,7 @@ function tail(value, count) {
 
 function compactSnapshot(value) {
 	var important = stringArray(value).filter(function(line) {
-		return /^\[/.test(line) || /localclash|0x162|fwmark|utun|7874|7892|9090|failed|unavailable|no localclash/i.test(line);
+		return /^\[/.test(line) || /localclash|0x6c63|0x162|fwmark|utun|7874|7892|9090|failed|unavailable|no localclash/i.test(line);
 	});
 	return important.slice(0, 80);
 }

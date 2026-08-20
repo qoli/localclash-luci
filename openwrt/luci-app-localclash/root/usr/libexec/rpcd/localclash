@@ -38,6 +38,7 @@ HELPER_SELF="${LOCALCLASH_HELPER_SELF:-$0}"
 MCP_HEALTH_ATTEMPTS="${LOCALCLASH_MCP_HEALTH_ATTEMPTS:-30}"
 LUCI_UPDATE_MAX_ATTEMPTS=3
 LUCI_UPDATE_RETRY_DELAY=2
+TAKEOVER_ROUTE_TABLE="27747"
 
 json_escape() {
 	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
@@ -3941,9 +3942,9 @@ takeover_snapshot() {
 		printf 'ip_unavailable\n' >> "$errors"
 	fi
 
-	printf '[route-table-0x162-v4]\n' >> "$output"
+	printf '[route-table-%s-v4]\n' "$TAKEOVER_ROUTE_TABLE" >> "$output"
 	if command -v ip >/dev/null 2>&1; then
-		if ip route show table 0x162 >> "$output" 2>&1; then
+		if ip route show table "$TAKEOVER_ROUTE_TABLE" >> "$output" 2>&1; then
 			:
 		else
 			rc=$?
@@ -3967,9 +3968,9 @@ takeover_snapshot() {
 		printf 'ip unavailable\n' >> "$output"
 	fi
 
-	printf '[route-table-0x162-v6]\n' >> "$output"
+	printf '[route-table-%s-v6]\n' "$TAKEOVER_ROUTE_TABLE" >> "$output"
 	if command -v ip >/dev/null 2>&1; then
-		if ip -6 route show table 0x162 >> "$output" 2>&1; then
+		if ip -6 route show table "$TAKEOVER_ROUTE_TABLE" >> "$output" 2>&1; then
 			:
 		else
 			rc=$?
