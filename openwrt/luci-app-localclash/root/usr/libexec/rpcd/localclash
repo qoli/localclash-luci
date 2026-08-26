@@ -3020,7 +3020,7 @@ dnsqualify_installed_version() {
 }
 
 dnsqualify_timestamp_epoch() {
-	local value base suffix epoch sign hours minutes offset
+	local value base suffix epoch sign hours minutes offset platform
 	value="$1"
 	base="$(printf '%.19s' "$value")"
 	[ "${#base}" -eq 19 ] || return 1
@@ -3045,8 +3045,22 @@ dnsqualify_timestamp_epoch() {
 			;;
 		*) return 1 ;;
 	esac
-	epoch="$(date -u -D '%Y-%m-%dT%H:%M:%S' -d "$base" +%s 2>/dev/null)" ||
-		epoch="$(date -j -u -f '%Y-%m-%dT%H:%M:%S' "$base" +%s 2>/dev/null)" || return 1
+	platform="$(uname -s 2>/dev/null)" || return 1
+	case "$platform" in
+		Darwin)
+			epoch="$(date -j -u -f '%Y-%m-%dT%H:%M:%S' "$base" +%s 2>/dev/null)" || return 1
+			;;
+		Linux)
+			if date --version 2>/dev/null | grep -q 'GNU coreutils'; then
+				epoch="$(date -u -d "$base" +%s 2>/dev/null)" || return 1
+			else
+				epoch="$(date -u -D '%Y-%m-%dT%H:%M:%S' -d "$base" +%s 2>/dev/null)" || return 1
+			fi
+			;;
+		*)
+			return 1
+			;;
+	esac
 	printf '%s\n' $((epoch - offset))
 }
 
