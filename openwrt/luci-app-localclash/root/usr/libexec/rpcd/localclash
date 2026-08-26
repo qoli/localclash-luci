@@ -2990,9 +2990,35 @@ dnsqualify_config_path() {
 	printf '%s\n' "$workdir/dnsqualify.json"
 }
 
+dnsqualify_wan_ecs() {
+	DNSQUALIFY_ECS_INTERFACE=""
+	if ! command -v network_get_device >/dev/null 2>&1; then
+		if [ ! -r /lib/functions/network.sh ]; then
+			fail "dnsqualify_network_helper_missing" "无法读取 OpenWrt network.sh，不能确认当前 WAN 接口。"
+			return 1
+		fi
+		. /lib/functions/network.sh
+	fi
+	if command -v network_flush_cache >/dev/null 2>&1; then
+		network_flush_cache
+	fi
+	if ! network_get_device DNSQUALIFY_ECS_INTERFACE wan || [ -z "$DNSQUALIFY_ECS_INTERFACE" ]; then
+		fail "dnsqualify_wan_interface_missing" "无法确认当前 WAN 设备，拒绝生成无接口来源的 ECS 配置。"
+		return 1
+	fi
+}
+
 dnsqualify_installed_version() {
 	[ -x "$DNSQUALIFY" ] || return 1
 	"$DNSQUALIFY" --version 2>/dev/null | sed -n 's/^dnsqualify \(v[^ ]*\)$/\1/p' | head -n 1
+}
+
+dnsqualify_timestamp_epoch() {
+	date -d "$1" +%s 2>/dev/null
+}
+
+dnsqualify_now_epoch() {
+	date +%s
 }
 
 dnsqualify_install() {
@@ -3123,7 +3149,7 @@ dnsqualify_ensure() {
 }
 
 dnsqualify_status() {
-	local config version scope candidate source transport endpoint generated installed binary_version
+	local config version scope_type scope_id candidate source transport endpoint ecs_prefix ecs_source ecs_interface ecs_server ecs_server_ip generated expires expires_epoch now_epoch installed binary_version
 	config="$(dnsqualify_config_path)" || return 1
 	installed=false
 	binary_version=""
@@ -3132,27 +3158,44 @@ dnsqualify_status() {
 		binary_version="$(dnsqualify_installed_version 2>/dev/null || true)"
 	fi
 	if [ ! -f "$config" ]; then
-		ok '"status":{"enabled":false,"mode":"default","scope":"geosite:cn"},"binary_installed":'"$installed"',"binary_version":"'"$(json_escape "$binary_version")"'"'
+		ok '"status":{"enabled":false,"mode":"secure_baseline","scope":"default"},"binary_installed":'"$installed"',"binary_version":"'"$(json_escape "$binary_version")"'"'
 		return 0
 	fi
 	version="$(jsonfilter -i "$config" -e '@.version' 2>/dev/null || true)"
-	scope="$(jsonfilter -i "$config" -e '@.scope' 2>/dev/null || true)"
+	scope_type="$(jsonfilter -i "$config" -e '@.scope.type' 2>/dev/null || true)"
+	scope_id="$(jsonfilter -i "$config" -e '@.scope.id' 2>/dev/null || true)"
 	candidate="$(jsonfilter -i "$config" -e '@.resolver.candidate_id' 2>/dev/null || true)"
 	source="$(jsonfilter -i "$config" -e '@.resolver.source' 2>/dev/null || true)"
 	transport="$(jsonfilter -i "$config" -e '@.resolver.transport' 2>/dev/null || true)"
 	endpoint="$(jsonfilter -i "$config" -e '@.resolver.endpoint' 2>/dev/null || true)"
+	ecs_prefix="$(jsonfilter -i "$config" -e '@.ecs.prefix' 2>/dev/null || true)"
+	ecs_source="$(jsonfilter -i "$config" -e '@.ecs.source' 2>/dev/null || true)"
+	ecs_interface="$(jsonfilter -i "$config" -e '@.ecs.interface' 2>/dev/null || true)"
+	ecs_server="$(jsonfilter -i "$config" -e '@.ecs.server' 2>/dev/null || true)"
+	ecs_server_ip="$(jsonfilter -i "$config" -e '@.ecs.server_ip' 2>/dev/null || true)"
 	generated="$(jsonfilter -i "$config" -e '@.measurement.generated_at' 2>/dev/null || true)"
-	if [ "$version" != "1" ] || [ "$scope" != "geosite:cn" ] ||
+	expires="$(jsonfilter -i "$config" -e '@.measurement.expires_at' 2>/dev/null || true)"
+	if [ "$version" != "2" ] || [ "$scope_type" != "domains" ] || [ -z "$scope_id" ] ||
 		[ -z "$candidate" ] || [ -z "$source" ] || [ -z "$transport" ] ||
-		[ -z "$endpoint" ] || [ -z "$generated" ]; then
+		[ -z "$endpoint" ] || [ -z "$ecs_prefix" ] || [ -z "$ecs_source" ] || [ -z "$ecs_interface" ] || [ -z "$ecs_server" ] || [ -z "$ecs_server_ip" ] ||
+		[ -z "$generated" ] || [ -z "$expires" ]; then
 		fail "dnsqualify_config_invalid" "dnsqualify 配置存在但不完整；Core 渲染也会明确拒绝该配置。"
 		return 1
 	fi
-	ok '"status":{"enabled":true,"mode":"dnsqualify","scope":"geosite:cn","resolver":{"candidate_id":"'"$(json_escape "$candidate")"'","source":"'"$(json_escape "$source")"'","transport":"'"$(json_escape "$transport")"'","endpoint":"'"$(json_escape "$endpoint")"'"},"generated_at":"'"$(json_escape "$generated")"'"},"binary_installed":'"$installed"',"binary_version":"'"$(json_escape "$binary_version")"'"'
+	expires_epoch="$(dnsqualify_timestamp_epoch "$expires" 2>/dev/null || true)"
+	now_epoch="$(dnsqualify_now_epoch 2>/dev/null || true)"
+	case "$expires_epoch:$now_epoch" in
+		*[!0-9:]*|:*|*:) fail "dnsqualify_expiry_invalid" "无法验证 dnsqualify 证据过期时间；Core 也不会启用该最佳化。"; return 1 ;;
+	esac
+	if [ "$expires_epoch" -le "$now_epoch" ]; then
+		ok '"status":{"enabled":false,"mode":"secure_baseline","scope":"default","disabled_reason":"expired","expired_at":"'"$(json_escape "$expires")"'","retained_config":true},"binary_installed":'"$installed"',"binary_version":"'"$(json_escape "$binary_version")"'"'
+		return 0
+	fi
+	ok '"status":{"enabled":true,"mode":"qualified_ecs","scope":"'"$(json_escape "$scope_id")"'","resolver":{"candidate_id":"'"$(json_escape "$candidate")"'","source":"'"$(json_escape "$source")"'","transport":"'"$(json_escape "$transport")"'","endpoint":"'"$(json_escape "$endpoint")"'"},"ecs":{"prefix":"'"$(json_escape "$ecs_prefix")"'","source":"'"$(json_escape "$ecs_source")"'","interface":"'"$(json_escape "$ecs_interface")"'","server":"'"$(json_escape "$ecs_server")"'","server_ip":"'"$(json_escape "$ecs_server_ip")"'"},"generated_at":"'"$(json_escape "$generated")"'","expires_at":"'"$(json_escape "$expires")"'"},"binary_installed":'"$installed"',"binary_version":"'"$(json_escape "$binary_version")"'"'
 }
 
 dnsqualify_run() {
-	local config backup had_config install_tmp result_tmp render_tmp test_tmp
+	local config backup had_config install_tmp result_tmp render_tmp test_tmp initial_ecs_interface
 	config="$(dnsqualify_config_path)" || return 1
 	install_tmp="/tmp/localclash-dnsqualify-install-result.$$.json"
 	if ! dnsqualify_ensure > "$install_tmp"; then
@@ -3175,9 +3218,26 @@ dnsqualify_run() {
 	render_tmp="/tmp/localclash-dns-render.$$.json"
 	test_tmp="/tmp/localclash-dns-test.$$.json"
 	log_line "dnsqualify：用户按需启动独立 DNS 测试与配置生成"
-	if ! "$DNSQUALIFY" --output "$config" --json > "$result_tmp" 2>>"$LOG"; then
+	if ! dnsqualify_wan_ecs; then
+		rm -f "$backup" "$install_tmp" "$result_tmp" "$render_tmp" "$test_tmp"
+		return 1
+	fi
+	initial_ecs_interface="$DNSQUALIFY_ECS_INTERFACE"
+	if ! "$DNSQUALIFY" --output "$config" \
+		--ecs-interface "$DNSQUALIFY_ECS_INTERFACE" \
+		--json > "$result_tmp" 2>>"$LOG"; then
 		rm -f "$backup" "$install_tmp" "$result_tmp" "$render_tmp" "$test_tmp"
 		fail "dnsqualify_run_failed" "独立 dnsqualify 测试失败；现有配置保持不变。"
+		return 1
+	fi
+	if ! dnsqualify_wan_ecs || [ "$DNSQUALIFY_ECS_INTERFACE" != "$initial_ecs_interface" ]; then
+		if ! dnsqualify_restore "$backup" "$had_config" "$config"; then
+			rm -f "$backup" "$install_tmp" "$result_tmp" "$render_tmp" "$test_tmp"
+			fail "dnsqualify_rollback_failed" "WAN ECS 来源变化，且无法确认旧配置已恢复；请勿重启 Mihomo。"
+			return 1
+		fi
+		rm -f "$backup" "$install_tmp" "$result_tmp" "$render_tmp" "$test_tmp"
+		fail "dnsqualify_wan_changed" "测量期间 WAN 公网地址或接口发生变化；已恢复原配置，请重新运行。"
 		return 1
 	fi
 	if ! call_core config render --json > "$render_tmp" ||
@@ -3251,7 +3311,7 @@ start_dnsqualify_task() {
 	fi
 	rm -f "$TASK_STATUS" "$TASK_RESULT" "$TASK_INPUT" "$TASK_PID"
 	: > "$LOG"
-	printf '%s\n' "$action" > "$TASK_INPUT"
+	printf '{"action":"%s"}\n' "$(json_escape "$action")" > "$TASK_INPUT"
 	write_task_running "$summary" "dnsqualify"
 	(
 		result="$("$0" call dnsqualify_task_run 2>>"$LOG")"
@@ -3268,7 +3328,7 @@ start_dnsqualify_task() {
 
 dnsqualify_task_run() {
 	local action
-	action="$(cat "$TASK_INPUT" 2>/dev/null || true)"
+	action="$(jsonfilter -i "$TASK_INPUT" -e '@.action' 2>/dev/null || true)"
 	case "$action" in
 		optimize) with_lock dnsqualify_run ;;
 		reset) with_lock dnsqualify_reset_run ;;
