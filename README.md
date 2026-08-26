@@ -191,18 +191,19 @@ localClash 现在提供 `一键更新`：更新 LuCI 界面、localClash 核心�
   [`qoli/dnsqualify`](https://github.com/qoli/dnsqualify) commit 构建该二进制，
   不使用浮动分支或仓库内嵌源码。
 - 只有用户按下 `运行 dnsqualify` 时，LuCI 才会取得 WAN L3 device 并启动测试。
-  独立程序把 STUN UDP socket 绑定到该 device，使用中国大陆
-  `stun.chat.bilibili.com:3478` 返回的 `XOR-MAPPED-ADDRESS`；
-  `network.interface.wan` 的接口地址、海外 STUN 与 HTTP 公网回显都不作为公网
-  身份。程序再测试 Google DoH + WAN ECS 的 DNS 答案、网站连通性和知名服务
-  CDN 速度，输出严格 v2 `dnsqualify.json`。
+  独立程序按固定顺序尝试绑定该 device 的中国大陆 Bilibili STUN、
+  `api.ipapi.is` HTTPS JSON；任一成功即停止，JSON
+  路径严格要求 `country code == CN`。需要 Token 或文字解析的端点不纳入。
+  `network.interface.wan` 的接口地址与海外 STUN 不作为公网身份。程序再测试
+  Google DoH + WAN ECS 的 DNS 答案、网站连通性和知名服务 CDN 速度，输出
+  严格 v2 `dnsqualify.json`。
 - Core 不理解测试报告或候选评分，只在 `dnsqualify.json` 存在时严格验证并
   将带有已验证 WAN ECS 的 Google DoH 套用到经过测量的窄域名集合。
 - 范围哈希、ECS 来源、WAN 接口或 30 分钟证据过期时间缺失时，Core 会明确
   拒绝渲染，不会沿用 v1 或猜测替代值。
 - 证据正常到期时，LuCI 会明确显示最佳化已停用，Core 继续生成加密 DNS 基线；
   文件格式损坏、来源冲突或 provenance 缺失仍然阻塞渲染。
-- dnsqualify 会在测量前后各执行一次大陆 STUN；mapped address 或 STUN server IP
+- dnsqualify 会在测量前后重复同一个已选公网观测方法；地址或 endpoint IP
   变化会拒绝输出。LuCI 也会再次确认 WAN device；变化时恢复旧配置。证据 30
   分钟后过期。
 - 当前 LuCI 流程明确要求 WAN IPv4，并生成 `/24` ECS；没有 IPv4 时直接失败，

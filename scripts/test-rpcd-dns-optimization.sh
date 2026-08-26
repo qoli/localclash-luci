@@ -94,6 +94,7 @@ jsonfilter() {
 		@.ecs.interface) sed -n 's/.*"ecs":.*"interface": *"\([^"]*\)".*/\1/p' "${input}" ;;
 		@.ecs.server) sed -n 's/.*"ecs":.*"server": *"\([^"]*\)".*/\1/p' "${input}" ;;
 		@.ecs.server_ip) sed -n 's/.*"ecs":.*"server_ip": *"\([^"]*\)".*/\1/p' "${input}" ;;
+		@.ecs.country_code) sed -n 's/.*"ecs":.*"country_code": *"\([^"]*\)".*/\1/p' "${input}" ;;
 		@.measurement.generated_at) sed -n 's/.*"generated_at": *"\([^"]*\)".*/\1/p' "${input}" ;;
 		@.measurement.expires_at) sed -n 's/.*"expires_at": *"\([^"]*\)".*/\1/p' "${input}" ;;
 	esac
@@ -172,6 +173,23 @@ printf '%s\n' "$status_result" | grep -q '"prefix":"114.114.114.0/24"' || fail_t
 printf '%s\n' "$status_result" | grep -q '"source":"stun_xor_mapped_address_mainland"' || fail_test "status did not report STUN observation provenance: ${status_result}"
 printf '%s\n' "$status_result" | grep -q '"server":"stun.chat.bilibili.com:3478"' || fail_test "status did not report mainland STUN server: ${status_result}"
 printf '%s\n' "$status_result" | grep -q '"binary_version":"v0.1.0-41"' || fail_test "status did not report binary version: ${status_result}"
+
+cp "${STATE_DIR}/dnsqualify.json" "${tmp_dir}/stun-config.json"
+sed -e 's/stun_xor_mapped_address_mainland/https_json_ipapi_is/' \
+	-e 's/stun.chat.bilibili.com:3478/api.ipapi.is:443/' \
+	-e 's/106.12.251.193/5.223.55.72/' \
+	-e 's/"server_ip": "5.223.55.72"/"server_ip": "5.223.55.72", "country_code": "CN"/' \
+	"${tmp_dir}/stun-config.json" > "${STATE_DIR}/dnsqualify.json"
+status_result="$(dnsqualify_status)"
+printf '%s\n' "$status_result" | grep -q '"source":"https_json_ipapi_is"' || fail_test "status did not report JSON observation source: ${status_result}"
+printf '%s\n' "$status_result" | grep -q '"country_code":"CN"' || fail_test "status did not report strict JSON country code: ${status_result}"
+sed 's/"country_code": "CN"/"country_code": "HK"/' "${STATE_DIR}/dnsqualify.json" > "${tmp_dir}/non-cn.json"
+mv "${tmp_dir}/non-cn.json" "${STATE_DIR}/dnsqualify.json"
+if dnsqualify_status > "${tmp_dir}/non-cn-status.json"; then
+	fail_test "non-CN JSON observation unexpectedly enabled optimization"
+fi
+grep -q '"code":"dnsqualify_country_invalid"' "${tmp_dir}/non-cn-status.json" || fail_test "non-CN JSON observation returned wrong error"
+cp "${tmp_dir}/stun-config.json" "${STATE_DIR}/dnsqualify.json"
 
 dnsqualify_timestamp_epoch() { printf '50\n'; }
 status_result="$(dnsqualify_status)"

@@ -3176,7 +3176,7 @@ dnsqualify_ensure() {
 }
 
 dnsqualify_status() {
-	local config version scope_type scope_id candidate source transport endpoint ecs_prefix ecs_source ecs_interface ecs_server ecs_server_ip generated expires expires_epoch now_epoch installed binary_version
+	local config version scope_type scope_id candidate source transport endpoint ecs_prefix ecs_source ecs_interface ecs_server ecs_server_ip ecs_country_code ecs_country_json generated expires expires_epoch now_epoch installed binary_version
 	config="$(dnsqualify_config_path)" || return 1
 	installed=false
 	binary_version=""
@@ -3200,6 +3200,7 @@ dnsqualify_status() {
 	ecs_interface="$(jsonfilter -i "$config" -e '@.ecs.interface' 2>/dev/null || true)"
 	ecs_server="$(jsonfilter -i "$config" -e '@.ecs.server' 2>/dev/null || true)"
 	ecs_server_ip="$(jsonfilter -i "$config" -e '@.ecs.server_ip' 2>/dev/null || true)"
+	ecs_country_code="$(jsonfilter -i "$config" -e '@.ecs.country_code' 2>/dev/null || true)"
 	generated="$(jsonfilter -i "$config" -e '@.measurement.generated_at' 2>/dev/null || true)"
 	expires="$(jsonfilter -i "$config" -e '@.measurement.expires_at' 2>/dev/null || true)"
 	if [ "$version" != "2" ] || [ "$scope_type" != "domains" ] || [ -z "$scope_id" ] ||
@@ -3209,6 +3210,15 @@ dnsqualify_status() {
 		fail "dnsqualify_config_invalid" "dnsqualify 配置存在但不完整；Core 渲染也会明确拒绝该配置。"
 		return 1
 	fi
+	case "$ecs_source" in
+		stun_xor_mapped_address_mainland)
+			[ -z "$ecs_country_code" ] || { fail "dnsqualify_config_invalid" "STUN 公网观测不应声明未测量的国家代码。"; return 1; }
+			;;
+		https_json_ipapi_is)
+			[ "$ecs_country_code" = "CN" ] || { fail "dnsqualify_country_invalid" "HTTPS JSON 公网观测必须明确返回 country code CN。"; return 1; }
+			;;
+		*) fail "dnsqualify_source_invalid" "dnsqualify 公网观测来源不受支持。"; return 1 ;;
+	esac
 	expires_epoch="$(dnsqualify_timestamp_epoch "$expires" 2>/dev/null || true)"
 	now_epoch="$(dnsqualify_now_epoch 2>/dev/null || true)"
 	case "$expires_epoch:$now_epoch" in
@@ -3218,7 +3228,9 @@ dnsqualify_status() {
 		ok '"status":{"enabled":false,"mode":"secure_baseline","scope":"default","disabled_reason":"expired","expired_at":"'"$(json_escape "$expires")"'","retained_config":true},"binary_installed":'"$installed"',"binary_version":"'"$(json_escape "$binary_version")"'"'
 		return 0
 	fi
-	ok '"status":{"enabled":true,"mode":"qualified_ecs","scope":"'"$(json_escape "$scope_id")"'","resolver":{"candidate_id":"'"$(json_escape "$candidate")"'","source":"'"$(json_escape "$source")"'","transport":"'"$(json_escape "$transport")"'","endpoint":"'"$(json_escape "$endpoint")"'"},"ecs":{"prefix":"'"$(json_escape "$ecs_prefix")"'","source":"'"$(json_escape "$ecs_source")"'","interface":"'"$(json_escape "$ecs_interface")"'","server":"'"$(json_escape "$ecs_server")"'","server_ip":"'"$(json_escape "$ecs_server_ip")"'"},"generated_at":"'"$(json_escape "$generated")"'","expires_at":"'"$(json_escape "$expires")"'"},"binary_installed":'"$installed"',"binary_version":"'"$(json_escape "$binary_version")"'"'
+	ecs_country_json=""
+	[ -z "$ecs_country_code" ] || ecs_country_json=',"country_code":"'"$(json_escape "$ecs_country_code")"'"'
+	ok '"status":{"enabled":true,"mode":"qualified_ecs","scope":"'"$(json_escape "$scope_id")"'","resolver":{"candidate_id":"'"$(json_escape "$candidate")"'","source":"'"$(json_escape "$source")"'","transport":"'"$(json_escape "$transport")"'","endpoint":"'"$(json_escape "$endpoint")"'"},"ecs":{"prefix":"'"$(json_escape "$ecs_prefix")"'","source":"'"$(json_escape "$ecs_source")"'","interface":"'"$(json_escape "$ecs_interface")"'","server":"'"$(json_escape "$ecs_server")"'","server_ip":"'"$(json_escape "$ecs_server_ip")"'"'"$ecs_country_json"'},"generated_at":"'"$(json_escape "$generated")"'","expires_at":"'"$(json_escape "$expires")"'"},"binary_installed":'"$installed"',"binary_version":"'"$(json_escape "$binary_version")"'"'
 }
 
 dnsqualify_run() {
