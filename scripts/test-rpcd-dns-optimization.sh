@@ -22,44 +22,34 @@ if [ "${1:-}" = "--version" ]; then
 	exit 0
 fi
 output=""
+report_output=""
 ecs_interface=""
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 		--output) output="$2"; shift 2 ;;
+		--report-output) report_output="$2"; shift 2 ;;
 		--ecs-interface) ecs_interface="$2"; shift 2 ;;
 		*) shift ;;
 	esac
 done
 [ -n "$output" ] || exit 2
+[ -n "$report_output" ] || exit 3
 [ "$ecs_interface" = "wan-test" ] || exit 4
 printf '2026-08-01T06:16:32+08:00 dnsqualify 进度：仍在运行：正在进行 DNS 基础测试，第 1/3 轮；已用时 15 秒\n' >&2
 cat > "$output" <<'JSON'
 {
   "version": 2,
-  "scope": {
-    "type": "domains",
-    "id": "mainland-known-services-v2",
-    "domains": ["cdn.fastly.steamstatic.com", "devstreaming-cdn.apple.com"],
-    "domain_sha256": "7613f0e62ec3d87bcb963e2d471b33983002f538c239771a7195d22447b3078a"
-  },
-  "resolver": {
-    "candidate_id": "google-doh-wan-ecs",
-    "source": "global_encrypted_ecs",
-    "transport": "doh",
-    "endpoint": "https://8.8.8.8/dns-query",
-    "proxy": "DNSProxy"
-  },
-  "ecs": {"prefix": "114.114.114.0/24", "source": "stun_xor_mapped_address_mainland", "interface": "wan-test", "server": "stun.chat.bilibili.com:3478", "server_ip": "106.12.251.193"},
-  "measurement": {
-    "report_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "report_finished_at": "2026-07-31T08:00:00Z",
-    "resolv_path": "/tmp/resolv.conf.d/resolv.conf.auto",
-    "generated_at": "2026-07-31T08:00:01Z",
-    "expires_at": "2026-07-31T08:30:01Z"
+  "expires_at": "2026-07-31T08:30:01Z",
+  "nameserver_policy": {
+    "cdn.fastly.steamstatic.com": ["https://8.8.8.8/dns-query#DNSProxy&ecs=114.114.114.0/24&ecs-override=true"],
+    "devstreaming-cdn.apple.com": ["https://8.8.8.8/dns-query#DNSProxy&ecs=114.114.114.0/24&ecs-override=true"]
   }
 }
 JSON
-printf '{"output":"%s","config":{"resolver":{"candidate_id":"google-doh-wan-ecs","endpoint":"https://8.8.8.8/dns-query"}}}\n' "$output"
+cat > "$report_output" <<'JSON'
+{"version":1,"measurement":{"finished_at":"2026-07-31T08:00:00Z","service_catalog":{"id":"mainland-known-services-v2"}},"selection":{"selected_id":"google-doh-wan-ecs","candidates":[{"id":"google-doh-wan-ecs","source":"global_encrypted_ecs","transport":"doh","endpoint":"https://8.8.8.8/dns-query","ecs_prefix":"114.114.114.0/24","ecs_source":"stun_xor_mapped_address_mainland","ecs_interface":"wan-test","ecs_server":"stun.chat.bilibili.com:3478","ecs_server_ip":"106.12.251.193"}]},"selected":{"id":"google-doh-wan-ecs","source":"global_encrypted_ecs","transport":"doh","endpoint":"https://8.8.8.8/dns-query","ecs_prefix":"114.114.114.0/24","ecs_source":"stun_xor_mapped_address_mainland","ecs_interface":"wan-test","ecs_server":"stun.chat.bilibili.com:3478","ecs_server_ip":"106.12.251.193"},"expires_at":"2026-07-31T08:30:01Z"}
+JSON
+printf '{"output":"%s","recommended_id":"google-doh-wan-ecs"}\n' "$output"
 SH
 chmod +x "${DNSQUALIFY}"
 
@@ -83,20 +73,19 @@ jsonfilter() {
 	done
 	case "${expression:-}" in
 		@.version) sed -n 's/.*"version": *\([0-9][0-9]*\).*/\1/p' "${input}" ;;
-		@.scope.type) sed -n 's/.*"type": *"\([^"]*\)".*/\1/p' "${input}" ;;
-		@.scope.id) sed -n 's/.*"id": *"\([^"]*\)".*/\1/p' "${input}" ;;
-		@.resolver.candidate_id) sed -n 's/.*"candidate_id": *"\([^"]*\)".*/\1/p' "${input}" ;;
-		@.resolver.source) sed -n 's/.*"source": *"\([^"]*\)".*/\1/p' "${input}" ;;
-		@.resolver.transport) sed -n 's/.*"transport": *"\([^"]*\)".*/\1/p' "${input}" ;;
-		@.resolver.endpoint) sed -n 's/.*"endpoint": *"\([^"]*\)".*/\1/p' "${input}" ;;
-		@.ecs.prefix) sed -n 's/.*"ecs":.*"prefix": *"\([^"]*\)".*/\1/p' "${input}" ;;
-		@.ecs.source) sed -n 's/.*"ecs":.*"source": *"\([^"]*\)".*/\1/p' "${input}" ;;
-		@.ecs.interface) sed -n 's/.*"ecs":.*"interface": *"\([^"]*\)".*/\1/p' "${input}" ;;
-		@.ecs.server) sed -n 's/.*"ecs":.*"server": *"\([^"]*\)".*/\1/p' "${input}" ;;
-		@.ecs.server_ip) sed -n 's/.*"ecs":.*"server_ip": *"\([^"]*\)".*/\1/p' "${input}" ;;
-		@.ecs.country_code) sed -n 's/.*"ecs":.*"country_code": *"\([^"]*\)".*/\1/p' "${input}" ;;
-		@.measurement.generated_at) sed -n 's/.*"generated_at": *"\([^"]*\)".*/\1/p' "${input}" ;;
-		@.measurement.expires_at) sed -n 's/.*"expires_at": *"\([^"]*\)".*/\1/p' "${input}" ;;
+		@.expires_at) sed -n 's/.*"expires_at": *"\([^"]*\)".*/\1/p' "${input}" ;;
+		@.selection.selected_id) sed -n 's/.*"selected_id": *"\([^"]*\)".*/\1/p' "${input}" ;;
+		@.measurement.service_catalog.id) sed -n 's/.*"service_catalog": *{"id": *"\([^"]*\)".*/\1/p' "${input}" ;;
+		@.measurement.finished_at) sed -n 's/.*"finished_at": *"\([^"]*\)".*/\1/p' "${input}" ;;
+		@.selected.ecs_source) sed -n 's/.*"selected":.*"ecs_source": *"\([^"]*\)".*/\1/p' "${input}" ;;
+		@.selected.ecs_interface) sed -n 's/.*"selected":.*"ecs_interface": *"\([^"]*\)".*/\1/p' "${input}" ;;
+		@.selected.ecs_server_ip) sed -n 's/.*"selected":.*"ecs_server_ip": *"\([^"]*\)".*/\1/p' "${input}" ;;
+		@.selected.ecs_server) sed -n 's/.*"selected":.*"ecs_server": *"\([^"]*\)".*/\1/p' "${input}" ;;
+		@.selected.ecs_country_code) sed -n 's/.*"selected":.*"ecs_country_code": *"\([^"]*\)".*/\1/p' "${input}" ;;
+		@.selected.ecs_prefix) sed -n 's/.*"selected":.*"ecs_prefix": *"\([^"]*\)".*/\1/p' "${input}" ;;
+		@.selected.transport) sed -n 's/.*"selected":.*"transport": *"\([^"]*\)".*/\1/p' "${input}" ;;
+		@.selected.endpoint) sed -n 's/.*"selected":.*"endpoint": *"\([^"]*\)".*/\1/p' "${input}" ;;
+		@.selected.source) sed -n 's/.*"selected":.*"source": *"\([^"]*\)".*/\1/p' "${input}" ;;
 	esac
 }
 
@@ -157,7 +146,12 @@ dnsqualify_ensure() {
 result="$(dnsqualify_run)"
 printf '%s\n' "$result" | grep -q '"restart_required":true' || fail_test "successful dnsqualify run did not require explicit restart: ${result}"
 [ -f "${STATE_DIR}/dnsqualify.json" ] || fail_test "standalone dnsqualify config was not created"
-grep -q '"candidate_id": "google-doh-wan-ecs"' "${STATE_DIR}/dnsqualify.json" || fail_test "standalone config was not preserved"
+[ -f "${STATE_DIR}/dnsqualify-report.json" ] || fail_test "dnsqualify evidence report was not published"
+grep -q '"nameserver_policy"' "${STATE_DIR}/dnsqualify.json" || fail_test "Core overlay was not preserved"
+if grep -Eq 'candidate_id|ecs_source|country_code|server_ip|interface' "${STATE_DIR}/dnsqualify.json"; then
+	fail_test "Core overlay leaked dnsqualify implementation provenance"
+fi
+grep -q '"selected_id":"google-doh-wan-ecs"' "${STATE_DIR}/dnsqualify-report.json" || fail_test "selection provenance was not kept in the report"
 grep -q '^config render --json$' "${tmp_dir}/trace" || fail_test "Core did not consume config through normal render"
 grep -q '^mihomo config-test --json$' "${tmp_dir}/trace" || fail_test "rendered config was not tested"
 grep -q 'dnsqualify 进度：仍在运行' "${LOG}" || fail_test "dnsqualify stderr progress was not preserved in the live task log"
@@ -174,22 +168,20 @@ printf '%s\n' "$status_result" | grep -q '"source":"stun_xor_mapped_address_main
 printf '%s\n' "$status_result" | grep -q '"server":"stun.chat.bilibili.com:3478"' || fail_test "status did not report mainland STUN server: ${status_result}"
 printf '%s\n' "$status_result" | grep -q '"binary_version":"v0.1.0-41"' || fail_test "status did not report binary version: ${status_result}"
 
-cp "${STATE_DIR}/dnsqualify.json" "${tmp_dir}/stun-config.json"
-sed -e 's/stun_xor_mapped_address_mainland/https_json_ipapi_is/' \
-	-e 's/stun.chat.bilibili.com:3478/api.ipapi.is:443/' \
-	-e 's/106.12.251.193/5.223.55.72/' \
-	-e 's/"server_ip": "5.223.55.72"/"server_ip": "5.223.55.72", "country_code": "CN"/' \
-	"${tmp_dir}/stun-config.json" > "${STATE_DIR}/dnsqualify.json"
+cp "${STATE_DIR}/dnsqualify-report.json" "${tmp_dir}/stun-report.json"
+sed -e 's/stun_xor_mapped_address_mainland/https_json_ipapi_is/g' \
+	-e 's/stun.chat.bilibili.com:3478/api.ipapi.is:443/g' \
+	-e 's/106.12.251.193/5.223.55.72/g' \
+	-e 's/"ecs_server_ip":"5.223.55.72"/"ecs_server_ip":"5.223.55.72","ecs_country_code":"CN"/g' \
+	"${tmp_dir}/stun-report.json" > "${STATE_DIR}/dnsqualify-report.json"
 status_result="$(dnsqualify_status)"
 printf '%s\n' "$status_result" | grep -q '"source":"https_json_ipapi_is"' || fail_test "status did not report JSON observation source: ${status_result}"
 printf '%s\n' "$status_result" | grep -q '"country_code":"CN"' || fail_test "status did not report strict JSON country code: ${status_result}"
-sed 's/"country_code": "CN"/"country_code": "HK"/' "${STATE_DIR}/dnsqualify.json" > "${tmp_dir}/non-cn.json"
-mv "${tmp_dir}/non-cn.json" "${STATE_DIR}/dnsqualify.json"
-if dnsqualify_status > "${tmp_dir}/non-cn-status.json"; then
-	fail_test "non-CN JSON observation unexpectedly enabled optimization"
-fi
-grep -q '"code":"dnsqualify_country_invalid"' "${tmp_dir}/non-cn-status.json" || fail_test "non-CN JSON observation returned wrong error"
-cp "${tmp_dir}/stun-config.json" "${STATE_DIR}/dnsqualify.json"
+sed 's/"ecs_country_code":"CN"/"ecs_country_code":"HK"/g' "${STATE_DIR}/dnsqualify-report.json" > "${tmp_dir}/non-cn.json"
+mv "${tmp_dir}/non-cn.json" "${STATE_DIR}/dnsqualify-report.json"
+status_result="$(dnsqualify_status)"
+printf '%s\n' "$status_result" | grep -q '"country_code":"HK"' || fail_test "LuCI did not remain a presentation-only report reader"
+cp "${tmp_dir}/stun-report.json" "${STATE_DIR}/dnsqualify-report.json"
 
 dnsqualify_timestamp_epoch() { printf '50\n'; }
 status_result="$(dnsqualify_status)"

@@ -196,13 +196,13 @@ localClash 现在提供 `一键更新`：更新 LuCI 界面、localClash 核心�
   路径严格要求 `country code == CN`。需要 Token 或文字解析的端点不纳入。
   `network.interface.wan` 的接口地址与海外 STUN 不作为公网身份。程序再测试
   Google DoH + WAN ECS 的 DNS 答案、网站连通性和知名服务 CDN 速度，输出
-  严格 v2 `dnsqualify.json`。
-- Core 不理解测试报告或候选评分，只在 `dnsqualify.json` 存在时严格验证并
-  将带有已验证 WAN ECS 的 Google DoH 套用到经过测量的窄域名集合。
-- 范围哈希、ECS 来源、WAN 接口或 30 分钟证据过期时间缺失时，Core 会明确
-  拒绝渲染，不会沿用 v1 或猜测替代值。
+  v2 `dnsqualify.json` nameserver-policy overlay，并另存完整测试与选择报告。
+- Core 不理解测试报告、候选评分、STUN、HTTP provider、WAN 或 country code；
+  它只检查 overlay 版本与过期时间、拒绝覆盖既有 policy，并把完整生成结果交给
+  `mihomo -t`。LuCI 只从独立报告显示候选和公网观测 provenance。
 - 证据正常到期时，LuCI 会明确显示最佳化已停用，Core 继续生成加密 DNS 基线；
-  文件格式损坏、来源冲突或 provenance 缺失仍然阻塞渲染。
+  overlay 格式损坏或 policy 冲突仍然阻塞渲染；report 缺失只影响 LuCI 的诊断
+  详情，不会让 LuCI 代替 dnsqualify 重新判断 qualification。
 - dnsqualify 会在测量前后重复同一个已选公网观测方法；地址或 endpoint IP
   变化会拒绝输出。LuCI 也会再次确认 WAN device；变化时恢复旧配置。证据 30
   分钟后过期。
