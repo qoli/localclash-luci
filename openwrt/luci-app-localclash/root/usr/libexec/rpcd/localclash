@@ -689,7 +689,7 @@ luci_update() {
 		fail "luci_package_download_failed" "无法下载 LuCI 安装包校验文件。"
 		return 1
 	fi
-	expected="$(awk '{print $1; exit}' "$sha_file" 2>/dev/null)"
+	expected="$(sha256_expected_from_file "$sha_file")"
 	if [ -z "$expected" ]; then
 		rm -rf "$tmpdir"
 		fail "luci_package_checksum_failed" "LuCI 安装包校验文件为空或格式错误。"
@@ -1039,13 +1039,13 @@ run_with_heartbeat() {
 }
 
 fetch_single_url() {
-	local url output downloader stderr_file started completed elapsed rc bytes host line
+	local url output downloader stderr_file started completed elapsed rc bytes host line failure_reason
 	url="$1"
 	output="$2"
 	host="$(download_url_host "$url")"
 	stderr_file="${output}.fetch-stderr.$$"
 	started="$(now_epoch)"
-	rm -f "$stderr_file"
+	rm -f "$stderr_file" "$output"
 	if command -v uclient-fetch >/dev/null 2>&1; then
 		downloader="uclient-fetch"
 		log_line "下载：开始 downloader=$downloader host=$host timeout=${FETCH_TIMEOUT}s"
@@ -1081,9 +1081,20 @@ fetch_single_url() {
 	case "$bytes" in
 		""|*[!0-9]*) bytes=0 ;;
 	esac
+	failure_reason=""
+	if [ "$rc" -eq 0 ] && [ ! -f "$output" ]; then
+		rc=1
+		failure_reason="output_missing"
+	elif [ "$rc" -eq 0 ] && [ "$bytes" -eq 0 ]; then
+		rc=1
+		failure_reason="output_empty"
+	fi
 	if [ "$rc" -eq 0 ]; then
 		log_line "下载：成功 downloader=$downloader host=$host elapsed=${elapsed}s bytes=$bytes exit_code=$rc"
 	else
+		if [ -n "$failure_reason" ]; then
+			log_line "下载：诊断 reason=$failure_reason detail=下载器退出码为0但未生成有效输出"
+		fi
 		if [ "$downloader" = "uclient-fetch" ] && grep -q '^Failed to send request: Operation not permitted$' "$stderr_file" 2>/dev/null; then
 			log_line "下载：诊断 reason=connect_failed detail=uclient-fetch将内部连接错误码1误显示为Operation_not_permitted"
 		fi
@@ -1138,9 +1149,14 @@ log_download_dns_context() {
 }
 
 fetch_with_watchdog() {
-	local label pid watchdog elapsed rc
+	local label pid watchdog elapsed rc watchdog_dir timeout_marker
 	label="$1"
 	shift
+	watchdog_dir="$(mktemp -d /tmp/localclash-fetch-watchdog.XXXXXX)" || {
+		log_line "下载：失败 reason=watchdog_state_unavailable"
+		return 1
+	}
+	timeout_marker="$watchdog_dir/timed-out"
 	"$@" &
 	pid="$!"
 	(
@@ -1151,6 +1167,8 @@ fetch_with_watchdog() {
 				elapsed=$((elapsed + 5))
 				log_line "下载：等待 ${label}（${elapsed}s）"
 				if [ "$elapsed" -ge "$FETCH_TIMEOUT" ]; then
+					: > "$timeout_marker"
+					log_line "下载：超时 ${label} timeout=${FETCH_TIMEOUT}s"
 					kill "$pid" 2>/dev/null || exit 0
 					sleep 2
 					kill -9 "$pid" 2>/dev/null || true
@@ -1163,6 +1181,12 @@ fetch_with_watchdog() {
 	wait "$pid"
 	rc="$?"
 	kill "$watchdog" 2>/dev/null || true
+	wait "$watchdog" 2>/dev/null || true
+	if [ -f "$timeout_marker" ]; then
+		rm -rf "$watchdog_dir"
+		return 124
+	fi
+	rm -rf "$watchdog_dir"
 	return "$rc"
 }
 
@@ -1357,6 +1381,21 @@ github_download_candidates() {
 	printf '%s\n' "$url"
 }
 
+commit_download_output() {
+	local tmp output
+	tmp="$1"
+	output="$2"
+	if mv "$tmp" "$output"; then
+		return 0
+	fi
+	log_line "下载：提交失败 reason=atomic_move_failed"
+	return 1
+}
+
+sha256_expected_from_file() {
+	awk 'NF && $1 ~ /^[0-9A-Fa-f]+$/ && length($1) == 64 {print $1; exit}' "$1" 2>/dev/null | tr 'A-F' 'a-f'
+}
+
 fetch_url() {
 	local url output tmp candidate
 	url="$1"
@@ -1366,7 +1405,7 @@ fetch_url() {
 	for candidate in $(github_download_candidates "$url"); do
 		log_line "下载：尝试 $candidate"
 		if fetch_single_url "$candidate" "$tmp"; then
-			mv "$tmp" "$output"
+			commit_download_output "$tmp" "$output" || return 1
 			note_github_candidate_success "$url" "$candidate"
 			return 0
 		fi
@@ -1385,7 +1424,7 @@ fetch_url_direct_first() {
 	rm -f "$tmp"
 	log_line "下载：尝试 $url"
 	if fetch_single_url "$url" "$tmp"; then
-		mv "$tmp" "$output"
+		commit_download_output "$tmp" "$output" || return 1
 		return 0
 	fi
 	rm -f "$tmp"
@@ -1397,7 +1436,7 @@ fetch_url_direct_first() {
 		fi
 		log_line "下载：尝试 $candidate"
 		if fetch_single_url "$candidate" "$tmp"; then
-			mv "$tmp" "$output"
+			commit_download_output "$tmp" "$output" || return 1
 			note_github_candidate_success "$url" "$candidate"
 			return 0
 		fi
@@ -1417,7 +1456,7 @@ fetch_manifest() {
 		log_line "下载：尝试 $candidate"
 		if fetch_single_url "$candidate" "$tmp"; then
 			if jsonfilter -i "$tmp" -e '@.version' >/dev/null 2>&1; then
-				mv "$tmp" "$output"
+				commit_download_output "$tmp" "$output" || return 1
 				note_github_candidate_success "$url" "$candidate"
 				return 0
 			fi
@@ -1443,7 +1482,7 @@ fetch_url_verified_direct_first() {
 	if fetch_single_url "$url" "$tmp"; then
 		actual_sha="$(sha256sum "$tmp" | cut -d ' ' -f 1)"
 		if [ "$actual_sha" = "$expected_sha" ]; then
-			mv "$tmp" "$output"
+			commit_download_output "$tmp" "$output" || return 1
 			return 0
 		fi
 		log_line "下载：$url 校验和不匹配"
@@ -1459,7 +1498,7 @@ fetch_url_verified_direct_first() {
 		if fetch_single_url "$candidate" "$tmp"; then
 			actual_sha="$(sha256sum "$tmp" | cut -d ' ' -f 1)"
 			if [ "$actual_sha" = "$expected_sha" ]; then
-				mv "$tmp" "$output"
+				commit_download_output "$tmp" "$output" || return 1
 				note_github_candidate_success "$url" "$candidate"
 				return 0
 			fi
@@ -1485,7 +1524,7 @@ fetch_url_verified() {
 		if fetch_single_url "$candidate" "$tmp"; then
 			actual_sha="$(sha256sum "$tmp" | cut -d ' ' -f 1)"
 			if [ "$actual_sha" = "$expected_sha" ]; then
-				mv "$tmp" "$output"
+				commit_download_output "$tmp" "$output" || return 1
 				note_github_candidate_success "$url" "$candidate"
 				return 0
 			fi

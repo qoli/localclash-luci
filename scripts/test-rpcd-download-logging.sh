@@ -9,8 +9,33 @@ trap 'rm -rf "${tmp_dir}"' EXIT
 mkdir -p "${tmp_dir}/bin"
 cat > "${tmp_dir}/bin/uclient-fetch" <<'EOF'
 #!/usr/bin/env sh
-printf 'Failed to send request: Operation not permitted\n' >&2
-exit 4
+output=""
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		-O) output="$2"; shift 2 ;;
+		*) shift ;;
+	esac
+done
+case "${MOCK_FETCH_MODE:-failure}" in
+	failure)
+		printf 'Failed to send request: Operation not permitted\n' >&2
+		exit 4
+		;;
+	missing)
+		exit 0
+		;;
+	empty)
+		: > "$output"
+		exit 0
+		;;
+	timeout)
+		trap 'exit 0' TERM
+		while :; do sleep 1; done
+		;;
+	*)
+		exit 64
+		;;
+esac
 EOF
 cat > "${tmp_dir}/bin/nslookup" <<'EOF'
 #!/usr/bin/env sh
@@ -43,6 +68,45 @@ grep -Fq '下载器[uclient-fetch]：Failed to send request: Operation not permi
 grep -q 'reason=connect_failed' "$LOG"
 grep -q 'DNS诊断 host=example.invalid exit_code=0 result=.*192.0.2.1' "$LOG"
 grep -q '下载：失败 downloader=uclient-fetch host=example.invalid .* bytes=0 exit_code=4' "$LOG"
+
+for mode in missing empty; do
+	: > "$LOG"
+	MOCK_FETCH_MODE="$mode"
+	export MOCK_FETCH_MODE
+	if fetch_single_url "https://example.invalid/release.json" "$output" 2>/dev/null; then
+		printf 'test-rpcd-download-logging: %s downloader output unexpectedly succeeded\n' "$mode" >&2
+		exit 1
+	fi
+	grep -q "下载：诊断 reason=output_${mode}" "$LOG"
+	grep -q '下载：失败 downloader=uclient-fetch host=example.invalid .* bytes=0 exit_code=1' "$LOG"
+done
+unset MOCK_FETCH_MODE
+
+: > "$LOG"
+MOCK_FETCH_MODE=timeout
+export MOCK_FETCH_MODE
+FETCH_TIMEOUT=1
+if fetch_single_url "https://example.invalid/release.json" "$output" 2>/dev/null; then
+	printf 'test-rpcd-download-logging: watchdog timeout unexpectedly succeeded\n' >&2
+	exit 1
+fi
+unset MOCK_FETCH_MODE
+grep -q '下载：超时 https://example.invalid/release.json timeout=1s' "$LOG"
+grep -q '下载：失败 downloader=uclient-fetch host=example.invalid .* bytes=0 exit_code=124' "$LOG"
+
+: > "$LOG"
+printf 'payload\n' > "${tmp_dir}/commit-source"
+if commit_download_output "${tmp_dir}/commit-source" "${tmp_dir}/missing/output" 2>/dev/null; then
+	printf 'test-rpcd-download-logging: failed atomic move unexpectedly succeeded\n' >&2
+	exit 1
+fi
+grep -q '下载：提交失败 reason=atomic_move_failed' "$LOG"
+[ -f "${tmp_dir}/commit-source" ]
+
+printf '%s  package.ipk\n' 'ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789' > "${tmp_dir}/valid.sha256"
+[ "$(sha256_expected_from_file "${tmp_dir}/valid.sha256")" = 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789' ]
+printf 'not-a-sha256 package.ipk\n' > "${tmp_dir}/invalid.sha256"
+[ -z "$(sha256_expected_from_file "${tmp_dir}/invalid.sha256")" ]
 
 : > "$LOG"
 for line in $(seq 1 120); do
