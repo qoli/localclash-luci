@@ -3014,7 +3014,34 @@ dnsqualify_installed_version() {
 }
 
 dnsqualify_timestamp_epoch() {
-	date -d "$1" +%s 2>/dev/null
+	local value base suffix epoch sign hours minutes offset
+	value="$1"
+	base="$(printf '%.19s' "$value")"
+	[ "${#base}" -eq 19 ] || return 1
+	suffix="${value#"$base"}"
+	suffix="$(printf '%s' "$suffix" | sed 's/^\.[0-9][0-9]*//')"
+	case "$suffix" in
+		Z)
+			offset=0
+			;;
+		[+-][0-9][0-9]:[0-9][0-9])
+			sign="${suffix%${suffix#?}}"
+			hours="${suffix#?}"
+			hours="${hours%%:*}"
+			minutes="${suffix##*:}"
+			hours="${hours#0}"
+			minutes="${minutes#0}"
+			[ -n "$hours" ] || hours=0
+			[ -n "$minutes" ] || minutes=0
+			[ "$hours" -le 23 ] && [ "$minutes" -le 59 ] || return 1
+			offset=$((hours * 3600 + minutes * 60))
+			[ "$sign" = "+" ] || offset=$((-offset))
+			;;
+		*) return 1 ;;
+	esac
+	epoch="$(date -u -D '%Y-%m-%dT%H:%M:%S' -d "$base" +%s 2>/dev/null)" ||
+		epoch="$(date -j -u -f '%Y-%m-%dT%H:%M:%S' "$base" +%s 2>/dev/null)" || return 1
+	printf '%s\n' $((epoch - offset))
 }
 
 dnsqualify_now_epoch() {

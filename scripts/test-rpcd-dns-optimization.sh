@@ -143,6 +143,11 @@ network_flush_cache() {
 }
 dnsqualify_wan_ecs
 [ "$DNSQUALIFY_ECS_INTERFACE" = "wan-test" ] || fail_test "WAN device identity was not preserved"
+[ "$(dnsqualify_timestamp_epoch '2026-08-26T09:00:00Z')" = "1787734800" ] || fail_test "UTC RFC3339 timestamp was not parsed"
+[ "$(dnsqualify_timestamp_epoch '2026-08-26T17:00:00.123456789+08:00')" = "1787734800" ] || fail_test "fractional offset RFC3339 timestamp was not parsed"
+if dnsqualify_timestamp_epoch '2026-08-26 17:00:00' >/dev/null 2>&1; then
+	fail_test "non-RFC3339 timestamp was unexpectedly accepted"
+fi
 dnsqualify_ensure() {
 	ok '"changed":false,"summary":"dnsqualify 已安装。","dnsqualify":{"installed":true,"version":"v0.1.0-41"}}'
 }
