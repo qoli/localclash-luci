@@ -2,6 +2,7 @@
 
 CORE="${LOCALCLASH_CORE:-/usr/local/bin/localclash}"
 DNSQUALIFY="${LOCALCLASH_DNSQUALIFY:-/usr/local/bin/dnsqualify}"
+DNSQUALIFY_ECS_DOH_PROXY="${LOCALCLASH_DNSQUALIFY_ECS_DOH_PROXY:-http://127.0.0.1:7894}"
 STATE_DIR="${LOCALCLASH_STATE_DIR:-/root/localclash}"
 SERVICE="/etc/init.d/localclash-mcp"
 LOG="/tmp/localclash-helper.log"
@@ -3330,6 +3331,7 @@ dnsqualify_run() {
 	if ! "$DNSQUALIFY" --output "$config" \
 		--report-output "$report_tmp" \
 		--ecs-interface "$DNSQUALIFY_ECS_INTERFACE" \
+		--ecs-doh-proxy "$DNSQUALIFY_ECS_DOH_PROXY" \
 		--json > "$result_tmp" 2>>"$LOG"; then
 		rm -f "$backup" "$install_tmp" "$result_tmp" "$render_tmp" "$test_tmp" "$report_tmp"
 		fail "dnsqualify_run_failed" "独立 dnsqualify 测试失败；现有配置保持不变。"

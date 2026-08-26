@@ -536,7 +536,7 @@ function dnsOptimizationBody(data) {
 			])
 		]),
 		E('p', { 'class': 'localclash-muted' }, [
-			_('dnsqualify 由 LuCI 按需运行。它依次尝试绑定 WAN 设备的中国大陆 STUN 和 ipapi.is JSON；JSON 结果必须明确返回国家代码 CN。它不使用 WAN 接口地址、海外 STUN、Token 或文字回显；测量前后地址或端点解析发生变化会失败。结果截断为 /24，并只应用于通过测试的窄域名集合。')
+			_('dnsqualify 由 LuCI 按需运行。它依次尝试绑定 WAN 设备的中国大陆 STUN 和 ipapi.is JSON；JSON 结果必须明确返回国家代码 CN。Google ECS 查询通过 Mihomo 的 DNSProxy 专用本地入口测量，与实际配置使用相同出口；该入口不可用时任务会明确失败，不会改为直连。结果截断为 /24，并只应用于通过测试的窄域名集合。')
 		]),
 		status.disabled_reason === 'expired' ? E('p', { 'class': 'alert-message warning' }, [
 			formatText(_('dnsqualify 证据已于 %s 过期；最佳化已明确停用，Core 将继续生成加密 DNS 基线。'), status.expired_at || '-')

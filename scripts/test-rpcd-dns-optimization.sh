@@ -24,17 +24,20 @@ fi
 output=""
 report_output=""
 ecs_interface=""
+ecs_doh_proxy=""
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 		--output) output="$2"; shift 2 ;;
 		--report-output) report_output="$2"; shift 2 ;;
 		--ecs-interface) ecs_interface="$2"; shift 2 ;;
+		--ecs-doh-proxy) ecs_doh_proxy="$2"; shift 2 ;;
 		*) shift ;;
 	esac
 done
 [ -n "$output" ] || exit 2
 [ -n "$report_output" ] || exit 3
 [ "$ecs_interface" = "wan-test" ] || exit 4
+[ "$ecs_doh_proxy" = "http://127.0.0.1:7894" ] || exit 5
 printf '2026-08-01T06:16:32+08:00 dnsqualify 进度：仍在运行：正在进行 DNS 基础测试，第 1/3 轮；已用时 15 秒\n' >&2
 cat > "$output" <<'JSON'
 {
