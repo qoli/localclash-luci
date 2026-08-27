@@ -132,6 +132,33 @@ call_core() {
 	esac
 }
 
+call_takeover() {
+	trace "call_takeover $*"
+	case "$*" in
+		"status --json")
+			[ "${MOCK_TAKEOVER_STATUS_RC:-0}" -eq 0 ] || { printf '{"ok":false,"code":"mock_status_failed"}\n'; return "$MOCK_TAKEOVER_STATUS_RC"; }
+			printf '%s\n' "${MOCK_TAKEOVER_STATUS}"
+			;;
+		"apply --json")
+			[ "${MOCK_TAKEOVER_APPLY_RC:-0}" -eq 0 ] || { printf '{"ok":false,"code":"mock_apply_failed"}\n'; return "$MOCK_TAKEOVER_APPLY_RC"; }
+			mkdir -p "$(dirname "$TAKEOVER_REPAIR_TICKET")"
+			printf 'applied\n' > "$TAKEOVER_REPAIR_TICKET"
+			printf '{"ok":true,"changed":true,"summary":"applied"}\n'
+			;;
+		"reconcile --desired enabled --json")
+			mkdir -p "$(dirname "$TAKEOVER_REPAIR_TICKET")"
+			printf 'applied\n' > "$TAKEOVER_REPAIR_TICKET"
+			printf '{"ok":true,"changed":false,"status":{"effective":true,"runtime_running":true,"profile_mode":"router"}}\n'
+			;;
+		"stop --json")
+			[ "${MOCK_TAKEOVER_STOP_RC:-0}" -eq 0 ] || { printf '{"ok":false,"code":"mock_stop_failed"}\n'; return "$MOCK_TAKEOVER_STOP_RC"; }
+			rm -f "$TAKEOVER_REPAIR_TICKET" "$TAKEOVER_STATE_STATUS"
+			printf '{"ok":true,"changed":true,"summary":"stopped"}\n'
+			;;
+		*) return 1 ;;
+	esac
+}
+
 : > "${tmp_dir}/trace"
 rm -f "$TAKEOVER_REPAIR_TICKET" "$TAKEOVER_STATE_STATUS" "$BOOT_AUTO_RESTORE_FILE" "$LEGACY_TAKEOVER_INTENT_FILE"
 MOCK_TAKEOVER_STATUS='{"ok":true,"status":{"effective":false,"runtime_running":true,"profile_mode":"router"}}'
@@ -145,8 +172,8 @@ fi
 printf 'applied\n' > "$TAKEOVER_STATE_STATUS"
 result="$(takeover_restore_run)"
 printf '%s\n' "$result" | grep -q '"changed":true' || fail_test "restore should reapply takeover: ${result}"
-grep -q '^call_core takeover status --json$' "${tmp_dir}/trace" || fail_test "restore did not inspect status"
-grep -q '^call_core takeover apply --json$' "${tmp_dir}/trace" || fail_test "restore did not apply takeover"
+grep -q '^call_takeover status --json$' "${tmp_dir}/trace" || fail_test "restore did not inspect status"
+grep -q '^call_takeover apply --json$' "${tmp_dir}/trace" || fail_test "restore did not apply takeover"
 grep -q '网络接管恢复：重新应用接管已验证生效' "$LOG" || fail_test "restore did not log verified takeover success"
 grep -q '"event":"repair_apply_finished".*"result":"success"' "$TAKEOVER_LOG" || fail_test "restore success was not retained in takeover event log"
 [ -f "$TAKEOVER_REPAIR_TICKET" ] || fail_test "restore should keep same-boot repair ticket after reapply"
@@ -158,7 +185,7 @@ rm -f "$TAKEOVER_REPAIR_TICKET" "$LEGACY_TAKEOVER_INTENT_FILE"
 printf 'applied\n' > "$TAKEOVER_STATE_STATUS"
 result="$(takeover_restore_run)"
 printf '%s\n' "$result" | grep -q '"changed":false' || fail_test "effective takeover should be unchanged: ${result}"
-if grep -q '^call_core takeover apply --json$' "${tmp_dir}/trace"; then
+if grep -q '^call_takeover apply --json$' "${tmp_dir}/trace"; then
 	fail_test "effective takeover should not be applied again"
 fi
 [ -f "$TAKEOVER_REPAIR_TICKET" ] || fail_test "effective restore should keep same-boot repair ticket"
@@ -217,7 +244,7 @@ result="$(boot_restore_run)"
 printf '%s\n' "$result" | grep -q '"changed":true' || fail_test "boot restore run should start runtime and apply takeover: ${result}"
 grep -q '^call_core runtime start --json$' "${tmp_dir}/trace" || fail_test "boot restore did not start runtime"
 grep -q '^call_core runtime status --json$' "${tmp_dir}/trace" || fail_test "boot restore did not verify runtime"
-grep -q '^call_core takeover apply --json$' "${tmp_dir}/trace" || fail_test "boot restore did not apply takeover"
+grep -q '^call_takeover apply --json$' "${tmp_dir}/trace" || fail_test "boot restore did not apply takeover"
 [ -f "$TAKEOVER_REPAIR_TICKET" ] || fail_test "boot restore should create same-boot repair ticket after applying takeover"
 
 BOOT_RESTORE_MAX_UPTIME=1

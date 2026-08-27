@@ -154,6 +154,29 @@ call_core() {
 	esac
 }
 
+call_takeover() {
+	trace "call_takeover $*"
+	case "$*" in
+		"status --json")
+			status_calls=$((status_calls + 1))
+			if [ "$status_calls" -eq 1 ]; then
+				[ "$MOCK_PRE_STATUS_RC" -eq 0 ] || { printf '{"ok":false,"code":"mock_pre_status_failed","message":"pre status failed"}\n'; return "$MOCK_PRE_STATUS_RC"; }
+				takeover_status_json "$MOCK_PRE_EFFECTIVE" "$MOCK_PRE_RUNTIME" "$MOCK_PRE_PROFILE"
+			else
+				[ "$MOCK_POST_STATUS_RC" -eq 0 ] || { printf '{"ok":false,"code":"mock_post_status_failed","message":"post status failed"}\n'; return "$MOCK_POST_STATUS_RC"; }
+				takeover_status_json "$MOCK_POST_EFFECTIVE" "$MOCK_POST_RUNTIME" "$MOCK_POST_PROFILE"
+			fi
+			;;
+		"apply --json")
+			[ "$MOCK_APPLY_RC" -eq 0 ] || { printf '{"ok":false,"code":"mock_apply_failed","message":"apply failed"}\n'; return "$MOCK_APPLY_RC"; }
+			mkdir -p "$(dirname "$TAKEOVER_REPAIR_TICKET")"
+			printf 'applied\n' > "$TAKEOVER_REPAIR_TICKET"
+			printf '{"ok":true,"changed":true,"summary":"takeover applied"}\n'
+			;;
+		*) return 1 ;;
+	esac
+}
+
 capture_restart() {
 	set +e
 	result="$(runtime_restart)"
@@ -168,11 +191,11 @@ assert_json "$result"
 printf '%s\n' "$result" | grep -q '"takeover_transition":"restored"' || fail_test "effective takeover was not restored: $result"
 [ -f "$TAKEOVER_REPAIR_TICKET" ] || fail_test "successful restore did not retain repair ticket"
 cat > "${tmp_dir}/expected-effective" <<'EOF'
-call_core takeover status --json
+call_takeover status --json
 call_core runtime restart --strategy process_restart --json
 call_core runtime status --json
-call_core takeover apply --json
-call_core takeover status --json
+call_takeover apply --json
+call_takeover status --json
 EOF
 diff -u "${tmp_dir}/expected-effective" "${tmp_dir}/trace" || fail_test "effective takeover call order mismatch"
 

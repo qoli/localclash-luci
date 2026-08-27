@@ -1,0 +1,300 @@
+#!/bin/sh
+set -eu
+: "${STATE_DIR:?STATE_DIR is required}"
+: "${DNS_PORT:?DNS_PORT is required}"
+: "${REDIR_PORT:?REDIR_PORT is required}"
+: "${TUN_DEVICE:?TUN_DEVICE is required}"
+FWMARK="${FWMARK:-0x6c63}"
+ROUTE_TABLE="${ROUTE_TABLE:-27747}"
+RULE_PREF="${RULE_PREF:-1890}"
+LEGACY_FWMARK="${LEGACY_FWMARK:-0x162}"
+LEGACY_ROUTE_TABLE="${LEGACY_ROUTE_TABLE:-0x162}"
+TUN_WAIT_SECONDS="${TUN_WAIT_SECONDS:-30}"
+command -v fw4 >/dev/null 2>&1
+command -v nft >/dev/null 2>&1
+mkdir -p "$STATE_DIR"
+modprobe tun >/dev/null 2>&1 || true
+modprobe nft_tproxy >/dev/null 2>&1 || true
+
+cleanup_localclash_nft() {
+  for chain in dstnat nat_output mangle_prerouting mangle_output forward input srcnat; do
+    nft -a list chain inet fw4 "$chain" 2>/dev/null | awk '/localClash/{print $NF}' | sort -rn | while read -r handle; do
+      [ -n "$handle" ] && nft delete rule inet fw4 "$chain" handle "$handle" 2>/dev/null || true
+    done
+  done
+  for chain in localclash localclash_output localclash_mangle localclash_mangle_output localclash_v6 localclash_mangle_v6 localclash_dns_redirect; do
+    nft flush chain inet fw4 "$chain" >/dev/null 2>&1 || true
+    nft delete chain inet fw4 "$chain" >/dev/null 2>&1 || true
+  done
+  for set_name in localclash_localnetwork localclash_localnetwork6 localclash_localdns4 localclash_localdns6; do
+    nft flush set inet fw4 "$set_name" >/dev/null 2>&1 || true
+    nft delete set inet fw4 "$set_name" >/dev/null 2>&1 || true
+  done
+}
+
+cleanup_localclash_state() {
+  cleanup_localclash_nft
+  while ip rule del fwmark "$FWMARK" table "$ROUTE_TABLE" >/dev/null 2>&1; do :; done
+  ip route del default table "$ROUTE_TABLE" >/dev/null 2>&1 || true
+  while ip -6 rule del fwmark "$FWMARK" table "$ROUTE_TABLE" >/dev/null 2>&1; do :; done
+  ip -6 route del default table "$ROUTE_TABLE" >/dev/null 2>&1 || true
+  rm -f "$STATE_DIR/status" "$STATE_DIR/local_dns4" "$STATE_DIR/local_dns6" "$STATE_DIR/local_domains" "$STATE_DIR/local_dns4.tmp" "$STATE_DIR/local_dns6.tmp" "$STATE_DIR/local_domains.tmp" >/dev/null 2>&1 || true
+}
+
+legacy_localclash_route_identity_present() {
+  ip rule show 2>/dev/null | grep -F "fwmark $LEGACY_FWMARK" >/dev/null 2>&1 && return 0
+  ip route show table "$LEGACY_ROUTE_TABLE" 2>/dev/null | grep -q . && return 0
+  ip -6 rule show 2>/dev/null | grep -F "fwmark $LEGACY_FWMARK" >/dev/null 2>&1 && return 0
+  ip -6 route show table "$LEGACY_ROUTE_TABLE" 2>/dev/null | grep -q . && return 0
+  return 1
+}
+
+cleanup_legacy_localclash_route_identity() {
+  legacy_localclash_route_identity_present || return 0
+  if [ "$(cat "$STATE_DIR/status" 2>/dev/null || true)" != "applied" ]; then
+    echo "legacy localClash route identity $LEGACY_FWMARK/$LEGACY_ROUTE_TABLE exists without applied ownership state; refusing migration" >&2
+    return 1
+  fi
+  if ! nft list chain inet fw4 localclash >/dev/null 2>&1 || ! nft list chain inet fw4 localclash_mangle >/dev/null 2>&1; then
+    echo "legacy localClash route identity $LEGACY_FWMARK/$LEGACY_ROUTE_TABLE exists without localClash nft ownership evidence; refusing migration" >&2
+    return 1
+  fi
+  while ip rule del fwmark "$LEGACY_FWMARK" table "$LEGACY_ROUTE_TABLE" >/dev/null 2>&1; do :; done
+  ip route del default table "$LEGACY_ROUTE_TABLE" >/dev/null 2>&1 || true
+  while ip -6 rule del fwmark "$LEGACY_FWMARK" table "$LEGACY_ROUTE_TABLE" >/dev/null 2>&1; do :; done
+  ip -6 route del default table "$LEGACY_ROUTE_TABLE" >/dev/null 2>&1 || true
+}
+
+check_fw4_ready() {
+  if ! nft list table inet fw4 >/dev/null 2>&1; then
+    echo "OpenWrt firewall table inet fw4 is not active; start or reload the firewall service, then retry takeover apply" >&2
+    return 1
+  fi
+  for chain in dstnat mangle_prerouting forward input srcnat; do
+    if ! nft list chain inet fw4 "$chain" >/dev/null 2>&1; then
+      echo "OpenWrt firewall chain inet fw4 $chain is missing; start or reload the firewall service, then retry takeover apply" >&2
+      return 1
+    fi
+  done
+}
+
+wait_tun_ready() {
+  i=0
+  while [ "$i" -lt "$TUN_WAIT_SECONDS" ]; do
+    if ip link show "$TUN_DEVICE" >/dev/null 2>&1; then
+      ip link set "$TUN_DEVICE" up >/dev/null 2>&1 || true
+      return 0
+    fi
+    i=$((i + 1))
+    sleep 1
+  done
+  echo "TUN device $TUN_DEVICE is not ready after ${TUN_WAIT_SECONDS}s; start the Core runtime and retry takeover apply" >&2
+  return 1
+}
+
+add_dynamic_localnetwork4() {
+  ip -o -4 addr show scope global 2>/dev/null | awk '{print $4}' | sort -u | while read -r addr; do
+    [ -n "$addr" ] && nft add element inet fw4 localclash_localnetwork { "$addr" } >/dev/null 2>&1 || true
+  done
+}
+
+add_dynamic_localnetwork6() {
+  ip -o -6 addr show scope global 2>/dev/null | awk '{print $4}' | sort -u | while read -r addr; do
+    [ -n "$addr" ] && nft add element inet fw4 localclash_localnetwork6 { "$addr" } >/dev/null 2>&1 || true
+  done
+}
+
+discover_lan_networks() {
+  echo lan
+  if command -v uci >/dev/null 2>&1; then
+    i=0
+    while zone_name=$(uci -q get "firewall.@zone[$i].name" 2>/dev/null); do
+      if [ "$zone_name" = "lan" ]; then
+        uci -q get "firewall.@zone[$i].network" 2>/dev/null || true
+      fi
+      i=$((i + 1))
+    done
+  fi
+}
+
+add_lan_domain() {
+  domain=$(echo "$1" | sed 's#^/##; s#/$##; s#^\.*##')
+  [ -n "$domain" ] && echo "$domain" >> "$STATE_DIR/local_domains"
+}
+
+discover_lan_domains() {
+  : > "$STATE_DIR/local_domains"
+  if command -v uci >/dev/null 2>&1; then
+    add_lan_domain "$(uci -q get "dhcp.@dnsmasq[0].domain" 2>/dev/null || true)"
+    add_lan_domain "$(uci -q get "dhcp.@dnsmasq[0].local" 2>/dev/null || true)"
+  fi
+  for file in /etc/resolv.conf /tmp/resolv.conf /tmp/resolv.conf.d/resolv.conf.auto; do
+    [ -f "$file" ] || continue
+    awk '/^search[[:space:]]/ { for (i = 2; i <= NF; i++) print $i }' "$file" 2>/dev/null | while read -r domain; do
+      add_lan_domain "$domain"
+    done
+  done
+  sort -u "$STATE_DIR/local_domains" > "$STATE_DIR/local_domains.tmp" 2>/dev/null && mv "$STATE_DIR/local_domains.tmp" "$STATE_DIR/local_domains" || true
+}
+
+add_localdns4_addr() {
+  addr=${1%%/*}
+  case "$addr" in
+    ""|0.0.0.0|127.*|169.254.*) return 0 ;;
+  esac
+  nft add element inet fw4 localclash_localdns4 { "$addr" } >/dev/null 2>&1 || true
+  echo "$addr" >> "$STATE_DIR/local_dns4"
+}
+
+add_localdns6_addr() {
+  addr=${1%%/*}
+  case "$addr" in
+    ""|"::"|::1) return 0 ;;
+  esac
+  nft add element inet fw4 localclash_localdns6 { "$addr" } >/dev/null 2>&1 || true
+  echo "$addr" >> "$STATE_DIR/local_dns6"
+}
+
+is_private_or_router_scope4() {
+  case "$1" in
+    10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[0-1].*|100.6[4-9].*|100.[7-9][0-9].*|100.1[0-1][0-9].*|100.12[0-7].*|198.18.*|198.19.*) return 0 ;;
+  esac
+  return 1
+}
+
+is_router_scope6() {
+  case "$1" in
+    fc*|fd*|fe80:*) return 0 ;;
+  esac
+  return 1
+}
+
+add_network_interface_dns4_addresses() {
+  net="$1"
+  if command -v uci >/dev/null 2>&1; then
+    for addr in $(uci -q get "network.$net.ipaddr" 2>/dev/null || true); do
+      add_localdns4_addr "$addr"
+    done
+    for dev in $(uci -q get "network.$net.device" 2>/dev/null || true) $(uci -q get "network.$net.ifname" 2>/dev/null || true); do
+      [ -n "$dev" ] || continue
+      ip -o -4 addr show dev "$dev" scope global 2>/dev/null | awk '{print $4}' | while read -r addr; do
+        add_localdns4_addr "$addr"
+      done
+    done
+  fi
+}
+
+add_network_interface_dns6_addresses() {
+  net="$1"
+  if command -v uci >/dev/null 2>&1; then
+    for addr in $(uci -q get "network.$net.ip6addr" 2>/dev/null || true); do
+      add_localdns6_addr "$addr"
+    done
+    for dev in $(uci -q get "network.$net.device" 2>/dev/null || true) $(uci -q get "network.$net.ifname" 2>/dev/null || true); do
+      [ -n "$dev" ] || continue
+      ip -o -6 addr show dev "$dev" 2>/dev/null | awk '{print $4}' | while read -r addr; do
+        add_localdns6_addr "$addr"
+      done
+    done
+  fi
+}
+
+add_dynamic_localdns4() {
+  : > "$STATE_DIR/local_dns4"
+  for net in $(discover_lan_networks | sort -u); do
+    add_network_interface_dns4_addresses "$net"
+  done
+  ip -o -4 addr show scope global 2>/dev/null | awk '{print $4}' | while read -r addr; do
+    host=${addr%%/*}
+    if is_private_or_router_scope4 "$host"; then
+      add_localdns4_addr "$host"
+    fi
+  done
+  sort -u "$STATE_DIR/local_dns4" > "$STATE_DIR/local_dns4.tmp" 2>/dev/null && mv "$STATE_DIR/local_dns4.tmp" "$STATE_DIR/local_dns4" || true
+}
+
+add_dynamic_localdns6() {
+  : > "$STATE_DIR/local_dns6"
+  for net in $(discover_lan_networks | sort -u); do
+    add_network_interface_dns6_addresses "$net"
+  done
+  ip -o -6 addr show 2>/dev/null | awk '{print $4}' | while read -r addr; do
+    host=${addr%%/*}
+    if is_router_scope6 "$host"; then
+      add_localdns6_addr "$host"
+    fi
+  done
+  sort -u "$STATE_DIR/local_dns6" > "$STATE_DIR/local_dns6.tmp" 2>/dev/null && mv "$STATE_DIR/local_dns6.tmp" "$STATE_DIR/local_dns6" || true
+}
+check_fw4_ready
+cleanup_legacy_localclash_route_identity
+trap 'cleanup_localclash_state' ERR
+cleanup_localclash_state
+wait_tun_ready
+discover_lan_domains
+
+while ip rule del fwmark "$FWMARK" table "$ROUTE_TABLE" >/dev/null 2>&1; do :; done
+ip rule add fwmark "$FWMARK" table "$ROUTE_TABLE" pref "$RULE_PREF"
+ip route replace default dev "$TUN_DEVICE" table "$ROUTE_TABLE"
+while ip -6 rule del fwmark "$FWMARK" table "$ROUTE_TABLE" >/dev/null 2>&1; do :; done
+ip -6 rule add fwmark "$FWMARK" table "$ROUTE_TABLE" pref "$RULE_PREF" >/dev/null 2>&1 || true
+ip -6 route replace default dev "$TUN_DEVICE" table "$ROUTE_TABLE" >/dev/null 2>&1 || true
+nft -f - <<EOF_NFT
+add set inet fw4 localclash_localnetwork { type ipv4_addr; flags interval; auto-merge; }
+add element inet fw4 localclash_localnetwork { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4 }
+add set inet fw4 localclash_localdns4 { type ipv4_addr; flags interval; auto-merge; }
+add set inet fw4 localclash_localdns6 { type ipv6_addr; flags interval; auto-merge; }
+EOF_NFT
+add_dynamic_localdns4
+add_dynamic_localdns6
+nft -f - <<EOF_NFT
+add chain inet fw4 localclash
+add rule inet fw4 localclash ip daddr @localclash_localnetwork counter return
+add rule inet fw4 localclash ct direction reply counter return
+add rule inet fw4 localclash ip protocol tcp counter redirect to $REDIR_PORT
+insert rule inet fw4 dstnat position 0 meta nfproto ipv4 ip protocol tcp counter jump localclash comment "localClash TCP redirect"
+add chain inet fw4 localclash_mangle
+add rule inet fw4 localclash_mangle meta l4proto { tcp, udp } iifname "$TUN_DEVICE" counter return
+add rule inet fw4 localclash_mangle ip daddr @localclash_localnetwork counter return
+add rule inet fw4 localclash_mangle ct direction reply counter return
+add rule inet fw4 localclash_mangle ip protocol udp mark set $FWMARK counter accept
+add rule inet fw4 localclash_mangle ip protocol icmp icmp type echo-request mark set $FWMARK counter accept comment "localClash ICMP mark"
+insert rule inet fw4 mangle_prerouting position 0 meta nfproto ipv4 counter jump localclash_mangle comment "localClash TUN mark"
+add chain inet fw4 localclash_dns_redirect
+add rule inet fw4 localclash_dns_redirect ip daddr @localclash_localdns4 counter return comment "localClash local DNS bypass"
+add rule inet fw4 localclash_dns_redirect ip6 daddr @localclash_localdns6 counter return comment "localClash local DNS bypass"
+add rule inet fw4 localclash_dns_redirect meta l4proto { tcp, udp } th dport 53 counter redirect to $DNS_PORT comment "localClash DNS hijack"
+insert rule inet fw4 dstnat position 0 meta l4proto { tcp, udp } th dport 53 counter jump localclash_dns_redirect comment "localClash DNS hijack"
+insert rule inet fw4 forward position 0 meta nfproto ipv4 oifname "$TUN_DEVICE" counter accept comment "localClash TUN forward"
+insert rule inet fw4 forward position 0 meta nfproto ipv4 iifname "$TUN_DEVICE" counter accept comment "localClash TUN forward"
+insert rule inet fw4 input position 0 meta nfproto ipv4 iifname "$TUN_DEVICE" counter accept comment "localClash TUN input"
+insert rule inet fw4 srcnat position 0 meta nfproto ipv4 oifname "$TUN_DEVICE" counter return comment "localClash TUN postrouting"
+EOF_NFT
+add_dynamic_localnetwork4
+
+nft 'add set inet fw4 localclash_localnetwork6 { type ipv6_addr; flags interval; auto-merge; }' >/dev/null 2>&1 || true
+nft 'add element inet fw4 localclash_localnetwork6 { ::/128, ::1/128, ::ffff:0:0/96, 64:ff9b::/96, 100::/64, 2001:db8::/32, fe80::/10, ff00::/8 }' >/dev/null 2>&1 || true
+add_dynamic_localnetwork6
+nft 'add chain inet fw4 nat_output { type nat hook output priority -1; }' >/dev/null 2>&1 || true
+nft "insert rule inet fw4 nat_output position 0 meta l4proto { tcp, udp } th dport 53 ip daddr 127.0.0.1 counter redirect to $DNS_PORT comment \"localClash DNS hijack\""
+
+nft 'add chain inet fw4 localclash_v6' >/dev/null 2>&1 || true
+nft 'add rule inet fw4 localclash_v6 ip6 daddr @localclash_localnetwork6 counter return' >/dev/null 2>&1 || true
+nft 'add rule inet fw4 localclash_v6 ct direction reply counter return' >/dev/null 2>&1 || true
+nft add rule inet fw4 localclash_v6 ip6 nexthdr tcp counter redirect to "$REDIR_PORT" >/dev/null 2>&1 || true
+nft "insert rule inet fw4 dstnat position 0 meta nfproto ipv6 ip6 nexthdr tcp counter jump localclash_v6 comment \"localClash IPv6 TCP redirect\"" >/dev/null 2>&1 || true
+
+nft 'add chain inet fw4 localclash_mangle_v6' >/dev/null 2>&1 || true
+nft add rule inet fw4 localclash_mangle_v6 meta l4proto { tcp, udp } iifname "$TUN_DEVICE" counter return >/dev/null 2>&1 || true
+nft 'add rule inet fw4 localclash_mangle_v6 ip6 daddr @localclash_localnetwork6 counter return' >/dev/null 2>&1 || true
+nft 'add rule inet fw4 localclash_mangle_v6 ct direction reply counter return' >/dev/null 2>&1 || true
+nft add rule inet fw4 localclash_mangle_v6 ip6 nexthdr udp mark set "$FWMARK" counter accept >/dev/null 2>&1 || true
+nft "add rule inet fw4 localclash_mangle_v6 ip6 nexthdr ipv6-icmp icmpv6 type echo-request mark set $FWMARK counter accept comment \"localClash ICMPv6 mark\"" >/dev/null 2>&1 || true
+nft "insert rule inet fw4 mangle_prerouting position 0 meta nfproto ipv6 counter jump localclash_mangle_v6 comment \"localClash IPv6 TUN mark\"" >/dev/null 2>&1 || true
+nft "insert rule inet fw4 forward position 0 meta nfproto ipv6 oifname \"$TUN_DEVICE\" counter accept comment \"localClash IPv6 TUN forward\"" >/dev/null 2>&1 || true
+nft "insert rule inet fw4 forward position 0 meta nfproto ipv6 iifname \"$TUN_DEVICE\" counter accept comment \"localClash IPv6 TUN forward\"" >/dev/null 2>&1 || true
+nft "insert rule inet fw4 input position 0 meta nfproto ipv6 iifname \"$TUN_DEVICE\" counter accept comment \"localClash IPv6 TUN input\"" >/dev/null 2>&1 || true
+nft "insert rule inet fw4 srcnat position 0 meta nfproto ipv6 oifname \"$TUN_DEVICE\" counter return comment \"localClash IPv6 TUN postrouting\"" >/dev/null 2>&1 || true
+
+printf 'applied\n' > "$STATE_DIR/status"
+trap - ERR

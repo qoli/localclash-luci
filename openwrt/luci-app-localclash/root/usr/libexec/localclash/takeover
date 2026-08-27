@@ -1,0 +1,256 @@
+#!/bin/sh
+set -u
+
+CORE="${LOCALCLASH_CORE:-/usr/bin/localclash}"
+WORKDIR="${LOCALCLASH_WORKDIR:-/etc/localclash}"
+STATE_DIR="${LOCALCLASH_TAKEOVER_STATE_DIR:-/tmp/localclash/router-takeover}"
+SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
+APPLY_IMPL="${LOCALCLASH_TAKEOVER_APPLY_IMPL:-$SELF_DIR/takeover-apply}"
+STOP_IMPL="${LOCALCLASH_TAKEOVER_STOP_IMPL:-$SELF_DIR/takeover-stop}"
+FWMARK="${LOCALCLASH_TAKEOVER_FWMARK:-0x6c63}"
+ROUTE_TABLE="${LOCALCLASH_TAKEOVER_ROUTE_TABLE:-27747}"
+RULE_PREF="${LOCALCLASH_TAKEOVER_RULE_PREF:-1890}"
+FACTS_SCHEMA_VERSION=1
+
+json_escape() {
+	printf '%s' "$1" | tr '\n\r\t' '   ' | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+fail() {
+	code="$1"
+	message="$2"
+	details="${3:-}"
+	[ -n "$details" ] || details='{}'
+	printf '{"ok":false,"code":"%s","message":"%s","details":%s,"next_actions":[]}\n' \
+		"$(json_escape "$code")" "$(json_escape "$message")" "$details"
+	return 1
+}
+
+require_tools() {
+	for tool in jsonfilter nft ip; do
+		command -v "$tool" >/dev/null 2>&1 || {
+			fail "takeover_dependency_missing" "OpenWrt takeover requires $tool." '{"tool":"'"$(json_escape "$tool")"'"}'
+			return 1
+		}
+	done
+}
+
+read_runtime_facts() {
+	[ -x "$CORE" ] || {
+		fail "runtime_facts_core_missing" "localClash Core is unavailable; takeover state cannot be evaluated." '{"core":"'"$(json_escape "$CORE")"'"}'
+		return 1
+	}
+	FACTS_JSON="$(cd / && LOCALCLASH_WORKDIR="$WORKDIR" "$CORE" runtime facts --json 2>&1)" || {
+		fail "runtime_facts_failed" "Core runtime facts could not be read." '{"output":"'"$(json_escape "$FACTS_JSON")"'"}'
+		return 1
+	}
+	FACTS_SCHEMA="$(printf '%s\n' "$FACTS_JSON" | jsonfilter -e '@.status.schema_version' 2>/dev/null || true)"
+	[ "$FACTS_SCHEMA" = "$FACTS_SCHEMA_VERSION" ] || {
+		fail "runtime_facts_schema_unsupported" "Core runtime facts schema is missing or unsupported." '{"expected":1,"actual":"'"$(json_escape "$FACTS_SCHEMA")"'"}'
+		return 1
+	}
+	PROFILE_MODE="$(printf '%s\n' "$FACTS_JSON" | jsonfilter -e '@.status.profile_mode' 2>/dev/null || true)"
+	RUNTIME_RUNNING="$(printf '%s\n' "$FACTS_JSON" | jsonfilter -e '@.status.runtime_running' 2>/dev/null || true)"
+	CONTROLLER_READY="$(printf '%s\n' "$FACTS_JSON" | jsonfilter -e '@.status.controller_ready' 2>/dev/null || true)"
+	DNS_PORT="$(printf '%s\n' "$FACTS_JSON" | jsonfilter -e '@.status.dns_port' 2>/dev/null || true)"
+	REDIR_PORT="$(printf '%s\n' "$FACTS_JSON" | jsonfilter -e '@.status.redir_port' 2>/dev/null || true)"
+	TPROXY_PORT="$(printf '%s\n' "$FACTS_JSON" | jsonfilter -e '@.status.tproxy_port' 2>/dev/null || true)"
+	TUN_ENABLED="$(printf '%s\n' "$FACTS_JSON" | jsonfilter -e '@.status.tun_enabled' 2>/dev/null || true)"
+	TUN_DEVICE="$(printf '%s\n' "$FACTS_JSON" | jsonfilter -e '@.status.tun_device' 2>/dev/null || true)"
+	TUN_AUTO_ROUTE="$(printf '%s\n' "$FACTS_JSON" | jsonfilter -e '@.status.tun_auto_route' 2>/dev/null || true)"
+	TUN_AUTO_REDIRECT="$(printf '%s\n' "$FACTS_JSON" | jsonfilter -e '@.status.tun_auto_redirect' 2>/dev/null || true)"
+	IPV6="$(printf '%s\n' "$FACTS_JSON" | jsonfilter -e '@.status.ipv6' 2>/dev/null || true)"
+	CONFIG_SHA256="$(printf '%s\n' "$FACTS_JSON" | jsonfilter -e '@.status.config_sha256' 2>/dev/null || true)"
+	for value in "$RUNTIME_RUNNING" "$CONTROLLER_READY" "$TUN_ENABLED" "$TUN_AUTO_ROUTE" "$TUN_AUTO_REDIRECT" "$IPV6"; do
+		case "$value" in true|false) ;; *) fail "runtime_facts_invalid" "Core runtime facts contain invalid boolean state." '{}'; return 1 ;; esac
+	done
+	[ "$RUNTIME_RUNNING" = true ] || [ "$CONTROLLER_READY" = false ] || {
+		fail "runtime_facts_invalid" "Controller cannot be ready while the managed runtime is stopped." '{}'
+		return 1
+	}
+	for value in "$DNS_PORT" "$REDIR_PORT" "$TPROXY_PORT"; do
+		case "$value" in ''|*[!0-9]*) [ -z "$value" ] || { fail "runtime_facts_invalid" "Core runtime facts contain an invalid network port." '{}'; return 1; } ;; esac
+	done
+	[ -n "$CONFIG_SHA256" ] || {
+		fail "runtime_facts_incomplete" "Core runtime facts are missing config identity." '{}'
+		return 1
+	}
+	[ "${#CONFIG_SHA256}" -eq 64 ] || { fail "runtime_facts_invalid" "Core runtime facts contain an invalid config hash." '{}'; return 1; }
+	case "$CONFIG_SHA256" in *[!0-9a-f]*) fail "runtime_facts_invalid" "Core runtime facts contain an invalid config hash." '{}'; return 1 ;; esac
+	[ "$TUN_ENABLED" = false ] || [ -n "$TUN_DEVICE" ] || { fail "runtime_facts_incomplete" "Enabled TUN is missing its device name." '{}'; return 1; }
+	DNS_PORT_JSON="${DNS_PORT:-null}"
+	REDIR_PORT_JSON="${REDIR_PORT:-null}"
+	TPROXY_PORT_JSON="${TPROXY_PORT:-null}"
+}
+
+contains() {
+	case "$1" in *"$2"*) return 0 ;; *) return 1 ;; esac
+}
+
+observe_rules() {
+	FW4_AVAILABLE=false
+	NFT_AVAILABLE=false
+	FW4_TABLE=false
+	FW4_BASE_CHAINS=false
+	TUN_INTERFACE=false
+	FWMARK_ROUTE_V4=false
+	NFT_CHAINS=false
+	TCP_REDIRECT=false
+	UDP_TUN_MARK=false
+	DNS_HIJACK=false
+	LOCAL_DNS_BYPASS=false
+	STATE_OWNED=false
+	command -v fw4 >/dev/null 2>&1 && FW4_AVAILABLE=true
+	command -v nft >/dev/null 2>&1 && NFT_AVAILABLE=true
+	[ "$NFT_AVAILABLE" = true ] || return 0
+	tables="$(nft list tables 2>/dev/null || true)"
+	dstnat="$(nft list chain inet fw4 dstnat 2>/dev/null || true)"
+	mangle_prerouting="$(nft list chain inet fw4 mangle_prerouting 2>/dev/null || true)"
+	forward="$(nft list chain inet fw4 forward 2>/dev/null || true)"
+	input="$(nft list chain inet fw4 input 2>/dev/null || true)"
+	srcnat="$(nft list chain inet fw4 srcnat 2>/dev/null || true)"
+	localclash="$(nft list chain inet fw4 localclash 2>/dev/null || true)"
+	localclash_mangle="$(nft list chain inet fw4 localclash_mangle 2>/dev/null || true)"
+	localclash_dns="$(nft list chain inet fw4 localclash_dns_redirect 2>/dev/null || true)"
+	contains "$tables" "table inet fw4" && FW4_TABLE=true
+	[ -n "$dstnat" ] && [ -n "$mangle_prerouting" ] && [ -n "$forward" ] && [ -n "$input" ] && [ -n "$srcnat" ] && FW4_BASE_CHAINS=true
+	ip link show "$TUN_DEVICE" >/dev/null 2>&1 && TUN_INTERFACE=true
+	ip_rules="$(ip rule show 2>/dev/null || true)"
+	ip_routes="$(ip route show table "$ROUTE_TABLE" 2>/dev/null || true)"
+	contains "$ip_rules" "fwmark $FWMARK" && contains "$ip_routes" "$TUN_DEVICE" && FWMARK_ROUTE_V4=true
+	[ -n "$localclash" ] && [ -n "$localclash_mangle" ] && NFT_CHAINS=true
+	contains "$dstnat" "localClash TCP redirect" && TCP_REDIRECT=true
+	contains "$mangle_prerouting" "localClash TUN mark" && UDP_TUN_MARK=true
+	contains "$localclash_dns" "localClash DNS hijack" && DNS_HIJACK=true
+	contains "$localclash_dns" "localClash local DNS bypass" && LOCAL_DNS_BYPASS=true
+	grep -qx 'applied' "$STATE_DIR/status" 2>/dev/null && STATE_OWNED=true
+}
+
+rules_effective() {
+	[ "$FW4_AVAILABLE" = true ] && [ "$NFT_AVAILABLE" = true ] && [ "$FW4_TABLE" = true ] && \
+	[ "$FW4_BASE_CHAINS" = true ] && [ "$TUN_INTERFACE" = true ] && [ "$FWMARK_ROUTE_V4" = true ] && \
+	[ "$NFT_CHAINS" = true ] && [ "$TCP_REDIRECT" = true ] && [ "$UDP_TUN_MARK" = true ] && \
+	[ "$DNS_HIJACK" = true ] && [ "$LOCAL_DNS_BYPASS" = true ] && [ "$STATE_OWNED" = true ]
+}
+
+takeover_artifacts_present() {
+	[ "$NFT_CHAINS" = true ] || [ "$TCP_REDIRECT" = true ] || [ "$UDP_TUN_MARK" = true ] || [ "$DNS_HIJACK" = true ] || [ "$FWMARK_ROUTE_V4" = true ]
+}
+
+status_json() {
+	require_tools || return 1
+	read_runtime_facts || return 1
+	observe_rules
+	EFFECTIVE=false
+	if [ "$PROFILE_MODE" = router ] && [ "$RUNTIME_RUNNING" = true ] && [ "$CONTROLLER_READY" = true ] && rules_effective; then
+		EFFECTIVE=true
+	fi
+	printf '{"ok":true,"changed":false,"summary":"OpenWrt takeover status read.","status":{"schema_version":1,"profile_mode":"%s","runtime_running":%s,"controller_ready":%s,"effective":%s,"state_owned":%s,"config_sha256":"%s","dns_port":%s,"redir_port":%s,"tproxy_port":%s,"tun_device":"%s","ipv6":%s,"checks":{"fw4_available":%s,"nft_available":%s,"fw4_table":%s,"fw4_base_chains":%s,"tun_interface":%s,"fwmark_route_v4":%s,"nft_chains":%s,"tcp_redirect":%s,"udp_tun_mark":%s,"dns_hijack":%s,"local_dns_bypass":%s}},"changes":[],"warnings":[],"next_actions":[]}\n' \
+		"$(json_escape "$PROFILE_MODE")" "$RUNTIME_RUNNING" "$CONTROLLER_READY" "$EFFECTIVE" "$STATE_OWNED" \
+		"$(json_escape "$CONFIG_SHA256")" "$DNS_PORT_JSON" "$REDIR_PORT_JSON" "$TPROXY_PORT_JSON" "$(json_escape "$TUN_DEVICE")" "$IPV6" \
+		"$FW4_AVAILABLE" "$NFT_AVAILABLE" "$FW4_TABLE" "$FW4_BASE_CHAINS" "$TUN_INTERFACE" "$FWMARK_ROUTE_V4" "$NFT_CHAINS" "$TCP_REDIRECT" "$UDP_TUN_MARK" "$DNS_HIJACK" "$LOCAL_DNS_BYPASS"
+}
+
+apply_takeover() {
+	require_tools || return 1
+	read_runtime_facts || return 1
+	[ "$PROFILE_MODE" = router ] || { fail "takeover_profile_not_router" "OpenWrt takeover requires Core runtime profile mode router." '{}'; return 1; }
+	[ "$RUNTIME_RUNNING" = true ] || { fail "takeover_runtime_not_running" "Mihomo runtime must be running before takeover apply." '{}'; return 1; }
+	[ "$CONTROLLER_READY" = true ] || { fail "takeover_runtime_not_ready" "Mihomo controller must be ready before takeover apply." '{}'; return 1; }
+	[ -n "$DNS_PORT" ] && [ -n "$REDIR_PORT" ] && [ -n "$TPROXY_PORT" ] && [ -n "$TUN_DEVICE" ] || {
+		fail "takeover_runtime_contract_incomplete" "OpenWrt takeover requires DNS, redir, tproxy, and TUN runtime facts." '{}'
+		return 1
+	}
+	for value in "$DNS_PORT" "$REDIR_PORT" "$TPROXY_PORT"; do
+		[ "$value" -ge 1 ] && [ "$value" -le 65535 ] || { fail "takeover_runtime_contract_invalid" "OpenWrt takeover requires valid network ports." '{}'; return 1; }
+	done
+	[ "$TUN_ENABLED" = true ] && [ "$TUN_AUTO_ROUTE" = false ] && [ "$TUN_AUTO_REDIRECT" = false ] || {
+		fail "takeover_runtime_contract_invalid" "OpenWrt takeover requires enabled TUN with Mihomo auto-route and auto-redirect disabled." '{}'
+		return 1
+	}
+	observe_rules
+	if takeover_artifacts_present && [ "$STATE_OWNED" != true ]; then
+		fail "takeover_ownership_unverified" "OpenWrt takeover-like rules exist without LuCI ownership state; refusing mutation." '{}'
+		return 1
+	fi
+	[ -x "$APPLY_IMPL" ] || { fail "takeover_implementation_missing" "OpenWrt takeover apply implementation is unavailable." '{}'; return 1; }
+	output="$(STATE_DIR="$STATE_DIR" DNS_PORT="$DNS_PORT" REDIR_PORT="$REDIR_PORT" TUN_DEVICE="$TUN_DEVICE" FWMARK="$FWMARK" ROUTE_TABLE="$ROUTE_TABLE" RULE_PREF="$RULE_PREF" "$APPLY_IMPL" 2>&1)" || {
+		fail "takeover_apply_failed" "OpenWrt takeover apply failed." '{"output":"'"$(json_escape "$output")"'"}'
+		return 1
+	}
+	observe_rules
+	if ! rules_effective; then
+		fail "takeover_apply_verification_failed" "OpenWrt takeover rules did not pass post-apply verification." '{}'
+		return 1
+	fi
+	printf 'applied\n' > "$STATE_DIR/repair-ticket" || {
+		fail "takeover_repair_state_write_failed" "OpenWrt takeover was applied but repair state could not be recorded." '{}'
+		return 1
+	}
+	printf '{"ok":true,"changed":true,"summary":"OpenWrt takeover applied and verified.","status":{"schema_version":1,"profile_mode":"router","runtime_running":true,"controller_ready":true,"effective":true,"state_owned":true,"config_sha256":"%s","dns_port":%s,"redir_port":%s,"tproxy_port":%s,"tun_device":"%s","ipv6":%s},"changes":["takeover_applied"],"warnings":[],"next_actions":[]}\n' \
+		"$(json_escape "$CONFIG_SHA256")" "$DNS_PORT" "$REDIR_PORT" "$TPROXY_PORT" "$(json_escape "$TUN_DEVICE")" "$IPV6"
+}
+
+stop_takeover() {
+	require_tools || return 1
+	[ -x "$STOP_IMPL" ] || { fail "takeover_implementation_missing" "OpenWrt takeover stop implementation is unavailable." '{}'; return 1; }
+	TUN_DEVICE="${TUN_DEVICE:-utun}"
+	observe_rules
+	if takeover_artifacts_present && [ "$STATE_OWNED" != true ]; then
+		fail "takeover_ownership_unverified" "OpenWrt takeover-like rules exist without LuCI ownership state; refusing cleanup." '{}'
+		return 1
+	fi
+	output="$(STATE_DIR="$STATE_DIR" FWMARK="$FWMARK" ROUTE_TABLE="$ROUTE_TABLE" "$STOP_IMPL" 2>&1)" || {
+		fail "takeover_stop_failed" "OpenWrt takeover stop failed." '{"output":"'"$(json_escape "$output")"'"}'
+		return 1
+	}
+	observe_rules
+	if [ "$NFT_CHAINS" = true ] || [ "$TCP_REDIRECT" = true ] || [ "$UDP_TUN_MARK" = true ] || [ "$DNS_HIJACK" = true ] || [ "$FWMARK_ROUTE_V4" = true ] || [ "$STATE_OWNED" = true ]; then
+		fail "takeover_stop_verification_failed" "OpenWrt takeover state remains after stop." '{}'
+		return 1
+	fi
+	rm -f "$STATE_DIR/repair-ticket" >/dev/null 2>&1 || {
+		fail "takeover_repair_state_remove_failed" "OpenWrt takeover stopped but repair state could not be removed." '{}'
+		return 1
+	}
+	printf '{"ok":true,"changed":true,"summary":"OpenWrt takeover stopped and verified.","status":{"schema_version":1,"effective":false,"state_owned":false},"changes":["takeover_stopped"],"warnings":[],"next_actions":[]}\n'
+}
+
+reconcile_takeover() {
+	desired="$1"
+	case "$desired" in
+		enabled)
+			status="$(status_json)" || { printf '%s\n' "$status"; return 1; }
+			effective="$(printf '%s\n' "$status" | jsonfilter -e '@.status.effective' 2>/dev/null || true)"
+			if [ "$effective" = true ]; then
+				mkdir -p "$STATE_DIR" && printf 'applied\n' > "$STATE_DIR/repair-ticket" || {
+					fail "takeover_repair_state_write_failed" "Effective takeover repair state could not be recorded." '{}'
+					return 1
+				}
+				printf '%s\n' "$status"
+				return 0
+			fi
+			apply_takeover
+			;;
+		disabled) stop_takeover ;;
+		*) fail "takeover_desired_state_invalid" "Takeover reconcile requires desired state enabled or disabled." '{}'; return 1 ;;
+	esac
+}
+
+command_name="${1:-}"
+shift 2>/dev/null || true
+case "$command_name" in
+	status) [ "$#" -eq 1 ] && [ "${1:-}" = "--json" ] || { fail "takeover_usage" "Usage: takeover status --json"; exit 1; }; status_json ;;
+	apply) [ "$#" -eq 1 ] && [ "${1:-}" = "--json" ] || { fail "takeover_usage" "Usage: takeover apply --json"; exit 1; }; apply_takeover ;;
+	stop) [ "$#" -eq 1 ] && [ "${1:-}" = "--json" ] || { fail "takeover_usage" "Usage: takeover stop --json"; exit 1; }; stop_takeover ;;
+	reconcile)
+		desired=""
+		json_requested=false
+		while [ "$#" -gt 0 ]; do
+			case "$1" in --desired) [ "$#" -ge 2 ] || { fail "takeover_usage" "Usage: takeover reconcile --desired enabled|disabled --json"; exit 1; }; desired="$2"; shift 2 ;; --json) json_requested=true; shift ;; *) fail "takeover_usage" "Usage: takeover reconcile --desired enabled|disabled --json"; exit 1 ;; esac
+		done
+		[ "$json_requested" = true ] || { fail "takeover_usage" "Usage: takeover reconcile --desired enabled|disabled --json"; exit 1; }
+		reconcile_takeover "$desired"
+		;;
+	*) fail "takeover_usage" "Usage: takeover status|apply|stop|reconcile --json"; exit 1 ;;
+esac

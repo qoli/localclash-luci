@@ -21,11 +21,12 @@ cp -a "${package_dir}/root/." "${build_dir}/pkg/"
 mkdir -p "${build_dir}/pkg/www"
 cp -a "${package_dir}/htdocs/." "${build_dir}/pkg/www/"
 chmod 755 "${build_dir}/pkg/usr/libexec/rpcd/localclash"
+chmod 755 "${build_dir}/pkg/usr/libexec/localclash/takeover" "${build_dir}/pkg/usr/libexec/localclash/takeover-apply" "${build_dir}/pkg/usr/libexec/localclash/takeover-stop"
 
 cat > "${build_dir}/pkg/CONTROL/control" <<EOF
 Package: ${pkg_name}
 Version: ${pkg_version}-${pkg_release}
-Depends: luci-base, rpcd, uclient-fetch, ca-bundle, jsonfilter
+Depends: luci-base, rpcd, uclient-fetch, ca-bundle, jsonfilter, firewall4, nftables, ip-full, kmod-tun, kmod-nft-tproxy
 Architecture: all
 Maintainer: qoli
 Section: luci

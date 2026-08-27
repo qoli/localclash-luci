@@ -1,6 +1,7 @@
 #!/bin/sh
 
 CORE="${LOCALCLASH_CORE:-/usr/local/bin/localclash}"
+TAKEOVER_MANAGER="${LOCALCLASH_TAKEOVER_MANAGER:-/usr/libexec/localclash/takeover}"
 DNSQUALIFY="${LOCALCLASH_DNSQUALIFY:-/usr/local/bin/dnsqualify}"
 DNSQUALIFY_ECS_DOH_PROXY="${LOCALCLASH_DNSQUALIFY_ECS_DOH_PROXY:-http://127.0.0.1:7894}"
 STATE_DIR="${LOCALCLASH_STATE_DIR:-/root/localclash}"
@@ -203,15 +204,6 @@ takeover_runtime_state_enabled() {
 
 takeover_restore_requested() {
 	takeover_repair_ticket_enabled || takeover_runtime_state_enabled
-}
-
-takeover_repair_ticket_enable() {
-	mkdir -p "$(dirname "$TAKEOVER_REPAIR_TICKET")" 2>/dev/null || true
-	printf 'applied\n' > "$TAKEOVER_REPAIR_TICKET" 2>/dev/null || true
-}
-
-takeover_repair_ticket_disable() {
-	rm -f "$TAKEOVER_REPAIR_TICKET" "$TAKEOVER_STATE_STATUS" 2>/dev/null || true
 }
 
 boot_auto_restore_enabled() {
@@ -1595,18 +1587,35 @@ call_core() {
 	(cd / && LOCALCLASH_WORKDIR="$workdir" "$CORE" "$@") 2>>"$LOG"
 }
 
+call_takeover() {
+	local workdir
+	if [ ! -x "$TAKEOVER_MANAGER" ]; then
+		fail_with_details "takeover_manager_missing" "OpenWrt 网络接管管理器尚未安装。" '"path":"'"$(json_escape "$TAKEOVER_MANAGER")"'"'
+		return 1
+	fi
+	workdir="$(resolve_state_dir)" || return 1
+	(cd / && LOCALCLASH_CORE="$CORE" LOCALCLASH_WORKDIR="$workdir" "$TAKEOVER_MANAGER" "$@") 2>>"$LOG"
+}
+
 runtime_stop() {
-	local tmp rc
+	local tmp takeover_tmp rc
 	tmp="/tmp/localclash-runtime-stop.$$.json"
+	takeover_tmp="/tmp/localclash-takeover-stop-before-runtime.$$.json"
+	call_takeover stop --json > "$takeover_tmp"
+	rc=$?
+	if [ "$rc" -ne 0 ]; then
+		cat "$takeover_tmp" 2>/dev/null || true
+		rm -f "$takeover_tmp" "$tmp"
+		return "$rc"
+	fi
 	if call_core runtime stop --json > "$tmp"; then
-		takeover_repair_ticket_disable
 		cat "$tmp"
-		rm -f "$tmp"
+		rm -f "$takeover_tmp" "$tmp"
 		return 0
 	fi
 	rc=$?
 	cat "$tmp" 2>/dev/null || true
-	rm -f "$tmp"
+	rm -f "$takeover_tmp" "$tmp"
 	return "$rc"
 }
 
@@ -1669,7 +1678,7 @@ runtime_restart_continuity_run() {
 	takeover_event_scope
 	takeover_log_event_safe "$source" "runtime_restart_started" "strategy" "$strategy" >/dev/null 2>&1 || true
 
-	if call_core takeover status --json > "$tmpdir/before.json"; then
+	if call_takeover status --json > "$tmpdir/before.json"; then
 		rc=0
 	else
 		rc=$?
@@ -1780,7 +1789,7 @@ runtime_restart_continuity_run() {
 		transition="restored"
 	fi
 
-	if call_core takeover status --json > "$tmpdir/after.json"; then
+	if call_takeover status --json > "$tmpdir/after.json"; then
 		rc=0
 	else
 		rc=$?
@@ -2572,7 +2581,7 @@ one_click_update_run() {
 			}
 
 			log_line "一键更新：记录更新前网络接管状态"
-			if ! call_core takeover status --json > "$tmpdir/takeover-before.json"; then
+			if ! call_takeover status --json > "$tmpdir/takeover-before.json"; then
 				log_line "一键更新：网络接管状态读取失败"
 				cat "$tmpdir/takeover-before.json" 2>/dev/null || true
 				rm -rf "$tmpdir"
@@ -3615,10 +3624,20 @@ dnsqualify_task_run() {
 }
 
 reset() {
+	local takeover_tmp rc
 	if runtime_running; then
 		fail "runtime_running" "Mihomo 运行时正在运行，请先停止运行时再执行完整重置。"
 		return 1
 	fi
+	takeover_tmp="/tmp/localclash-takeover-stop-before-reset.$$.json"
+	call_takeover stop --json > "$takeover_tmp"
+	rc=$?
+	if [ "$rc" -ne 0 ]; then
+		cat "$takeover_tmp" 2>/dev/null || true
+		rm -f "$takeover_tmp"
+		return "$rc"
+	fi
+	rm -f "$takeover_tmp"
 	call_core reset --full --json
 }
 
@@ -4011,7 +4030,7 @@ runtime_start_takeover_run() {
 	fi
 
 	log_line "运行时接管：正在应用网络接管"
-	run_with_heartbeat "运行时接管：正在应用网络接管" "$tmpdir/takeover.json" call_core takeover apply --json
+	run_with_heartbeat "运行时接管：正在应用网络接管" "$tmpdir/takeover.json" call_takeover apply --json
 	rc=$?
 	if [ "$rc" -ne 0 ]; then
 		log_line "运行时接管：网络接管应用失败"
@@ -4020,7 +4039,7 @@ runtime_start_takeover_run() {
 		error_message="$(printf '%s\n' "$error_fields" | sed -n '2p')"
 		takeover_log_event_safe "$source" "runtime_takeover_finished" "result" "failure" "stage" "takeover_apply" "exit_code" "$rc" "core_code" "$error_code" "message" "$error_message"
 		log_line "运行时接管：正在撤销可能残留的网络接管"
-		if call_core takeover stop --json > "$tmpdir/takeover-stop.json"; then
+		if call_takeover stop --json > "$tmpdir/takeover-stop.json"; then
 			log_line "运行时接管：网络接管撤销完成"
 		else
 			log_line "运行时接管：网络接管撤销也失败"
@@ -4033,7 +4052,6 @@ runtime_start_takeover_run() {
 	fi
 
 	log_line "运行时接管：已完成"
-	takeover_repair_ticket_enable
 	takeover_log_event_safe "$source" "runtime_takeover_finished" "result" "success" "exit_code" "$rc"
 	printf '{"ok":true,"changed":true,"summary":"运行时已启动，网络接管已应用。","runtime":%s,"takeover":%s}\n' "$(cat "$tmpdir/runtime.json")" "$(cat "$tmpdir/takeover.json")"
 	rm -rf "$tmpdir"
@@ -4051,10 +4069,9 @@ takeover_apply() {
 	fi
 
 	tmp="/tmp/localclash-takeover-apply.$$.json"
-	call_core takeover apply --json > "$tmp"
+	call_takeover apply --json > "$tmp"
 	rc=$?
 	if [ "$rc" -eq 0 ]; then
-		takeover_repair_ticket_enable
 		fields="$(takeover_status_log_fields "$tmp")"
 		effective="$(printf '%s\n' "$fields" | sed -n '1p')"
 		runtime_running="$(printf '%s\n' "$fields" | sed -n '2p')"
@@ -4079,10 +4096,9 @@ takeover_stop() {
 	takeover_event_scope
 	takeover_log_event_safe "$source" "stop_started"
 	tmp="/tmp/localclash-takeover-stop.$$.json"
-	call_core takeover stop --json > "$tmp"
+	call_takeover stop --json > "$tmp"
 	rc=$?
 	if [ "$rc" -eq 0 ]; then
-		takeover_repair_ticket_disable
 		takeover_log_event_safe "$source" "stop_finished" "result" "success" "exit_code" "$rc"
 		cat "$tmp"
 		rm -f "$tmp"
@@ -4121,7 +4137,7 @@ takeover_restore_run() {
 	}
 
 	log_line "网络接管恢复：检查当前状态"
-	if call_core takeover status --json > "$tmpdir/status.json"; then
+	if call_takeover status --json > "$tmpdir/status.json"; then
 		rc=0
 	else
 		rc=$?
@@ -4142,9 +4158,16 @@ takeover_restore_run() {
 
 	if [ "$effective" = "true" ]; then
 		log_line "网络接管恢复：当前已生效"
-		takeover_repair_ticket_enable
+		call_takeover reconcile --desired enabled --json > "$tmpdir/reconcile.json"
+		rc=$?
+		if [ "$rc" -ne 0 ]; then
+			log_line "网络接管恢复：当前规则有效，但修复状态协调失败"
+			cat "$tmpdir/reconcile.json" 2>/dev/null || true
+			rm -rf "$tmpdir"
+			return "$rc"
+		fi
 		takeover_log_event_safe "$source" "restore_finished" "result" "already_effective"
-		printf '{"ok":true,"changed":false,"summary":"网络接管当前已生效。","status":%s}\n' "$(cat "$tmpdir/status.json")"
+		cat "$tmpdir/reconcile.json"
 		rm -rf "$tmpdir"
 		return 0
 	fi
@@ -4160,7 +4183,7 @@ takeover_restore_run() {
 	if [ "$runtime_running" = "true" ]; then
 		log_line "网络接管恢复：运行时已运行，重新应用接管"
 		takeover_log_event_safe "$source" "repair_apply_started"
-		if call_core takeover apply --json > "$tmpdir/apply.json"; then
+		if call_takeover apply --json > "$tmpdir/apply.json"; then
 			rc=0
 		else
 			rc=$?
@@ -4174,7 +4197,6 @@ takeover_restore_run() {
 			return "$rc"
 		fi
 		log_line "网络接管恢复：重新应用接管已验证生效"
-		takeover_repair_ticket_enable
 		takeover_log_event_safe "$source" "repair_apply_finished" "result" "success" "exit_code" "$rc"
 		printf '{"ok":true,"changed":true,"summary":"网络接管已重新应用。","status":%s,"takeover":%s}\n' "$(cat "$tmpdir/status.json")" "$(cat "$tmpdir/apply.json")"
 		rm -rf "$tmpdir"
@@ -4413,7 +4435,7 @@ takeover_logs() {
 		: > "$tmpdir/system-events.log" 2>/dev/null || true
 	fi
 
-	if call_core takeover status --json > "$tmpdir/current-status.json"; then
+	if call_takeover status --json > "$tmpdir/current-status.json"; then
 		status_rc=0
 	else
 		status_rc=$?
@@ -4550,17 +4572,17 @@ JSON
 	runtime_start_takeover) start_runtime_takeover ;;
 	runtime_start_takeover_run) with_lock runtime_start_takeover_run ;;
 	runtime_restart) with_lock runtime_restart ;;
-	runtime_stop) runtime_stop ;;
+	runtime_stop) with_lock runtime_stop ;;
 	boot_restore_status) boot_restore_status ;;
 	boot_restore_enable) with_lock boot_restore_enable ;;
 	boot_restore_disable) with_lock boot_restore_disable ;;
 	boot_restore_startup_run) with_lock boot_restore_startup_run ;;
 	boot_restore_run) with_lock boot_restore_run ;;
-	takeover_status) call_core takeover status --json ;;
+	takeover_status) call_takeover status --json ;;
 	takeover_logs) takeover_logs ;;
-	takeover_apply) takeover_apply ;;
+	takeover_apply) with_lock takeover_apply ;;
 	takeover_restore) with_lock takeover_restore_run ;;
-	takeover_stop) takeover_stop ;;
+	takeover_stop) with_lock takeover_stop ;;
 	takeover_trace) shift 2; takeover_trace "$@" ;;
 	reset) with_lock reset ;;
 	service_status) service_status ;;

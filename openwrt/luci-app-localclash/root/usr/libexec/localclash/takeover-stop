@@ -1,0 +1,42 @@
+#!/bin/sh
+set -eu
+
+: "${STATE_DIR:?STATE_DIR is required}"
+FWMARK="${FWMARK:-0x6c63}"
+ROUTE_TABLE="${ROUTE_TABLE:-27747}"
+LEGACY_FWMARK="${LEGACY_FWMARK:-0x162}"
+LEGACY_ROUTE_TABLE="${LEGACY_ROUTE_TABLE:-0x162}"
+
+legacy_rules="$(ip rule show 2>/dev/null || true)"
+legacy_routes="$(ip route show table "$LEGACY_ROUTE_TABLE" 2>/dev/null || true)"
+legacy_rules6="$(ip -6 rule show 2>/dev/null || true)"
+legacy_routes6="$(ip -6 route show table "$LEGACY_ROUTE_TABLE" 2>/dev/null || true)"
+if printf '%s\n' "$legacy_rules" "$legacy_rules6" | grep -F "fwmark $LEGACY_FWMARK" >/dev/null 2>&1 || [ -n "$legacy_routes" ] || [ -n "$legacy_routes6" ]; then
+	if [ "$(cat "$STATE_DIR/status" 2>/dev/null || true)" != "applied" ]; then
+		echo "legacy localClash route identity $LEGACY_FWMARK/$LEGACY_ROUTE_TABLE exists without applied ownership state; refusing cleanup" >&2
+		exit 1
+	fi
+	while ip rule del fwmark "$LEGACY_FWMARK" table "$LEGACY_ROUTE_TABLE" >/dev/null 2>&1; do :; done
+	ip route del default table "$LEGACY_ROUTE_TABLE" >/dev/null 2>&1 || true
+	while ip -6 rule del fwmark "$LEGACY_FWMARK" table "$LEGACY_ROUTE_TABLE" >/dev/null 2>&1; do :; done
+	ip -6 route del default table "$LEGACY_ROUTE_TABLE" >/dev/null 2>&1 || true
+fi
+
+for chain in dstnat nat_output mangle_prerouting mangle_output forward input srcnat; do
+	nft -a list chain inet fw4 "$chain" 2>/dev/null | awk '/localClash/{print $NF}' | sort -rn | while read -r handle; do
+		[ -n "$handle" ] && nft delete rule inet fw4 "$chain" handle "$handle" 2>/dev/null || true
+	done
+done
+for chain in localclash localclash_output localclash_mangle localclash_mangle_output localclash_v6 localclash_mangle_v6 localclash_dns_redirect; do
+	nft flush chain inet fw4 "$chain" >/dev/null 2>&1 || true
+	nft delete chain inet fw4 "$chain" >/dev/null 2>&1 || true
+done
+for set_name in localclash_localnetwork localclash_localnetwork6 localclash_localdns4 localclash_localdns6; do
+	nft flush set inet fw4 "$set_name" >/dev/null 2>&1 || true
+	nft delete set inet fw4 "$set_name" >/dev/null 2>&1 || true
+done
+while ip rule del fwmark "$FWMARK" table "$ROUTE_TABLE" >/dev/null 2>&1; do :; done
+ip route del default table "$ROUTE_TABLE" >/dev/null 2>&1 || true
+while ip -6 rule del fwmark "$FWMARK" table "$ROUTE_TABLE" >/dev/null 2>&1; do :; done
+ip -6 route del default table "$ROUTE_TABLE" >/dev/null 2>&1 || true
+rm -f "$STATE_DIR/status" "$STATE_DIR/local_dns4" "$STATE_DIR/local_dns6" "$STATE_DIR/local_domains" "$STATE_DIR/local_dns4.tmp" "$STATE_DIR/local_dns6.tmp" "$STATE_DIR/local_domains.tmp" >/dev/null 2>&1 || true

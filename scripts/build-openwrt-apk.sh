@@ -21,6 +21,7 @@ cp -a "${package_dir}/root/." "${build_dir}/pkg/"
 mkdir -p "${build_dir}/pkg/www"
 cp -a "${package_dir}/htdocs/." "${build_dir}/pkg/www/"
 chmod 755 "${build_dir}/pkg/usr/libexec/rpcd/localclash"
+chmod 755 "${build_dir}/pkg/usr/libexec/localclash/takeover" "${build_dir}/pkg/usr/libexec/localclash/takeover-apply" "${build_dir}/pkg/usr/libexec/localclash/takeover-stop"
 
 cat > "${build_dir}/scripts/post-install" <<'EOF'
 #!/bin/sh
@@ -49,7 +50,7 @@ docker run --rm \
 			--info 'origin:localclash-luci' \
 			--info 'url:https://github.com/qoli/localclash-luci' \
 			--info 'maintainer:qoli' \
-			--info 'depends:luci-base rpcd uclient-fetch ca-bundle jsonfilter' \
+			--info 'depends:luci-base rpcd uclient-fetch ca-bundle jsonfilter firewall4 nftables ip-full kmod-tun kmod-nft-tproxy' \
 			--files '/work/.build/apk/pkg' \
 			--script 'post-install:/work/.build/apk/scripts/post-install' \
 			--script 'post-upgrade:/work/.build/apk/scripts/post-upgrade' \

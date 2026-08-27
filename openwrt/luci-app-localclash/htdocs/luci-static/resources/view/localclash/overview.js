@@ -852,7 +852,7 @@ function takeoverFailureText(failure) {
 	var code = failure && failure.code ? String(failure.code) : '';
 	var message = failure && failure.message ? String(failure.message) : String(failure || '');
 
-	if (/timeout|timed out|router_takeover_status_timeout/i.test(code + ' ' + message))
+	if (/timeout|timed out|takeover_status_timeout/i.test(code + ' ' + message))
 		return _('状态查询超时（实际接管状态未知，请重试）');
 
 	return formatText(_('状态查询失败（实际接管状态未知）：%s'), message || code || _('未知错误'));

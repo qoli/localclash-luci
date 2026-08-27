@@ -22,21 +22,21 @@ There are four roles in the LuCI architecture:
 2. **LuCI frontend layer**: renders the browser UI, collects user intent, calls
    rpcd methods, shows status/errors, and never executes shell commands or edits
    localClash files directly.
-3. **LuCI helper function layer**: owns all router-side imperative integration
-   that is not the localClash core itself. It downloads and installs
+3. **LuCI/OpenWrt integration layer**: owns all router-side imperative
+   integration. It downloads and installs
    `/usr/local/bin/localclash`, creates or repairs `/etc/init.d/localclash-mcp`,
    starts/stops/inspects the procd service, bridges LuCI requests to product CLI
    JSON commands, and reports bootstrap/service status.
-4. **Downloaded localClash core**: owns product behavior after installation:
+4. **Downloaded localClash Core**: owns Mihomo product behavior after installation:
    subscriptions, config model, config render, product CLI JSON commands, MCP
-   HTTP server, component updates, Mihomo lifecycle, router takeover,
+   HTTP server, component updates, Mihomo lifecycle, and versioned runtime facts,
    diagnostics, and reset. It also owns runtime artifacts created by those
    operations, including Mihomo cores, dashboard assets, subscription artifacts,
    generated configs, logs, and runtime state.
 
-The localClash core is installed or updated over the network from a release
-source. After the core is installed, product behavior delegates to the existing
-localClash runtime, subscription, render, MCP, and router takeover logic.
+The localClash Core is installed or updated over the network from a release
+source. It never executes `fw4`, `nft`, `uci`, or `ip rule`; OpenWrt takeover is
+implemented and released by this repository.
 
 ```text
 luci-app-localclash package
@@ -49,6 +49,8 @@ LuCI helper function layer
 -> create or repair /etc/init.d/localclash-mcp
 -> start/stop/status procd service
 -> bridge LuCI requests to product CLI JSON
+-> own takeover status/apply/stop/reconcile
+-> own runtime/takeover cross-module transactions
 
 downloaded localClash core
 -> subscriptions
@@ -56,7 +58,7 @@ downloaded localClash core
 -> config render
 -> MCP HTTP server
 -> Mihomo lifecycle
--> router takeover
+-> versioned runtime facts
 -> doctor/status
 ```
 
@@ -99,6 +101,8 @@ The LuCI helper function layer should provide:
 - `service_start`, `service_stop`, and `service_status`.
 - JSON request bridging from LuCI/rpcd to localClash product CLI commands.
 - bootstrap and service logs with secrets redacted.
+- the `/usr/libexec/localclash/takeover` deep module for fw4/nft, policy routing,
+  DNS hijack, ownership state, status/apply/stop/reconcile, boot, and hotplug.
 
 The downloaded localClash core should provide:
 
@@ -106,7 +110,8 @@ The downloaded localClash core should provide:
 - component status/update for Mihomo cores and dashboard assets.
 - config template application, render, and status.
 - runtime start, restart, stop, and status.
-- router takeover apply, stop, and status.
+- schema-versioned runtime facts from the actual generated config, managed
+  process, and controller readiness probe.
 - product CLI JSON commands and MCP server behavior.
 - ownership of generated/runtime artifacts such as `bin/linux-*`,
   `.runtime/mihomo/ui/`, `subscription.yaml`, `.runtime/subscriptions/`,
@@ -433,13 +438,14 @@ localclash config apply-template --input config-request.json --json
 localclash config render --json
 
 localclash runtime status --json
+localclash runtime facts --json
 localclash runtime start --json
 localclash runtime restart --json
 localclash runtime stop --json
 
-localclash takeover status --json
-localclash takeover apply --json
-localclash takeover stop --json
+/usr/libexec/localclash/takeover status --json
+/usr/libexec/localclash/takeover apply --json
+/usr/libexec/localclash/takeover stop --json
 
 localclash apply --input desired-state.json --json
 localclash reset --json
@@ -468,7 +474,8 @@ Current implementation anchors:
 - core download: `internal/coredownload.Download`.
 - dashboard download: `internal/dashboard.Download`.
 - runtime control: `internal/corerun.Start`, `Restart`, `Stop`, and `Status`.
-- router takeover: `internal/routertakeover.Status`, `Apply`, and `Stop`.
+- runtime facts: Core `internal/runtimefacts.Read`.
+- router takeover: LuCI-owned `/usr/libexec/localclash/takeover` interface.
 - reset: `internal/reset.Run`.
 
 ### `subscription set --input subscriptions.json`
@@ -597,8 +604,7 @@ Schema:
     "allow_overwrite_modified": false
   },
   "runtime": {
-    "service": "restart_if_needed",
-    "router_takeover": "enabled"
+    "service": "restart_if_needed"
   }
 }
 ```
@@ -628,7 +634,6 @@ Fields:
 - `runtime`: optional object. Missing fields default to `leave`.
 - `runtime.service`: string enum: `leave`, `start`, `restart`,
   `restart_if_needed`, `stop`.
-- `runtime.router_takeover`: string enum: `leave`, `enabled`, `disabled`.
 
 This preview is LuCI's apply preview, not an Agent or MCP plan.
 
@@ -650,18 +655,14 @@ Runtime behavior must follow current runtime code:
 - `runtime.service = restart` maps to `corerun.Restart`.
 - `runtime.service = restart_if_needed` starts when stopped and restarts when
   already running.
-- `runtime.service = stop` maps to `corerun.Stop`, with existing router takeover
-  guards preserved by product-level orchestration.
+- `runtime.service = stop` maps to `corerun.Stop`. LuCI must stop and verify its
+  own takeover state before invoking this Core operation.
 - Runtime commands use the active runtime profile core path and the default
   generated config/runtime paths unless future code explicitly adds separate
   product requirements.
 
-Router takeover behavior must follow current router takeover code:
-
-- `runtime.router_takeover = enabled` maps to `routertakeover.Apply` after the
-  runtime is running and profile mode is `router`.
-- `runtime.router_takeover = disabled` maps to `routertakeover.Stop`.
-- No persistent OpenWrt firewall configuration is written.
+Router takeover is not part of the Core desired-state contract. LuCI converges
+it separately through its own manager after the Core runtime transaction.
 
 ## No-Input Command Contracts
 
@@ -711,13 +712,11 @@ otherwise.
   when the effective subscription exists and generated config is missing.
 - `runtime restart --json`: maps to `corerun.Restart` and validates config before
   replacing the running process.
-- `runtime stop --json`: maps to `corerun.Stop`, with product-level guard that
-  refuses to stop while router takeover is effective unless takeover is stopped
-  first.
-- `takeover status --json`: maps to `routertakeover.Status`.
-- `takeover apply --json`: maps to `routertakeover.Apply`; it requires router
-  profile mode and running Mihomo.
-- `takeover stop --json`: maps to `routertakeover.Stop`.
+- `runtime facts --json`: returns schema-versioned facts from the actual
+  generated config, managed runtime, and controller readiness probe.
+- `runtime stop --json`: maps only to `corerun.Stop`.
+- `/usr/libexec/localclash/takeover status|apply|stop`: LuCI-owned OpenWrt
+  manager interface; apply requires complete ready Core runtime facts.
 - `reset --json`: maps to `reset.Run` with the fixed configuration/runtime
   reset scope described above. It must refuse while Mihomo is running.
 - `reset --full --json`: maps to `reset.Run` with full-workspace reset enabled.
@@ -995,13 +994,15 @@ Method contracts:
   takeover only when it was effective before the restart, and verifies the
   final runtime and takeover state before returning success. Unknown,
   inconsistent, or partially restored state returns an explicit failure.
-- `runtime_stop`: no input. Calls `localclash runtime stop --json`.
-- `takeover_status`: no input. Calls `localclash takeover status --json`.
+- `runtime_stop`: no input. Calls the LuCI takeover manager to stop and verify
+  takeover first; only then calls `localclash runtime stop --json`.
+- `takeover_status`: no input. Calls
+  `/usr/libexec/localclash/takeover status --json`.
 - `takeover_logs`: no input. Returns the bounded persistent LuCI takeover event
   journal together with a current read-only snapshot of policy routes, the
   `utun` link, localClash-owned fw4/nft rules, expected listeners, recent
-  fw4/netifd system events, and the current Core takeover status. The helper
-  captures kernel/firewall facts before calling Core status so workspace
+  fw4/netifd system events, and the current LuCI manager status. The helper
+  captures kernel/firewall facts before calling manager status so workspace
   bootstrap cannot replace the first observed state. The journal records boot
   ID, uptime, trigger source, repair markers, action result, and exact exit code;
   it is private, rotates at 256 KiB while retaining the newest 128 KiB, and must
@@ -1019,8 +1020,8 @@ Method contracts:
   local DNS addresses or domains. The encoded URL must stay below the local safety
   limit to avoid GitHub `414 URI Too Long`. LuCI must not store a GitHub token or
   submit the issue without the user's final review on GitHub.
-- `takeover_apply`: no input. Calls `localclash takeover apply --json`.
-- `takeover_stop`: no input. Calls `localclash takeover stop --json`.
+- `takeover_apply`: no input. Calls the LuCI manager `apply --json`.
+- `takeover_stop`: no input. Calls the LuCI manager `stop --json`.
 - `config_reset`: no input. Calls `localclash reset --json`.
 - `reset`: no input. Calls `localclash reset --full --json`.
 - `service_start`: no input. Ensures the procd service wrapper exists, enables

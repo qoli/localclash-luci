@@ -11,6 +11,10 @@
 
 > [!TIP]
 > ☕ localClash 是独立维护的开源项目。如果它帮你省了配置 Mihomo 和接管路由器网络的时间，欢迎支持项目继续维护。
+
+责任划分：localClash Core 只负责 Mihomo 配置、验证、程序生命周期与
+`runtime facts`；本项目的 OpenWrt manager 独立拥有 fw4/nft、policy routing、
+DNS hijack、接管状态、boot/hotplug 恢复，以及 runtime/takeover transaction。
 >
 > [![支持 localClash](https://img.shields.io/badge/支持-localClash-f97316?style=for-the-badge)](https://github.com/qoli/localClash/blob/main/SUPPORT.md)
 >
