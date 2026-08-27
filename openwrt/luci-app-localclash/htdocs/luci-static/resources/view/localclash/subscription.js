@@ -314,7 +314,7 @@ return view.extend({
 				'.localclash-view .localclash-button:active{transform:translateY(1px)}',
 				'.localclash-view .localclash-button.localclash-busy{cursor:wait;opacity:.72}',
 				'.localclash-view .localclash-textarea{box-sizing:border-box;width:calc(100% - 2rem);min-height:12rem;margin:1rem;padding:1rem;font-family:monospace;line-height:1.45;resize:vertical}',
-				'.localclash-view .localclash-subscription-status{margin:.25rem 1rem 0 1rem;color:#667085;line-height:1.45}',
+				'.localclash-view .localclash-subscription-status{margin:.25rem 1rem 0 1rem;color:inherit;line-height:1.45}',
 				'.localclash-view .localclash-subscription-status.localclash-error{color:#b42318}',
 				'.localclash-view + .cbi-page-actions,.localclash-view ~ .cbi-page-actions,.cbi-page-actions{display:none!important}',
 				'.localclash-result{box-sizing:border-box;width:100%;min-width:0;max-width:100%;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word}',

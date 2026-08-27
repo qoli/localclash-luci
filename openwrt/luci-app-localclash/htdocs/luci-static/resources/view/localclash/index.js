@@ -1046,7 +1046,7 @@ return view.extend({
 				'.localclash-view .localclash-button.localclash-busy{cursor:wait;opacity:.72}',
 				'.localclash-view .localclash-danger{border-color:#c44;background:#d94b4b;color:#fff}',
 				'.localclash-view + .cbi-page-actions,.localclash-view ~ .cbi-page-actions,.cbi-page-actions{display:none!important}',
-				'.localclash-view .localclash-muted{color:#667085;line-height:1.55}',
+				'.localclash-view .localclash-muted{color:inherit;line-height:1.55}',
 				'.localclash-view .localclash-status-table{width:100%;max-width:100%}',
 				'.localclash-view table.table th,.localclash-view table.table td{text-align:left;height:70px;vertical-align:middle;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}',
 				'.localclash-view table.table tr.cbi-rowstyle-1,.localclash-view table.table tr.cbi-rowstyle-1 > th,.localclash-view table.table tr.cbi-rowstyle-1 > td{background-color:rgba(255,255,255,.03)}',
