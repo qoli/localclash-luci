@@ -42,7 +42,6 @@ printf '2026-08-01T06:16:32+08:00 dnsqualify 进度：仍在运行：正在进�
 cat > "$output" <<'JSON'
 {
   "version": 2,
-  "expires_at": "2026-07-31T08:30:01Z",
   "nameserver_policy": {
     "cdn.fastly.steamstatic.com": ["https://8.8.8.8/dns-query#DNSProxy&ecs=114.114.114.0/24&ecs-override=true"],
     "devstreaming-cdn.apple.com": ["https://8.8.8.8/dns-query#DNSProxy&ecs=114.114.114.0/24&ecs-override=true"]
@@ -50,7 +49,7 @@ cat > "$output" <<'JSON'
 }
 JSON
 cat > "$report_output" <<'JSON'
-{"version":1,"measurement":{"finished_at":"2026-07-31T08:00:00Z","service_catalog":{"id":"mainland-known-services-v2"}},"selection":{"selected_id":"google-doh-wan-ecs","candidates":[{"id":"google-doh-wan-ecs","source":"global_encrypted_ecs","transport":"doh","endpoint":"https://8.8.8.8/dns-query","ecs_prefix":"114.114.114.0/24","ecs_source":"stun_xor_mapped_address_mainland","ecs_interface":"wan-test","ecs_server":"stun.chat.bilibili.com:3478","ecs_server_ip":"106.12.251.193"}]},"selected":{"id":"google-doh-wan-ecs","source":"global_encrypted_ecs","transport":"doh","endpoint":"https://8.8.8.8/dns-query","ecs_prefix":"114.114.114.0/24","ecs_source":"stun_xor_mapped_address_mainland","ecs_interface":"wan-test","ecs_server":"stun.chat.bilibili.com:3478","ecs_server_ip":"106.12.251.193"},"expires_at":"2026-07-31T08:30:01Z"}
+{"version":1,"measurement":{"finished_at":"2026-07-31T08:00:00Z","service_catalog":{"id":"mainland-known-services-v2"}},"selection":{"selected_id":"google-doh-wan-ecs","candidates":[{"id":"google-doh-wan-ecs","source":"global_encrypted_ecs","transport":"doh","endpoint":"https://8.8.8.8/dns-query","ecs_prefix":"114.114.114.0/24","ecs_source":"stun_xor_mapped_address_mainland","ecs_interface":"wan-test","ecs_server":"stun.chat.bilibili.com:3478","ecs_server_ip":"106.12.251.193"}]},"selected":{"id":"google-doh-wan-ecs","source":"global_encrypted_ecs","transport":"doh","endpoint":"https://8.8.8.8/dns-query","ecs_prefix":"114.114.114.0/24","ecs_source":"stun_xor_mapped_address_mainland","ecs_interface":"wan-test","ecs_server":"stun.chat.bilibili.com:3478","ecs_server_ip":"106.12.251.193"}}
 JSON
 printf '{"output":"%s","recommended_id":"google-doh-wan-ecs"}\n' "$output"
 SH
@@ -76,7 +75,6 @@ jsonfilter() {
 	done
 	case "${expression:-}" in
 		@.version) sed -n 's/.*"version": *\([0-9][0-9]*\).*/\1/p' "${input}" ;;
-		@.expires_at) sed -n 's/.*"expires_at": *"\([^"]*\)".*/\1/p' "${input}" ;;
 		@.selection.selected_id) sed -n 's/.*"selected_id": *"\([^"]*\)".*/\1/p' "${input}" ;;
 		@.measurement.service_catalog.id) sed -n 's/.*"service_catalog": *{"id": *"\([^"]*\)".*/\1/p' "${input}" ;;
 		@.measurement.finished_at) sed -n 's/.*"finished_at": *"\([^"]*\)".*/\1/p' "${input}" ;;
@@ -136,11 +134,6 @@ network_flush_cache() {
 }
 dnsqualify_wan_ecs
 [ "$DNSQUALIFY_ECS_INTERFACE" = "wan-test" ] || fail_test "WAN device identity was not preserved"
-[ "$(dnsqualify_timestamp_epoch '2026-08-26T09:00:00Z')" = "1787734800" ] || fail_test "UTC RFC3339 timestamp was not parsed"
-[ "$(dnsqualify_timestamp_epoch '2026-08-26T17:00:00.123456789+08:00')" = "1787734800" ] || fail_test "fractional offset RFC3339 timestamp was not parsed"
-if dnsqualify_timestamp_epoch '2026-08-26 17:00:00' >/dev/null 2>&1; then
-	fail_test "non-RFC3339 timestamp was unexpectedly accepted"
-fi
 dnsqualify_ensure() {
 	ok '"changed":false,"summary":"dnsqualify 已安装。","dnsqualify":{"installed":true,"version":"v0.1.0-41"}}'
 }
@@ -151,6 +144,9 @@ printf '%s\n' "$result" | grep -q '"restart_required":true' || fail_test "succes
 [ -f "${STATE_DIR}/dnsqualify.json" ] || fail_test "standalone dnsqualify config was not created"
 [ -f "${STATE_DIR}/dnsqualify-report.json" ] || fail_test "dnsqualify evidence report was not published"
 grep -q '"nameserver_policy"' "${STATE_DIR}/dnsqualify.json" || fail_test "Core overlay was not preserved"
+if grep -q '"expires_at"' "${STATE_DIR}/dnsqualify.json" "${STATE_DIR}/dnsqualify-report.json"; then
+	fail_test "dnsqualify output retained a time-based expiry"
+fi
 if grep -Eq 'candidate_id|ecs_source|country_code|server_ip|interface' "${STATE_DIR}/dnsqualify.json"; then
 	fail_test "Core overlay leaked dnsqualify implementation provenance"
 fi
@@ -162,14 +158,19 @@ if grep -q '^dns ' "${tmp_dir}/trace"; then
 	fail_test "LuCI called a forbidden Core DNS command"
 fi
 
-dnsqualify_timestamp_epoch() { printf '200\n'; }
-dnsqualify_now_epoch() { printf '100\n'; }
 status_result="$(dnsqualify_status)"
 printf '%s\n' "$status_result" | grep -q '"mode":"qualified_ecs"' || fail_test "status did not report standalone config: ${status_result}"
 printf '%s\n' "$status_result" | grep -q '"prefix":"114.114.114.0/24"' || fail_test "status did not report ECS prefix: ${status_result}"
 printf '%s\n' "$status_result" | grep -q '"source":"stun_xor_mapped_address_mainland"' || fail_test "status did not report STUN observation provenance: ${status_result}"
 printf '%s\n' "$status_result" | grep -q '"server":"stun.chat.bilibili.com:3478"' || fail_test "status did not report mainland STUN server: ${status_result}"
 printf '%s\n' "$status_result" | grep -q '"binary_version":"v0.1.0-41"' || fail_test "status did not report binary version: ${status_result}"
+
+cp "${STATE_DIR}/dnsqualify.json" "${tmp_dir}/config-without-expiry.json"
+sed 's/"version": 2,/"version": 2, "expires_at": "2000-01-01T00:00:00Z",/' \
+	"${tmp_dir}/config-without-expiry.json" > "${STATE_DIR}/dnsqualify.json"
+status_result="$(dnsqualify_status)"
+printf '%s\n' "$status_result" | grep -q '"mode":"qualified_ecs"' || fail_test "ignored producer metadata disabled optimization: ${status_result}"
+cp "${tmp_dir}/config-without-expiry.json" "${STATE_DIR}/dnsqualify.json"
 
 cp "${STATE_DIR}/dnsqualify-report.json" "${tmp_dir}/stun-report.json"
 sed -e 's/stun_xor_mapped_address_mainland/https_json_ipapi_is/g' \
@@ -185,12 +186,6 @@ mv "${tmp_dir}/non-cn.json" "${STATE_DIR}/dnsqualify-report.json"
 status_result="$(dnsqualify_status)"
 printf '%s\n' "$status_result" | grep -q '"country_code":"HK"' || fail_test "LuCI did not remain a presentation-only report reader"
 cp "${tmp_dir}/stun-report.json" "${STATE_DIR}/dnsqualify-report.json"
-
-dnsqualify_timestamp_epoch() { printf '50\n'; }
-status_result="$(dnsqualify_status)"
-printf '%s\n' "$status_result" | grep -q '"enabled":false' || fail_test "expired optimization remained enabled: ${status_result}"
-printf '%s\n' "$status_result" | grep -q '"disabled_reason":"expired"' || fail_test "expired optimization did not report its disabled reason: ${status_result}"
-printf '%s\n' "$status_result" | grep -q '"retained_config":true' || fail_test "expired status did not report retained evidence: ${status_result}"
 
 printf '{"marker":"wan-stable"}\n' > "${STATE_DIR}/dnsqualify.json"
 ecs_read_count=0

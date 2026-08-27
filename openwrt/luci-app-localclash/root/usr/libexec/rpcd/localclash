@@ -3059,55 +3059,6 @@ dnsqualify_installed_version() {
 	"$DNSQUALIFY" --version 2>/dev/null | sed -n 's/^dnsqualify \(v[^ ]*\)$/\1/p' | head -n 1
 }
 
-dnsqualify_timestamp_epoch() {
-	local value base suffix epoch sign hours minutes offset platform
-	value="$1"
-	base="$(printf '%.19s' "$value")"
-	[ "${#base}" -eq 19 ] || return 1
-	suffix="${value#"$base"}"
-	suffix="$(printf '%s' "$suffix" | sed 's/^\.[0-9][0-9]*//')"
-	case "$suffix" in
-		Z)
-			offset=0
-			;;
-		[+-][0-9][0-9]:[0-9][0-9])
-			sign="${suffix%${suffix#?}}"
-			hours="${suffix#?}"
-			hours="${hours%%:*}"
-			minutes="${suffix##*:}"
-			hours="${hours#0}"
-			minutes="${minutes#0}"
-			[ -n "$hours" ] || hours=0
-			[ -n "$minutes" ] || minutes=0
-			[ "$hours" -le 23 ] && [ "$minutes" -le 59 ] || return 1
-			offset=$((hours * 3600 + minutes * 60))
-			[ "$sign" = "+" ] || offset=$((-offset))
-			;;
-		*) return 1 ;;
-	esac
-	platform="$(uname -s 2>/dev/null)" || return 1
-	case "$platform" in
-		Darwin)
-			epoch="$(date -j -u -f '%Y-%m-%dT%H:%M:%S' "$base" +%s 2>/dev/null)" || return 1
-			;;
-		Linux)
-			if date --version 2>/dev/null | grep -q 'GNU coreutils'; then
-				epoch="$(date -u -d "$base" +%s 2>/dev/null)" || return 1
-			else
-				epoch="$(date -u -D '%Y-%m-%dT%H:%M:%S' -d "$base" +%s 2>/dev/null)" || return 1
-			fi
-			;;
-		*)
-			return 1
-			;;
-	esac
-	printf '%s\n' $((epoch - offset))
-}
-
-dnsqualify_now_epoch() {
-	date +%s
-}
-
 dnsqualify_install() {
 	local arch tmpdir manifest binary manifest_schema asset_os asset_url asset_sha asset_version current_sha reported_version install_dir tmp_binary
 	if ! command -v jsonfilter >/dev/null 2>&1; then
@@ -3236,7 +3187,7 @@ dnsqualify_ensure() {
 }
 
 dnsqualify_status() {
-	local config report version scope_id candidate source transport endpoint ecs_prefix ecs_source ecs_interface ecs_server ecs_server_ip ecs_country_code ecs_country_json generated expires expires_epoch now_epoch installed binary_version
+	local config report version scope_id candidate source transport endpoint ecs_prefix ecs_source ecs_interface ecs_server ecs_server_ip ecs_country_code ecs_country_json generated installed binary_version
 	config="$(dnsqualify_config_path)" || return 1
 	report="$(dnsqualify_report_path)" || return 1
 	installed=false
@@ -3250,19 +3201,9 @@ dnsqualify_status() {
 		return 0
 	fi
 	version="$(jsonfilter -i "$config" -e '@.version' 2>/dev/null || true)"
-	expires="$(jsonfilter -i "$config" -e '@.expires_at' 2>/dev/null || true)"
-	if [ "$version" != "2" ] || [ -z "$expires" ]; then
+	if [ "$version" != "2" ]; then
 		fail "dnsqualify_config_invalid" "dnsqualify overlay 存在但契约不完整；Core 渲染也会明确拒绝。"
 		return 1
-	fi
-	expires_epoch="$(dnsqualify_timestamp_epoch "$expires" 2>/dev/null || true)"
-	now_epoch="$(dnsqualify_now_epoch 2>/dev/null || true)"
-	case "$expires_epoch:$now_epoch" in
-		*[!0-9:]*|:*|*:) fail "dnsqualify_expiry_invalid" "无法验证 dnsqualify overlay 过期时间；Core 也不会启用该最佳化。"; return 1 ;;
-	esac
-	if [ "$expires_epoch" -le "$now_epoch" ]; then
-		ok '"status":{"enabled":false,"mode":"secure_baseline","scope":"default","disabled_reason":"expired","expired_at":"'"$(json_escape "$expires")"'","retained_config":true},"binary_installed":'"$installed"',"binary_version":"'"$(json_escape "$binary_version")"'"'
-		return 0
 	fi
 	scope_id=""
 	candidate=""
@@ -3294,7 +3235,7 @@ dnsqualify_status() {
 	fi
 	ecs_country_json=""
 	[ -z "$ecs_country_code" ] || ecs_country_json=',"country_code":"'"$(json_escape "$ecs_country_code")"'"'
-	ok '"status":{"enabled":true,"mode":"qualified_ecs","scope":"'"$(json_escape "$scope_id")"'","resolver":{"candidate_id":"'"$(json_escape "$candidate")"'","source":"'"$(json_escape "$source")"'","transport":"'"$(json_escape "$transport")"'","endpoint":"'"$(json_escape "$endpoint")"'"},"ecs":{"prefix":"'"$(json_escape "$ecs_prefix")"'","source":"'"$(json_escape "$ecs_source")"'","interface":"'"$(json_escape "$ecs_interface")"'","server":"'"$(json_escape "$ecs_server")"'","server_ip":"'"$(json_escape "$ecs_server_ip")"'"'"$ecs_country_json"'},"generated_at":"'"$(json_escape "$generated")"'","expires_at":"'"$(json_escape "$expires")"'"},"binary_installed":'"$installed"',"binary_version":"'"$(json_escape "$binary_version")"'"'
+	ok '"status":{"enabled":true,"mode":"qualified_ecs","scope":"'"$(json_escape "$scope_id")"'","resolver":{"candidate_id":"'"$(json_escape "$candidate")"'","source":"'"$(json_escape "$source")"'","transport":"'"$(json_escape "$transport")"'","endpoint":"'"$(json_escape "$endpoint")"'"},"ecs":{"prefix":"'"$(json_escape "$ecs_prefix")"'","source":"'"$(json_escape "$ecs_source")"'","interface":"'"$(json_escape "$ecs_interface")"'","server":"'"$(json_escape "$ecs_server")"'","server_ip":"'"$(json_escape "$ecs_server_ip")"'"'"$ecs_country_json"'},"generated_at":"'"$(json_escape "$generated")"'"},"binary_installed":'"$installed"',"binary_version":"'"$(json_escape "$binary_version")"'"'
 }
 
 dnsqualify_run() {
