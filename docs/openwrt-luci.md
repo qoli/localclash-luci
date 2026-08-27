@@ -989,7 +989,12 @@ Method contracts:
   `version: 1`, writes a temporary JSON file, calls
   `localclash apply --input <file> --json`, then removes the temp file.
 - `runtime_start`: no input. Calls `localclash runtime start --json`.
-- `runtime_restart`: no input. Calls `localclash runtime restart --json`.
+- `runtime_restart`: no input. This is the LuCI-managed restart interface. It
+  observes and validates the current runtime/takeover state, calls
+  `localclash runtime restart --strategy process_restart --json`, restores
+  takeover only when it was effective before the restart, and verifies the
+  final runtime and takeover state before returning success. Unknown,
+  inconsistent, or partially restored state returns an explicit failure.
 - `runtime_stop`: no input. Calls `localclash runtime stop --json`.
 - `takeover_status`: no input. Calls `localclash takeover status --json`.
 - `takeover_logs`: no input. Returns the bounded persistent LuCI takeover event
