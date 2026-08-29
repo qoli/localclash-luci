@@ -60,6 +60,9 @@ assert(viewSource.includes('runMutationTask'));
 assert(viewSource.includes("_('任务执行中，已等待 %s 秒。')"));
 assert(!viewSource.includes('callLongCustomSitesTransaction'));
 assert(viewSource.includes('customSitesUI.crossListDuplicateIDs(customSites)'));
+assert(viewSource.includes('if (warning)'));
+assert(viewSource.includes('site.push(warning)'));
+assert(!viewSource.includes('warning\n\t\t]),'), 'a missing warning must not be passed to LuCI E() as null');
 assert(!viewSource.includes('conflict'), 'warning must not depend on a Core conflict field');
 
 assert(overviewSource.includes("'id': 'localclash-overview-preserve-custom-sites'"));

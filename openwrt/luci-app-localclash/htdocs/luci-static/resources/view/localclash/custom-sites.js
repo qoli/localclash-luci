@@ -234,12 +234,13 @@ function siteRow(entry, warned) {
 		'class': 'localclash-custom-site-warning-text',
 		'title': _('相同网站也存在于另一个列表中；最后加入的自定义规则优先。')
 	}, [ _('⚠ 重复决定') ]) : null;
+	var site = [ E('code', {}, [ entry.pattern ]) ];
+
+	if (warning)
+		site.push(warning);
 
 	return E('tr', { 'class': warned ? 'tr localclash-custom-site-warning' : 'tr' }, [
-		E('td', { 'class': 'td', 'data-title': _('网站') }, [
-			E('code', {}, [ entry.pattern ]),
-			warning
-		]),
+		E('td', { 'class': 'td', 'data-title': _('网站') }, site),
 		E('td', { 'class': 'td', 'data-title': _('匹配方式') }, [ matchLabel(entry.match) ]),
 		E('td', { 'class': 'td', 'data-title': _('加入时间') }, [ entry.added_at ]),
 		E('td', { 'class': 'td cbi-section-actions', 'data-title': _('操作') }, [ deleteButton(entry) ])
