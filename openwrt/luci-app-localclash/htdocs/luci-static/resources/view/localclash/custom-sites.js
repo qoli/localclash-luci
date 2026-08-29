@@ -14,6 +14,7 @@ var callCustomSitesAdd = rpc.declare({
 	object: 'localclash',
 	method: 'custom_sites_transact',
 	params: [ 'operation', 'pattern', 'route' ],
+	nobatch: true,
 	expect: { '': {} }
 });
 
@@ -21,10 +22,27 @@ var callCustomSitesDelete = rpc.declare({
 	object: 'localclash',
 	method: 'custom_sites_transact',
 	params: [ 'operation', 'id' ],
+	nobatch: true,
 	expect: { '': {} }
 });
 
 var currentCustomSites = null;
+
+function callLongCustomSitesTransaction(call, args) {
+	var previousTimeout = L.env.rpctimeout;
+	var currentTimeout = Number(previousTimeout);
+
+	L.env.rpctimeout = Math.max(isFinite(currentTimeout) ? currentTimeout : 20, 300);
+	try {
+		return call.apply(null, args);
+	}
+	finally {
+		if (previousTimeout === undefined)
+			delete L.env.rpctimeout;
+		else
+			L.env.rpctimeout = previousTimeout;
+	}
+}
 
 function formatText(text) {
 	var args = Array.prototype.slice.call(arguments, 1);
@@ -121,7 +139,7 @@ function showAddDialog() {
 			}
 
 			setBusy(save, true, saveLabel);
-			callCustomSitesAdd('add', pattern, route).then(function(result) {
+			callLongCustomSitesTransaction(callCustomSitesAdd, [ 'add', pattern, route ]).then(function(result) {
 				showMutationResult(result);
 				ui.hideModal();
 			}).catch(function(err) {
@@ -165,7 +183,7 @@ function deleteButton(entry) {
 			if (!window.confirm(formatText(_('删除 %s？删除后，较早加入且能匹配同一网站的规则可能重新生效。'), entry.pattern)))
 				return;
 			setBusy(button, true, label);
-			callCustomSitesDelete('delete', entry.id).then(showMutationResult).catch(function(err) {
+			callLongCustomSitesTransaction(callCustomSitesDelete, [ 'delete', entry.id ]).then(showMutationResult).catch(function(err) {
 				ui.addNotification(null, E('p', {}, [ err.message || String(err) ]), 'danger');
 			}).finally(function() {
 				setBusy(button, false, label);

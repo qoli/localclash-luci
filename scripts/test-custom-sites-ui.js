@@ -53,7 +53,10 @@ assert(viewSource.includes("_('完整匹配')"));
 assert(viewSource.includes("_('通配符匹配')"));
 assert(viewSource.includes("_('代理出口')"));
 assert(viewSource.includes("_('直连')"));
-assert(viewSource.includes("callCustomSitesDelete('delete', entry.id)"));
+assert(viewSource.includes('callLongCustomSitesTransaction(callCustomSitesDelete'));
+assert(viewSource.includes('nobatch: true'));
+assert(viewSource.includes('L.env.rpctimeout = Math.max'));
+assert(viewSource.includes('300'));
 assert(viewSource.includes('customSitesUI.crossListDuplicateIDs(customSites)'));
 assert(!viewSource.includes('conflict'), 'warning must not depend on a Core conflict field');
 
