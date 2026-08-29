@@ -38,6 +38,7 @@ jobs:
             node --check "$file"
           done
           node scripts/test-takeover-issue-report.js
+          node scripts/test-custom-sites-ui.js
           sh -n openwrt/luci-app-localclash/root/usr/libexec/rpcd/localclash
           sh -n packaging/istore/install.sh
           python3 -m py_compile scripts/generate-release-notes.py

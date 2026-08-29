@@ -72,8 +72,10 @@ LuCI should manage only the beginner closed loop:
 6. show status and MCP connection guidance
 
 Advanced edits remain MCP or SSH work. LuCI must not expose a full editor for
-packs, proxy groups, custom rules, external rule providers, runtime profiles, or
-generated Mihomo YAML.
+packs, proxy groups, arbitrary custom rules, external rule providers, runtime
+profiles, or generated Mihomo YAML. The narrow `网站分流` page is the explicit
+exception: it only records a complete or DOMAIN-WILDCARD host pattern and a
+proxy/direct decision through the Core-owned custom-site interface.
 
 ## Role Responsibilities
 
@@ -143,6 +145,30 @@ primary action:
 
 Subscription URLs are secrets. The status page may show source IDs and refresh
 state, but must not render full URLs after save.
+
+### 1a. Simple Website Routing
+
+The `网站分流` page sits between `订阅` and `进阶`. It accepts one host pattern at
+a time and one decision: `代理出口` or `直连`. A pattern without `*` or `?` uses
+Mihomo `DOMAIN`; a pattern containing either wildcard uses
+`DOMAIN-WILDCARD`. The Core validates and normalizes the pattern.
+
+The page lists `自訂代理網站` and `自訂直連網站` separately. Both lists are
+returned newest-first by the Core. When the same normalized pattern exists in
+both lists, LuCI JavaScript marks both rows yellow; this warning is not stored,
+does not block the transaction, and does not alter the Core-defined rule order.
+The newest successfully added custom rule always has the highest priority.
+
+LuCI sends add and delete intent only. The Core owns candidate intent creation,
+policy-group and rule compilation, render, `mihomo -t`, atomic persistence,
+runtime reload, and read-back verification. LuCI must never edit either custom
+site JSON file or generated Mihomo YAML directly.
+
+Custom-site mutations start a background task immediately and use the same
+task-status and log surfaces as subscription setup and one-click update. The
+modal shows elapsed time plus live validation, render, `mihomo -t`, promotion,
+reload, read-back, and rollback progress instead of holding a silent XHR open.
+The list refreshes only after the task returns a successful Core transaction.
 
 ### 2. Service Status Report
 
@@ -896,6 +922,8 @@ Methods:
 status
 subscription_set
 subscription_refresh
+custom_sites_get
+custom_sites_transact
 component_update
 one_click_update
 apply
@@ -927,6 +955,18 @@ Method contracts:
   file.
 - `subscription_refresh`: no input. Calls
   `localclash subscription refresh --json`.
+- `custom_sites_get`: no input. Calls
+  `localclash custom-sites list --json` and returns the authoritative proxy and
+  direct lists unchanged.
+- `custom_sites_transact`: accepts exactly one versioned tagged operation:
+  `{ "version":1, "operation":"add", "pattern":"abc.*cdn.com",
+  "route":"proxy|direct" }` or
+  `{ "version":1, "operation":"delete", "id":"<stable-entry-id>" }`.
+  The helper calls
+  `localclash custom-sites transact --input <file> --json` under the shared
+  localClash task lock. Core validation, render, config test, persistence,
+  reload, and read-back are one authoritative transaction; the helper does not
+  recreate any of those steps.
 - `bootstrap_default`: optional input `{ "uris": ["https://...", "vless://..."], "core":
   "meta|smart", "template": "localclash-default|minimal" }`. It installs or
   updates the localClash core, base assets, Mihomo, and dashboard; when URIs are
@@ -955,7 +995,14 @@ Method contracts:
   When `sync_default_policy=true`, the policy sync sends `reset_patches=true`:
   it discards every local policy patch, including user-sourced patches, and
   imports the latest built-in defaults. This explicit reset avoids same-pack
-  conflicts during a user-selected default-policy sync. The task keeps the
+  conflicts during a user-selected default-policy sync. The custom-site
+  proxy/direct documents remain outside the patch registry. Before and after a
+  selected default-policy sync, the helper reads the Core-owned custom-site
+  snapshot and compares both list counts and both document SHA256 values. Any
+  mismatch is an explicit update failure; a successful result includes the
+  before/after preservation evidence. LuCI displays an always-checked disabled
+  `保留用戶自訂網站列表` indicator, but does not persist or send a preference for
+  this invariant. The task keeps the
   current runtime untouched during download, update,
   render, and config-test preparation, and only enters the outage window for the
   final runtime switch. If Mihomo core changed, the final switch uses

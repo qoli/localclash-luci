@@ -49,6 +49,8 @@ docker run --rm \
 		grep -q '  www/luci-static/resources/view/localclash/index.js$' /tmp/localclash-apk-manifest.txt
 		grep -q '  www/luci-static/resources/view/localclash/overview.js$' /tmp/localclash-apk-manifest.txt
 		grep -q '  www/luci-static/resources/view/localclash/subscription.js$' /tmp/localclash-apk-manifest.txt
+		grep -q '  www/luci-static/resources/view/localclash/custom-sites.js$' /tmp/localclash-apk-manifest.txt
+		grep -q '  www/luci-static/resources/localclash/custom-sites.js$' /tmp/localclash-apk-manifest.txt
 	"
 
 printf 'Uploading %s to %s:%s\n' "${apk_name}" "${target}" "${remote_apk}"
@@ -82,10 +84,13 @@ test -f /usr/share/localclash/mcp-help.txt
 test -f /www/luci-static/resources/view/localclash/index.js
 test -f /www/luci-static/resources/view/localclash/overview.js
 test -f /www/luci-static/resources/view/localclash/subscription.js
+test -f /www/luci-static/resources/view/localclash/custom-sites.js
+test -f /www/luci-static/resources/localclash/custom-sites.js
 
 jsonfilter -i /usr/share/luci/menu.d/luci-app-localclash.json -e '@["admin/services/localclash"].title' >/dev/null
 jsonfilter -i /usr/share/luci/menu.d/luci-app-localclash.json -e '@["admin/services/localclash/overview"].title' >/dev/null
 jsonfilter -i /usr/share/luci/menu.d/luci-app-localclash.json -e '@["admin/services/localclash/subscription"].title' >/dev/null
+jsonfilter -i /usr/share/luci/menu.d/luci-app-localclash.json -e '@["admin/services/localclash/custom-sites"].title' >/dev/null
 jsonfilter -i /usr/share/luci/menu.d/luci-app-localclash.json -e '@["admin/services/localclash/advanced"].title' >/dev/null
 jsonfilter -i /usr/share/rpcd/acl.d/luci-app-localclash.json -e '@["luci-app-localclash"].description' >/dev/null
 

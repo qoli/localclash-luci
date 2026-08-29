@@ -1225,6 +1225,22 @@ function oneClickUpdatePreferenceControl() {
 	]);
 }
 
+function preserveCustomSitesIndicator() {
+	return E('label', { 'class': 'localclash-inline-check localclash-inline-check-guarantee' }, [
+		E('input', {
+			'id': 'localclash-overview-preserve-custom-sites',
+			'type': 'checkbox',
+			'checked': 'checked',
+			'disabled': 'disabled',
+			'aria-disabled': 'true'
+		}),
+		E('span', { 'class': 'localclash-inline-check-title' }, [ _('保留用戶自訂網站列表') ]),
+		E('span', { 'class': 'localclash-inline-check-help' }, [
+			_('固定保留“自訂代理網站”和“自訂直連網站”，不受默认策略同步影响。')
+		])
+	]);
+}
+
 function oneClickUpdateSection() {
 	return section(_('更新'), E('div', { 'class': 'localclash-one-click-update' }, [
 		E('div', { 'class': 'localclash-update-row' }, [
@@ -1240,7 +1256,8 @@ function oneClickUpdateSection() {
 				E('p', { 'class': 'localclash-muted' }, [
 					_('更新 LuCI 界面、localClash 核心、Mihomo 核心和 Dashboard，刷新订阅并在最后恢复运行时和网络接管。')
 				]),
-				oneClickUpdatePreferenceControl()
+				oneClickUpdatePreferenceControl(),
+				preserveCustomSitesIndicator()
 			])
 		])
 	]), 'localclash-one-click-update-section');
@@ -1724,6 +1741,7 @@ return view.extend({
 				'.localclash-view .localclash-inline-check input{grid-area:box;margin:0}',
 				'.localclash-view .localclash-inline-check-title{grid-area:title;font-weight:600}',
 				'.localclash-view .localclash-inline-check-help{grid-area:help;color:inherit;font-size:.92em}',
+				'.localclash-view .localclash-inline-check-guarantee{display:grid;margin-top:.8rem}',
 				'.localclash-view .localclash-github-login-confirmation{padding-left:1em}',
 				'.localclash-view .localclash-muted{color:inherit;line-height:1.55}',
 				'.localclash-view .localclash-copybox{box-sizing:border-box;width:100%;min-height:20rem;margin:.75rem 0;padding:1rem;font-family:monospace;line-height:1.45;resize:vertical}',
