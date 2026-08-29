@@ -1770,7 +1770,7 @@ runtime_restart_continuity_run() {
 		rm -rf "$tmpdir"
 		return 1
 	fi
-	if [ "$expected_effective" != "observe" ] && [ "$before_effective" != "$expected_effective" ]; then
+	if [ "$expected_effective" = "false" ] && [ "$before_effective" != "false" ]; then
 		runtime_continuity_fail "runtime_restart_snapshot_drift" "网络接管状态与操作快照不一致，未执行重启。" "preflight_status" false false '"expected_effective":'"$expected_effective"',"observed_effective":'"$before_effective"
 		rm -rf "$tmpdir"
 		return 1
@@ -1779,7 +1779,7 @@ runtime_restart_continuity_run() {
 		expected_effective="$before_effective"
 		expected_profile="$before_profile"
 	fi
-	if [ "$expected_effective" = "true" ] && { [ "$expected_profile" != "router" ] || [ "$before_profile" != "router" ]; }; then
+	if [ "$expected_effective" = "true" ] && { [ "$expected_profile" != "router" ] || { [ "$before_effective" = "true" ] && [ "$before_profile" != "router" ]; }; }; then
 		runtime_continuity_fail "runtime_restart_snapshot_inconsistent" "网络接管有效时 runtime profile 必须是 router，未执行重启。" "preflight_status" false false '"expected_profile":"'"$(json_escape "$expected_profile")"'","observed_profile":"'"$(json_escape "$before_profile")"'"'
 		rm -rf "$tmpdir"
 		return 1
@@ -1908,7 +1908,14 @@ runtime_restart_continuity_run() {
 }
 
 runtime_restart() {
-	runtime_restart_continuity_run process_restart observe "" luci_runtime_restart
+	local desired profile
+	desired=observe
+	profile=""
+	if takeover_restore_requested; then
+		desired=true
+		profile=router
+	fi
+	runtime_restart_continuity_run process_restart "$desired" "$profile" luci_runtime_restart
 }
 
 base_assets_installed() {
@@ -2547,7 +2554,7 @@ start_one_click_update() {
 }
 
 one_click_update_run() {
-	local tmpdir payload snapshot version sync_default_policy runtime_was_running takeover_was_effective profile_mode luci_changed subscription_ready subscription_refresh_failed subscription_cache_used subscription_refresh_json policy_template_sync_json custom_sites_preservation custom_sites_before_fields custom_sites_after_fields dnsqualify_json mihomo_changed dashboard_changed restart_strategy runtime_recovered takeover_recovered mcp_healthy current_mode current_core
+	local tmpdir payload snapshot version sync_default_policy runtime_was_running takeover_was_effective profile_mode luci_changed subscription_ready subscription_refresh_json policy_template_sync_json custom_sites_preservation custom_sites_before_fields custom_sites_after_fields dnsqualify_json mihomo_changed dashboard_changed runtime_recovered takeover_recovered mcp_healthy current_mode current_core software_checkpoint_json material_checkpoint_json
 	tmpdir="$(one_click_update_state_dir)"
 	if [ "${ONE_CLICK_UPDATE_RESUME:-0}" = "1" ]; then
 		snapshot="$tmpdir/snapshot.json"
@@ -2569,6 +2576,10 @@ one_click_update_run() {
 			return 1
 		}
 		profile_mode="$(jsonfilter -i "$snapshot" -e '@.profile_mode' 2>/dev/null || true)"
+		if takeover_restore_requested; then
+			takeover_was_effective=true
+			profile_mode=router
+		fi
 		log_line "一键更新：新版 helper 已接管更新任务"
 	else
 		if [ -e "$tmpdir" ] || [ -L "$tmpdir" ]; then
@@ -2650,6 +2661,10 @@ one_click_update_run() {
 				return 1
 			}
 			profile_mode="$(jsonfilter -i "$tmpdir/takeover-before.json" -e '@.status.profile_mode' 2>/dev/null || true)"
+			if takeover_restore_requested; then
+				takeover_was_effective=true
+				profile_mode=router
+			fi
 		else
 			log_line "一键更新：localClash 核心尚未安装，跳过运行时快照"
 		fi
@@ -2694,17 +2709,16 @@ one_click_update_run() {
 	fi
 
 	subscription_ready=false
-	subscription_refresh_failed=false
-	subscription_cache_used=false
 	subscription_refresh_json='null'
 	policy_template_sync_json='{"ok":true,"changed":false,"skipped":true,"summary":"未选择同步最新默认策略。"}'
 	custom_sites_preservation='null'
 	dnsqualify_json='null'
 	mihomo_changed=false
 	dashboard_changed=false
-	restart_strategy="skipped"
 	runtime_recovered=false
 	takeover_recovered=false
+	software_checkpoint_json='{"ok":true,"changed":false,"skipped":true,"summary":"更新前运行时未运行，跳过 Mihomo 软件切换。"}'
+	material_checkpoint_json='{"ok":true,"changed":false,"skipped":true,"summary":"尚未执行订阅和配置材料切换。"}'
 
 	if ! run_with_heartbeat "一键更新：正在更新 localClash 核心" "$tmpdir/core.json" bootstrap_core; then
 		log_line "一键更新：localClash 核心更新失败"
@@ -2750,6 +2764,34 @@ one_click_update_run() {
 		rm -rf "$tmpdir"
 		return 1
 	}
+	if [ "$runtime_was_running" = "true" ]; then
+		if ! run_with_heartbeat "一键更新：正在验证 Mihomo 软件检查点" "$tmpdir/software-config-test.json" call_core mihomo config-test --json; then
+			log_line "一键更新：新 Mihomo 未通过现行配置验证"
+			cat "$tmpdir/software-config-test.json"
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		if ! run_with_heartbeat "一键更新：正在提交 Mihomo 软件检查点" "$tmpdir/software-checkpoint.json" runtime_restart_continuity_run process_restart "$takeover_was_effective" "$profile_mode" one_click_update_software; then
+			log_line "一键更新：Mihomo 软件检查点提交失败"
+			cat "$tmpdir/software-checkpoint.json"
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		software_checkpoint_json="$(cat "$tmpdir/software-checkpoint.json")"
+		runtime_recovered="$(json_bool_required "$tmpdir/software-checkpoint.json" '@.after.runtime_running' "software_checkpoint_invalid" "无法读取软件检查点的运行时状态。")" || {
+			printf '%s\n' "$runtime_recovered"
+			rm -rf "$tmpdir"
+			return 1
+		}
+		takeover_recovered="$(json_bool_required "$tmpdir/software-checkpoint.json" '@.after.takeover_effective' "software_checkpoint_invalid" "无法读取软件检查点的网络接管状态。")" || {
+			printf '%s\n' "$takeover_recovered"
+			rm -rf "$tmpdir"
+			return 1
+		}
+		log_line "一键更新：Mihomo 软件检查点已完成"
+	else
+		log_line "一键更新：更新前运行时未运行，Mihomo 软件已安装但不启动"
+	fi
 
 	if ! run_with_heartbeat "一键更新：正在更新 Dashboard" "$tmpdir/dashboard.json" call_core component update dashboard --json; then
 		log_line "一键更新：Dashboard 更新失败"
@@ -2763,7 +2805,33 @@ one_click_update_run() {
 		return 1
 	}
 
-	if [ "$sync_default_policy" = "true" ]; then
+	log_line "一键更新：检查已保存订阅"
+	if ! call_core subscription status --json > "$tmpdir/subscription-status.json"; then
+		log_line "一键更新：订阅状态读取失败"
+		cat "$tmpdir/subscription-status.json" 2>/dev/null || true
+		rm -rf "$tmpdir"
+		return 1
+	fi
+	subscription_ready="$(json_bool_required "$tmpdir/subscription-status.json" '@.status.configured' "subscription_status_invalid" "无法读取订阅配置状态。")" || {
+		printf '%s\n' "$subscription_ready"
+		rm -rf "$tmpdir"
+		return 1
+	}
+	if [ "$subscription_ready" = "true" ]; then
+		if ! run_with_heartbeat "一键更新：正在刷新订阅" "$tmpdir/subscription-refresh.json" call_core subscription refresh --json; then
+			log_line "一键更新：订阅刷新失败；软件检查点保持生效，配置材料未切换"
+			cat "$tmpdir/subscription-refresh.json"
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		subscription_refresh_json="$(cat "$tmpdir/subscription-refresh.json")"
+	else
+		subscription_refresh_json='{"ok":true,"changed":false,"summary":"未配置订阅，跳过订阅和配置材料检查点。","skipped":true}'
+		material_checkpoint_json='{"ok":true,"changed":false,"skipped":true,"summary":"未配置订阅，现行运行时材料保持不变。"}'
+		log_line "一键更新：未配置订阅，跳过订阅和配置材料检查点"
+	fi
+
+	if [ "$subscription_ready" = "true" ] && [ "$sync_default_policy" = "true" ]; then
 		log_line "一键更新：准备同步最新默认策略"
 		if ! call_core custom-sites list --json > "$tmpdir/custom-sites-before.json"; then
 			log_line "一键更新：无法读取同步前的用户自定义网站列表"
@@ -2839,80 +2907,40 @@ JSON
 		log_line "一键更新：未选择同步最新默认策略"
 	fi
 
-	log_line "一键更新：检查已保存订阅"
-	if ! call_core subscription status --json > "$tmpdir/subscription-status.json"; then
-		log_line "一键更新：订阅状态读取失败"
-		cat "$tmpdir/subscription-status.json" 2>/dev/null || true
-		rm -rf "$tmpdir"
-		return 1
-	fi
-	subscription_ready="$(json_bool_required "$tmpdir/subscription-status.json" '@.status.configured' "subscription_status_invalid" "无法读取订阅配置状态。")" || {
-		printf '%s\n' "$subscription_ready"
-		rm -rf "$tmpdir"
-		return 1
-	}
-
 	if [ "$subscription_ready" = "true" ]; then
-		if ! run_with_heartbeat "一键更新：正在刷新订阅" "$tmpdir/subscription-refresh.json" call_core subscription refresh --json; then
-			subscription_refresh_failed=true
-			subscription_cache_used=true
-			subscription_refresh_json="$(printf '{"ok":false,"changed":false,"summary":"订阅刷新失败，已使用缓存订阅继续。","fallback_reason":"一键更新需要在组件更新后尽量恢复可用运行时；订阅源临时不可用时，只要现有缓存订阅还能通过配置生成和 Mihomo 配置验证，就继续完成运行时切换和接管恢复。","output":"%s"}' "$(json_escape "$(tr '\n\r' '  ' < "$tmpdir/subscription-refresh.json" 2>/dev/null)")")"
-			# Fallback reason: one-click update is an availability-recovery flow.
-			# A transient subscription source outage should not block runtime restart
-			# when the existing merged subscription cache can still render and pass
-			# config-test below. If the cache is missing or invalid, config render or
-			# mihomo config-test still fails explicitly instead of guessing state.
-			log_line "一键更新：订阅刷新失败，使用已保存的订阅缓存继续"
-			cat "$tmpdir/subscription-refresh.json" >&2
-		else
-			subscription_refresh_json="$(cat "$tmpdir/subscription-refresh.json")"
-		fi
 		if ! run_with_heartbeat "一键更新：正在生成 Mihomo 配置" "$tmpdir/render.json" call_core config render --json; then
 			log_line "一键更新：配置生成失败"
 			cat "$tmpdir/render.json"
 			rm -rf "$tmpdir"
 			return 1
 		fi
-	else
-		subscription_refresh_json='{"ok":true,"changed":false,"summary":"未配置订阅，跳过订阅刷新。","skipped":true}'
-		log_line "一键更新：未配置订阅，跳过订阅刷新和配置重建"
-	fi
-
-	if [ "$subscription_ready" = "true" ] || [ "$runtime_was_running" = "true" ]; then
 		if ! run_with_heartbeat "一键更新：正在验证 Mihomo 配置" "$tmpdir/config-test.json" call_core mihomo config-test --json; then
 			log_line "一键更新：Mihomo 配置验证失败"
 			cat "$tmpdir/config-test.json"
 			rm -rf "$tmpdir"
 			return 1
 		fi
-	else
-		log_line "一键更新：没有订阅且更新前运行时未运行，跳过配置验证"
-	fi
-
-	if [ "$runtime_was_running" = "true" ]; then
-		restart_strategy="hot_reload"
-		if [ "$mihomo_changed" = "true" ]; then
-			restart_strategy="process_restart"
+		if [ "$runtime_was_running" = "true" ]; then
+			if ! run_with_heartbeat "一键更新：正在提交配置材料检查点" "$tmpdir/material-checkpoint.json" runtime_restart_continuity_run hot_reload "$takeover_was_effective" "$profile_mode" one_click_update_material; then
+				log_line "一键更新：配置材料检查点提交失败"
+				cat "$tmpdir/material-checkpoint.json"
+				rm -rf "$tmpdir"
+				return 1
+			fi
+			material_checkpoint_json="$(cat "$tmpdir/material-checkpoint.json")"
+			runtime_recovered="$(json_bool_required "$tmpdir/material-checkpoint.json" '@.after.runtime_running' "material_checkpoint_invalid" "无法读取材料检查点的运行时状态。")" || {
+				printf '%s\n' "$runtime_recovered"
+				rm -rf "$tmpdir"
+				return 1
+			}
+			takeover_recovered="$(json_bool_required "$tmpdir/material-checkpoint.json" '@.after.takeover_effective' "material_checkpoint_invalid" "无法读取材料检查点的网络接管状态。")" || {
+				printf '%s\n' "$takeover_recovered"
+				rm -rf "$tmpdir"
+				return 1
+			}
+		else
+			material_checkpoint_json='{"ok":true,"changed":true,"activated":false,"summary":"订阅和配置材料已生成并验证；运行时原本未运行，因此未执行热加载。"}'
 		fi
-		log_line "一键更新：进入最短断网切换窗口，策略 ${restart_strategy}"
-		if ! run_with_heartbeat "一键更新：正在切换运行时并恢复网络接管" "$tmpdir/runtime-restart.json" runtime_restart_continuity_run "$restart_strategy" "$takeover_was_effective" "$profile_mode" one_click_update; then
-			log_line "一键更新：运行时切换失败"
-			cat "$tmpdir/runtime-restart.json"
-			rm -rf "$tmpdir"
-			return 1
-		fi
-		runtime_recovered="$(json_bool_required "$tmpdir/runtime-restart.json" '@.after.runtime_running' "runtime_restart_result_invalid" "无法读取更新后运行时状态。")" || {
-			printf '%s\n' "$runtime_recovered"
-			rm -rf "$tmpdir"
-			return 1
-		}
-		takeover_recovered="$(json_bool_required "$tmpdir/runtime-restart.json" '@.after.takeover_effective' "runtime_restart_result_invalid" "无法读取更新后网络接管状态。")" || {
-			printf '%s\n' "$takeover_recovered"
-			rm -rf "$tmpdir"
-			return 1
-		}
-	else
-		log_line "一键更新：更新前运行时未运行，跳过运行时切换"
 	fi
 
 	if [ "$takeover_was_effective" = "true" ]; then
@@ -2955,8 +2983,9 @@ JSON
 		return 1
 	fi
 	log_line "一键更新：已完成"
-	printf '{"ok":true,"changed":true,"summary":"一键更新已完成。","minimal_outage":{"runtime_kept_until_final_switch":true,"restart_strategy":"%s","runtime_was_running":%s,"runtime_recovered":%s,"takeover_was_effective":%s,"takeover_recovered":%s},"luci":%s,"core":%s,"dnsqualify":%s,"mihomo":%s,"dashboard":%s,"policy_template_sync":%s,"custom_sites_preservation":%s,"subscription":{"configured":%s,"refresh_failed":%s,"used_cached_artifact":%s,"refresh":%s},"mcp_service":%s}\n' \
-		"$(json_escape "$restart_strategy")" \
+	printf '{"ok":true,"changed":true,"summary":"一键更新已完成。","checkpoints":{"software":%s,"material":%s},"runtime":{"was_running":%s,"recovered":%s},"takeover":{"desired_enabled":%s,"recovered":%s},"luci":%s,"core":%s,"dnsqualify":%s,"mihomo":%s,"dashboard":%s,"policy_template_sync":%s,"custom_sites_preservation":%s,"subscription":{"configured":%s,"refresh":%s},"mcp_service":%s}\n' \
+		"$software_checkpoint_json" \
+		"$material_checkpoint_json" \
 		"$runtime_was_running" \
 		"$runtime_recovered" \
 		"$takeover_was_effective" \
@@ -2969,8 +2998,6 @@ JSON
 		"$policy_template_sync_json" \
 		"$custom_sites_preservation" \
 		"$subscription_ready" \
-		"$subscription_refresh_failed" \
-		"$subscription_cache_used" \
 		"$subscription_refresh_json" \
 		"$(cat "$tmpdir/mcp-service-final.json")"
 	rm -rf "$tmpdir"

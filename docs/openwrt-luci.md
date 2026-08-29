@@ -1002,19 +1002,20 @@ Method contracts:
   mismatch is an explicit update failure; a successful result includes the
   before/after preservation evidence. LuCI displays an always-checked disabled
   `保留用戶自訂網站列表` indicator, but does not persist or send a preference for
-  this invariant. The task keeps the
-  current runtime untouched during download, update,
-  render, and config-test preparation, and only enters the outage window for the
-  final runtime switch. If Mihomo core changed, the final switch uses
-  `runtime restart --strategy process_restart --json`; otherwise it uses
-  `--strategy hot_reload`. If router takeover was effective before the update,
-  success requires `takeover status` to report effective after restore. If saved
-  subscriptions are configured but `subscription refresh --json` fails,
-  one-click update records `subscription.refresh_failed=true`, uses the existing
-  merged subscription cache, and continues only if `config render --json` and
-  `mihomo config-test --json` both pass. This fallback exists to recover the
-  router after component updates when a subscription provider is temporarily
-  unavailable; it must not silently hide an unusable or missing cache.
+  this invariant. The task commits two explicit checkpoints. The software
+  checkpoint downloads Meta and Smart Mihomo into a candidate directory,
+  validates the selected candidate with the currently generated config, promotes
+  both binaries as one pair, then uses
+  `runtime restart --strategy process_restart --json` and verifies runtime and
+  takeover recovery. Only after that checkpoint succeeds does the material
+  checkpoint refresh subscriptions, optionally reset the default policy, render
+  and test the new config, and commit it with
+  `runtime restart --strategy hot_reload --json`. Durable takeover intent is the
+  desired postcondition; a temporarily degraded observation does not redefine
+  takeover as intentionally disabled. If `subscription refresh --json` fails,
+  the material checkpoint stops explicitly before render or activation. It does
+  not continue from the existing merged subscription cache; the already verified
+  software checkpoint remains active while the user repairs the subscription.
   When the LuCI package result reports `changed=true`, the worker persists a
   versioned snapshot under `/tmp/localclash-one-click-update.<worker-pid>` and
   uses `exec` to enter the newly installed helper with the same PID. The new

@@ -79,6 +79,8 @@ assert_json() {
 reset_case() {
 	: > "${tmp_dir}/trace"
 	rm -f "$TAKEOVER_REPAIR_TICKET" "$TAKEOVER_STATE_STATUS"
+	mkdir -p "$(dirname "$TAKEOVER_STATE_STATUS")"
+	printf 'applied\n' > "$TAKEOVER_STATE_STATUS"
 	MOCK_PRE_EFFECTIVE=true
 	MOCK_PRE_RUNTIME=true
 	MOCK_PRE_PROFILE=router
@@ -200,6 +202,18 @@ EOF
 diff -u "${tmp_dir}/expected-effective" "${tmp_dir}/trace" || fail_test "effective takeover call order mismatch"
 
 reset_case
+MOCK_PRE_EFFECTIVE=false
+MOCK_PRE_PROFILE=normal
+MOCK_POST_EFFECTIVE=true
+MOCK_POST_PROFILE=router
+capture_restart
+assert_json "$result"
+[ "$result_rc" -eq 0 ] || fail_test "desired takeover recovery failed: $result"
+printf '%s\n' "$result" | grep -q '"takeover_transition":"restored"' || fail_test "desired takeover was not restored from degraded observation: $result"
+grep -q 'takeover apply' "${tmp_dir}/trace" || fail_test "desired takeover recovery did not call apply"
+
+reset_case
+rm -f "$TAKEOVER_STATE_STATUS"
 MOCK_PRE_EFFECTIVE=false
 MOCK_PRE_PROFILE=normal
 MOCK_POST_EFFECTIVE=false

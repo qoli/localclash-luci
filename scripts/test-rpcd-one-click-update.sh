@@ -313,7 +313,8 @@ call_core() {
 			;;
 		"subscription refresh --json")
 			if [ "${MOCK_SUBSCRIPTION_REFRESH_FAIL:-0}" = "1" ]; then
-				printf '{"ok":false,"code":"subscription_fetch_failed","message":"subscription source unavailable"}\nprovider timeout\n'
+				printf 'provider timeout\n' >&2
+				printf '{"ok":false,"code":"subscription_fetch_failed","message":"subscription source unavailable"}\n'
 				return 1
 			else
 				printf '{"ok":true,"changed":true,"summary":"subscription refreshed"}\n'
@@ -337,7 +338,7 @@ call_core() {
 		"mihomo config-test --json")
 			printf '{"ok":true,"changed":false,"summary":"config valid"}\n'
 			;;
-		"runtime restart --strategy process_restart --json")
+		"runtime restart --strategy process_restart --json"|"runtime restart --strategy hot_reload --json")
 			printf '{"ok":true,"changed":true,"summary":"runtime restarted"}\n'
 			;;
 		*)
@@ -372,8 +373,9 @@ result="$(run_one_click_update)"
 clear_task_input
 assert_json "$result"
 printf '%s\n' "$result" | grep -q '"ok":true' || fail_test "one_click_update_run failed: ${result}"
-printf '%s\n' "$result" | grep -q '"restart_strategy":"process_restart"' || fail_test "restart strategy mismatch: ${result}"
-printf '%s\n' "$result" | grep -q '"takeover_recovered":true' || fail_test "takeover was not recovered: ${result}"
+printf '%s\n' "$result" | grep -q '"checkpoints":{"software":' || fail_test "software checkpoint missing: ${result}"
+printf '%s\n' "$result" | grep -q '"material":' || fail_test "material checkpoint missing: ${result}"
+printf '%s\n' "$result" | grep -q '"takeover":{"desired_enabled":true,"recovered":true}' || fail_test "takeover was not recovered: ${result}"
 printf '%s\n' "$result" | grep -q '"dnsqualify":{"ok":true,"changed":true' || fail_test "dnsqualify update result missing: ${result}"
 one_click_update_luci_changed "$result" || fail_test "LuCI changed marker was not detected for service reload"
 [ ! -e "$LOCK_DIR" ] || fail_test "successful handoff did not clean the task lock"
@@ -389,13 +391,19 @@ bootstrap_core
 dnsqualify_install
 service_status
 call_core component update mihomo --json
+call_core mihomo config-test --json
+call_takeover status --json
+call_core runtime restart --strategy process_restart --json
+call_core runtime status --json
+takeover_apply
+call_takeover status --json
 call_core component update dashboard --json
 call_core subscription status --json
 call_core subscription refresh --json
 call_core config render --json
 call_core mihomo config-test --json
 call_takeover status --json
-call_core runtime restart --strategy process_restart --json
+call_core runtime restart --strategy hot_reload --json
 call_core runtime status --json
 takeover_apply
 call_takeover status --json
@@ -498,14 +506,12 @@ printf '%s\n' "$result" | grep -q '"code":"component_update_result_invalid"' || 
 : > "${tmp_dir}/trace"
 set_task_input '{"version":1,"sync_default_policy":false}'
 MOCK_SUBSCRIPTION_REFRESH_FAIL=1
-result="$(run_one_click_update 2>"${tmp_dir}/subscription-refresh-fallback.stderr")"
+capture_one_click_update
 clear_task_input
 assert_json "$result"
 unset MOCK_SUBSCRIPTION_REFRESH_FAIL
-printf '%s\n' "$result" | grep -q '"ok":true' || fail_test "subscription refresh fallback failed: ${result}"
-printf '%s\n' "$result" | grep -q '"refresh_failed":true' || fail_test "subscription refresh failure was not reported: ${result}"
-printf '%s\n' "$result" | grep -q '"used_cached_artifact":true' || fail_test "cached subscription use was not reported: ${result}"
-printf '%s\n' "$result" | grep -q '"fallback_reason"' || fail_test "fallback reason missing: ${result}"
+[ "$result_rc" -ne 0 ] || fail_test "subscription refresh failure returned success: ${result}"
+printf '%s\n' "$result" | grep -q '"code":"subscription_fetch_failed"' || fail_test "subscription refresh failure was not explicit: ${result}"
 
 cat > "$expected" <<EOF
 call_core runtime status --json
@@ -516,21 +522,19 @@ bootstrap_core
 dnsqualify_install
 service_status
 call_core component update mihomo --json
-call_core component update dashboard --json
-call_core subscription status --json
-call_core subscription refresh --json
-call_core config render --json
 call_core mihomo config-test --json
 call_takeover status --json
 call_core runtime restart --strategy process_restart --json
 call_core runtime status --json
 takeover_apply
 call_takeover status --json
-service_status
+call_core component update dashboard --json
+call_core subscription status --json
+call_core subscription refresh --json
 EOF
 
 if ! diff -u "$expected" "${tmp_dir}/trace"; then
-	fail_test "subscription refresh fallback order mismatch"
+	fail_test "subscription refresh failure boundary mismatch"
 fi
 
 : > "${tmp_dir}/trace"
@@ -559,17 +563,23 @@ bootstrap_core
 dnsqualify_install
 service_status
 call_core component update mihomo --json
+call_core mihomo config-test --json
+call_takeover status --json
+call_core runtime restart --strategy process_restart --json
+call_core runtime status --json
+takeover_apply
+call_takeover status --json
 call_core component update dashboard --json
+call_core subscription status --json
+call_core subscription refresh --json
 call_core custom-sites list --json
 call_core config status --json
 call_core config apply-template --input <template-sync> --json
 call_core custom-sites list --json
-call_core subscription status --json
-call_core subscription refresh --json
 call_core config render --json
 call_core mihomo config-test --json
 call_takeover status --json
-call_core runtime restart --strategy process_restart --json
+call_core runtime restart --strategy hot_reload --json
 call_core runtime status --json
 takeover_apply
 call_takeover status --json
@@ -615,8 +625,9 @@ set -e
 clear_task_input
 assert_json "$result"
 unset MOCK_SUBSCRIPTION_REFRESH_FAIL MOCK_CONFIG_RENDER_FAIL
-[ "$result_rc" -ne 0 ] || fail_test "invalid cached subscription returned success"
-printf '%s\n' "$result" | grep -q '"ok":false' || fail_test "invalid cached subscription did not fail: ${result}"
-printf '%s\n' "$result" | grep -q '"code":"cached_subscription_invalid"' || fail_test "invalid cached subscription failure code mismatch: ${result}"
+[ "$result_rc" -ne 0 ] || fail_test "subscription failure unexpectedly reached cached material"
+printf '%s\n' "$result" | grep -q '"ok":false' || fail_test "subscription failure did not fail: ${result}"
+printf '%s\n' "$result" | grep -q '"code":"subscription_fetch_failed"' || fail_test "subscription failure code mismatch: ${result}"
+grep -q 'config render' "${tmp_dir}/trace" && fail_test "subscription failure reached config rendering"
 
 printf 'rpcd one-click update tests passed\n'
