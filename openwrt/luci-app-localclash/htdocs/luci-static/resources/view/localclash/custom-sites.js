@@ -10,39 +10,26 @@ var callCustomSitesGet = rpc.declare({
 	expect: { '': {} }
 });
 
-var callCustomSitesAdd = rpc.declare({
+var callCustomSitesTransactAsync = rpc.declare({
 	object: 'localclash',
-	method: 'custom_sites_transact',
-	params: [ 'operation', 'pattern', 'route' ],
-	nobatch: true,
+	method: 'custom_sites_transact_async',
+	params: [ 'operation', 'pattern', 'route', 'id' ],
 	expect: { '': {} }
 });
 
-var callCustomSitesDelete = rpc.declare({
+var callTaskStatus = rpc.declare({
 	object: 'localclash',
-	method: 'custom_sites_transact',
-	params: [ 'operation', 'id' ],
-	nobatch: true,
+	method: 'task_status',
+	expect: { '': {} }
+});
+
+var callBootstrapLogs = rpc.declare({
+	object: 'localclash',
+	method: 'bootstrap_logs',
 	expect: { '': {} }
 });
 
 var currentCustomSites = null;
-
-function callLongCustomSitesTransaction(call, args) {
-	var previousTimeout = L.env.rpctimeout;
-	var currentTimeout = Number(previousTimeout);
-
-	L.env.rpctimeout = Math.max(isFinite(currentTimeout) ? currentTimeout : 20, 300);
-	try {
-		return call.apply(null, args);
-	}
-	finally {
-		if (previousTimeout === undefined)
-			delete L.env.rpctimeout;
-		else
-			L.env.rpctimeout = previousTimeout;
-	}
-}
 
 function formatText(text) {
 	var args = Array.prototype.slice.call(arguments, 1);
@@ -108,10 +95,72 @@ function showMutationResult(result) {
 	ui.addNotification(null, E('p', {}, [ result.summary || _('自定义网站设置已保存。') ]), 'info');
 }
 
-function setBusy(button, busy, label) {
-	button.disabled = busy;
-	button.setAttribute('aria-busy', busy ? 'true' : 'false');
-	button.textContent = busy ? _('保存中…') : label;
+function formatLogLines(lines) {
+	return lines && lines.length ? lines.join('\n') : _('等待任务输出…');
+}
+
+function runMutationTask(title, operation, pattern, route, id) {
+	var startedAt = Date.now();
+	var timer;
+	var statusLine = E('p', { 'class': 'localclash-task-status' }, [ _('正在启动任务…') ]);
+	var logOutput = E('pre', { 'class': 'localclash-task-log' }, [ _('等待任务输出…') ]);
+	var resultOutput = E('pre', { 'class': 'localclash-result localclash-task-result' }, []);
+	var closeButton = E('button', {
+		'type': 'button',
+		'class': 'btn',
+		'disabled': 'disabled',
+		'click': ui.hideModal
+	}, [ _('关闭') ]);
+
+	ui.showModal(title, [
+		statusLine,
+		logOutput,
+		resultOutput,
+		E('div', { 'class': 'right' }, [ closeButton ])
+	]);
+
+	function updateLogs() {
+		return callBootstrapLogs().then(function(result) {
+			var elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+			statusLine.textContent = formatText(_('任务执行中，已等待 %s 秒。'), elapsed);
+			logOutput.textContent = formatLogLines((result && result.logs) || []);
+			logOutput.scrollTop = logOutput.scrollHeight;
+		});
+	}
+
+	function waitForCompletion() {
+		return callTaskStatus().then(function(task) {
+			if (task && task.done)
+				return task.result || task;
+			return new Promise(function(resolve) {
+				window.setTimeout(resolve, 1000);
+			}).then(waitForCompletion);
+		});
+	}
+
+	return callCustomSitesTransactAsync(operation, pattern || '', route || '', id || '').then(function(started) {
+		if (!started || started.started !== true)
+			throw resultError(started);
+		timer = window.setInterval(updateLogs, 1000);
+		return updateLogs().then(waitForCompletion);
+	}).then(function(finalResult) {
+		window.clearInterval(timer);
+		return updateLogs().catch(function() {}).then(function() { return finalResult; });
+	}).then(function(finalResult) {
+		resultOutput.textContent = JSON.stringify(finalResult, null, 2);
+		if (!finalResult || finalResult.ok !== true) {
+			statusLine.textContent = formatText(_('任务失败：%s'), finalResult && (finalResult.message || finalResult.code) || _('未知错误'));
+			return;
+		}
+		showMutationResult(finalResult);
+		statusLine.textContent = _('任务完成，规则已经过验证并应用。');
+	}).catch(function(err) {
+		window.clearInterval(timer);
+		statusLine.textContent = formatText(_('任务失败：%s'), err.message || String(err));
+		resultOutput.textContent = JSON.stringify({ ok: false, message: err.message || String(err) }, null, 2);
+	}).finally(function() {
+		closeButton.disabled = false;
+	});
 }
 
 function showAddDialog() {
@@ -138,15 +187,8 @@ function showAddDialog() {
 				return;
 			}
 
-			setBusy(save, true, saveLabel);
-			callLongCustomSitesTransaction(callCustomSitesAdd, [ 'add', pattern, route ]).then(function(result) {
-				showMutationResult(result);
-				ui.hideModal();
-			}).catch(function(err) {
-				ui.addNotification(null, E('p', {}, [ err.message || String(err) ]), 'danger');
-			}).finally(function() {
-				setBusy(save, false, saveLabel);
-			});
+			ui.hideModal();
+			runMutationTask(_('保存自訂網站'), 'add', pattern, route, '');
 		}
 	}, [ saveLabel ]);
 
@@ -182,12 +224,7 @@ function deleteButton(entry) {
 			var button = ev.currentTarget;
 			if (!window.confirm(formatText(_('删除 %s？删除后，较早加入且能匹配同一网站的规则可能重新生效。'), entry.pattern)))
 				return;
-			setBusy(button, true, label);
-			callLongCustomSitesTransaction(callCustomSitesDelete, [ 'delete', entry.id ]).then(showMutationResult).catch(function(err) {
-				ui.addNotification(null, E('p', {}, [ err.message || String(err) ]), 'danger');
-			}).finally(function() {
-				setBusy(button, false, label);
-			});
+			runMutationTask(_('删除自訂網站'), 'delete', '', '', entry.id);
 		}
 	}, [ label ]);
 }

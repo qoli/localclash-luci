@@ -12,6 +12,10 @@ awk '/^method="\$\{1:-\}"/ { exit } { print }' "${helper}" > "${tmp_dir}/functio
 
 LOCK_DIR="${tmp_dir}/lock"
 LOG="${tmp_dir}/helper.log"
+TASK_STATUS="${tmp_dir}/task-status.json"
+TASK_RESULT="${tmp_dir}/task-result.json"
+TASK_INPUT="${tmp_dir}/task-input.json"
+TASK_PID="${tmp_dir}/task.pid"
 
 fail_test() {
 	printf 'test-rpcd-custom-sites: %s\n' "$*" >&2
@@ -72,6 +76,15 @@ printf '%s\n' "$result" | grep -q '"code":"core_failure"' || fail_test "Core fai
 
 grep -q '"custom_sites_get"' "${helper}" || fail_test "rpcd list schema is missing custom_sites_get"
 grep -q '"custom_sites_transact"' "${helper}" || fail_test "rpcd list schema is missing custom_sites_transact"
+grep -q '"custom_sites_transact_async"' "${helper}" || fail_test "rpcd list schema is missing custom_sites_transact_async"
 grep -q 'custom_sites_transact) with_lock custom_sites_transact' "${helper}" || fail_test "transact dispatch is not locked"
+grep -q 'custom_sites_transact_async) start_custom_sites_transact' "${helper}" || fail_test "async transact dispatch is missing"
+grep -q 'custom_sites_transact_run) with_lock custom_sites_transact_run' "${helper}" || fail_test "async transact runner is not locked"
+
+printf '{"version":1,"operation":"add","pattern":"async.example","route":"direct"}\n' > "$TASK_INPUT"
+MOCK_FAIL=false
+result="$(with_lock custom_sites_transact_run)"
+printf '%s\n' "$result" | grep -q '"ok":true' || fail_test "async runner result was not passed through"
+grep -q '自訂網站：开始验证、渲染和运行时应用' "$LOG" || fail_test "async runner did not expose progress log"
 
 printf 'rpcd custom sites tests passed\n'

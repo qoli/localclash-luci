@@ -164,10 +164,11 @@ policy-group and rule compilation, render, `mihomo -t`, atomic persistence,
 runtime reload, and read-back verification. LuCI must never edit either custom
 site JSON file or generated Mihomo YAML directly.
 
-Custom-site mutations use an unbatched LuCI RPC request with a five-minute
-browser deadline. This covers the Core transaction's candidate render,
-`mihomo -t`, hot reload, and semantic read-back on slower router hardware while
-leaving the normal LuCI RPC timeout unchanged for other calls.
+Custom-site mutations start a background task immediately and use the same
+task-status and log surfaces as subscription setup and one-click update. The
+modal shows elapsed time plus live validation, render, `mihomo -t`, promotion,
+reload, read-back, and rollback progress instead of holding a silent XHR open.
+The list refreshes only after the task returns a successful Core transaction.
 
 ### 2. Service Status Report
 

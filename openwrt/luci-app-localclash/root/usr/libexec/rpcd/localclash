@@ -893,6 +893,10 @@ write_task_stale_result() {
 			message="订阅设置任务已中断，请重试。"
 			action="重新保存订阅设置。"
 			;;
+		custom_sites)
+			message="自訂網站保存任务已中断，请重试。"
+			action="重新保存自訂網站规则。"
+			;;
 		dnsqualify)
 			message="dnsqualify 按需任务已中断，请重试。"
 			action="重新运行 dnsqualify。"
@@ -3215,6 +3219,43 @@ custom_sites_transact() {
 	input_to_core_file custom-sites transact
 }
 
+start_custom_sites_transact() {
+	local payload result rc bg_pid
+	clear_stale_lock
+	if [ -d "$LOCK_DIR" ]; then
+		printf '{"ok":true,"started":false,"running":true,"summary":"另一个 localClash 任务正在运行。"}\n'
+		return 0
+	fi
+	payload="$(strip_ubus_rpc_session "$(cat)")"
+	rm -f "$TASK_STATUS" "$TASK_RESULT" "$TASK_INPUT" "$TASK_PID"
+	: > "$LOG"
+	write_versioned_payload "$payload" > "$TASK_INPUT"
+	write_task_running "自訂網站保存任务正在运行。" "custom_sites"
+	log_line "自訂網站：已加入后台任务队列"
+	(
+		result="$("$0" call custom_sites_transact_run 2>>"$LOG")"
+		rc=$?
+		if [ -z "$result" ]; then
+			result='{"ok":false,"code":"empty_task_result","message":"自訂網站保存任务没有产生 JSON 结果。","details":{},"next_actions":[]}'
+		fi
+		printf '%s\n' "$result" > "$TASK_RESULT"
+		write_task_done "$rc" "$result"
+		rm -f "$TASK_INPUT" "$TASK_PID"
+	) >/dev/null 2>&1 &
+	bg_pid="$!"
+	write_task_pid "$bg_pid"
+	ok '"started":true,"running":true,"summary":"自訂網站保存任务已启动。"'
+}
+
+custom_sites_transact_run() {
+	if [ ! -f "$TASK_INPUT" ]; then
+		fail "task_input_missing" "自訂網站保存任务输入缺失。"
+		return 1
+	fi
+	log_line "自訂網站：开始验证、渲染和运行时应用"
+	custom_sites_transact < "$TASK_INPUT"
+}
+
 subscription_save_refresh_file() {
 	local input tmpdir
 	input="$1"
@@ -4593,6 +4634,7 @@ case "$method" in
 	  "subscription_refresh": {},
 	  "custom_sites_get": {},
 	  "custom_sites_transact": { "operation": "", "pattern": "", "route": "", "id": "" },
+	  "custom_sites_transact_async": { "operation": "", "pattern": "", "route": "", "id": "" },
   "component_update": { "component": "localclash" },
   "component_update_async": { "component": "localclash" },
   "one_click_update": { "sync_default_policy": false },
@@ -4646,6 +4688,8 @@ JSON
 	subscription_refresh) with_lock call_core subscription refresh --json ;;
 	custom_sites_get) custom_sites_get ;;
 	custom_sites_transact) with_lock custom_sites_transact ;;
+	custom_sites_transact_async) start_custom_sites_transact ;;
+	custom_sites_transact_run) with_lock custom_sites_transact_run ;;
 	component_update) with_lock component_update ;;
 	component_update_async) start_component_update ;;
 	component_update_run) component_update_run ;;
