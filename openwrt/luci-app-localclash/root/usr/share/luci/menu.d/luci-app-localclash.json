@@ -25,6 +25,14 @@
       "path": "localclash/subscription"
     }
   },
+  "admin/services/localclash/custom-sites": {
+    "title": "网站分流",
+    "order": 25,
+    "action": {
+      "type": "view",
+      "path": "localclash/custom-sites"
+    }
+  },
   "admin/services/localclash/advanced": {
     "title": "进阶",
     "order": 30,

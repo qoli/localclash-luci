@@ -99,6 +99,21 @@ case "$expr" in
 	@.status.effective)
 		json_bool effective
 		;;
+	@.custom_sites.initialized)
+		json_bool initialized
+		;;
+	@.custom_sites.proxy_count)
+		printf '%s\n' "$content" | sed -n 's/.*"proxy_count"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p'
+		;;
+	@.custom_sites.direct_count)
+		printf '%s\n' "$content" | sed -n 's/.*"direct_count"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p'
+		;;
+	@.custom_sites.proxy_sha256)
+		printf '%s\n' "$content" | sed -n 's/.*"proxy_sha256"[[:space:]]*:[[:space:]]*"\([0-9a-f]*\)".*/\1/p'
+		;;
+	@.custom_sites.direct_sha256)
+		printf '%s\n' "$content" | sed -n 's/.*"direct_sha256"[[:space:]]*:[[:space:]]*"\([0-9a-f]*\)".*/\1/p'
+		;;
 	@.status.configured)
 		json_bool configured
 		;;
@@ -279,6 +294,20 @@ call_core() {
 		"component update dashboard --json")
 			printf '{"ok":true,"changed":true,"summary":"dashboard updated"}\n'
 			;;
+		"custom-sites list --json")
+			if [ "${MOCK_CUSTOM_SITES_INVALID:-0}" = "1" ]; then
+				printf '{"ok":true,"custom_sites":{"initialized":true,"proxy":[],"direct":[],"proxy_count":1,"direct_count":1}}\n'
+				return 0
+			fi
+			custom_sites_read_count="$(cat "${tmp_dir}/custom-sites-read-count" 2>/dev/null || printf '0')"
+			custom_sites_read_count=$((custom_sites_read_count + 1))
+			printf '%s\n' "$custom_sites_read_count" > "${tmp_dir}/custom-sites-read-count"
+			if [ "${MOCK_CUSTOM_SITES_CHANGED_AFTER_SYNC:-0}" = "1" ] && [ "$custom_sites_read_count" -gt 1 ]; then
+				printf '{"ok":true,"custom_sites":{"initialized":true,"proxy":[],"direct":[],"proxy_count":2,"direct_count":1,"proxy_sha256":"%064d","direct_sha256":"%064d"}}\n' 3 2
+			else
+				printf '{"ok":true,"custom_sites":{"initialized":true,"proxy":[],"direct":[],"proxy_count":1,"direct_count":1,"proxy_sha256":"%064d","direct_sha256":"%064d"}}\n' 1 2
+			fi
+			;;
 		"subscription status --json")
 			printf '{"status":{"configured":true}}\n'
 			;;
@@ -376,6 +405,7 @@ EOF
 if ! diff -u "$expected" "${tmp_dir}/trace"; then
 	fail_test "one-click update order mismatch"
 fi
+grep -q 'custom-sites list' "${tmp_dir}/trace" && fail_test "unchecked policy sync must not read custom-site preservation snapshots"
 
 : > "${tmp_dir}/trace"
 set_task_input '{"version":1,"sync_default_policy":false}'
@@ -504,12 +534,16 @@ if ! diff -u "$expected" "${tmp_dir}/trace"; then
 fi
 
 : > "${tmp_dir}/trace"
+rm -f "${tmp_dir}/custom-sites-read-count"
 set_task_input '{"version":1,"sync_default_policy":true}'
 result="$(run_one_click_update)"
 clear_task_input
 assert_json "$result"
 printf '%s\n' "$result" | grep -q '"ok":true' || fail_test "sync default policy run failed: ${result}"
 printf '%s\n' "$result" | grep -q '"policy_template_sync"' || fail_test "policy sync result missing: ${result}"
+printf '%s\n' "$result" | grep -q '"custom_sites_preservation":{"verified":true' || fail_test "custom-site preservation evidence missing: ${result}"
+printf '%s\n' "$result" | grep -q '"proxy_count":1' || fail_test "custom-site proxy count evidence missing: ${result}"
+printf '%s\n' "$result" | grep -q '"direct_count":1' || fail_test "custom-site direct count evidence missing: ${result}"
 grep -q '"sync_default_policy":true' "${STATE_DIR}/luci-preferences.json" || fail_test "one-click run did not persist true sync preference"
 grep -q '"reset_patches":[[:space:]]*true' "${tmp_dir}/template-sync-input.json" || fail_test "template sync did not request a complete patch reset"
 grep -q '"refresh_policy_template_patches"' "${tmp_dir}/template-sync-input.json" && fail_test "template sync must not preserve user patches"
@@ -526,8 +560,10 @@ dnsqualify_install
 service_status
 call_core component update mihomo --json
 call_core component update dashboard --json
+call_core custom-sites list --json
 call_core config status --json
 call_core config apply-template --input <template-sync> --json
+call_core custom-sites list --json
 call_core subscription status --json
 call_core subscription refresh --json
 call_core config render --json
@@ -543,6 +579,30 @@ EOF
 if ! diff -u "$expected" "${tmp_dir}/trace.normalized"; then
 	fail_test "sync default policy order mismatch"
 fi
+
+: > "${tmp_dir}/trace"
+rm -f "${tmp_dir}/custom-sites-read-count"
+set_task_input '{"version":1,"sync_default_policy":true}'
+MOCK_CUSTOM_SITES_CHANGED_AFTER_SYNC=1
+export MOCK_CUSTOM_SITES_CHANGED_AFTER_SYNC
+capture_one_click_update
+clear_task_input
+unset MOCK_CUSTOM_SITES_CHANGED_AFTER_SYNC
+assert_json "$result"
+[ "$result_rc" -ne 0 ] || fail_test "changed custom-site snapshot returned success"
+printf '%s\n' "$result" | grep -q '"code":"custom_sites_preservation_failed"' || fail_test "custom-site preservation mismatch was not explicit: ${result}"
+
+: > "${tmp_dir}/trace"
+rm -f "${tmp_dir}/custom-sites-read-count"
+set_task_input '{"version":1,"sync_default_policy":true}'
+MOCK_CUSTOM_SITES_INVALID=1
+export MOCK_CUSTOM_SITES_INVALID
+capture_one_click_update
+clear_task_input
+unset MOCK_CUSTOM_SITES_INVALID
+assert_json "$result"
+[ "$result_rc" -ne 0 ] || fail_test "invalid custom-site snapshot returned success"
+printf '%s\n' "$result" | grep -q '"code":"custom_sites_preservation_snapshot_invalid"' || fail_test "invalid custom-site snapshot was not explicit: ${result}"
 
 : > "${tmp_dir}/trace"
 set_task_input '{"version":1,"sync_default_policy":false}'

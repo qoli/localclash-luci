@@ -482,6 +482,59 @@ json_bool_required() {
 	return 1
 }
 
+custom_sites_preservation_fields() {
+	local file ok_value initialized proxy_count direct_count proxy_sha direct_sha
+	file="$1"
+	ok_value="$(jsonfilter -i "$file" -e '@.ok' 2>/dev/null || true)"
+	initialized="$(jsonfilter -i "$file" -e '@.custom_sites.initialized' 2>/dev/null || true)"
+	proxy_count="$(jsonfilter -i "$file" -e '@.custom_sites.proxy_count' 2>/dev/null || true)"
+	direct_count="$(jsonfilter -i "$file" -e '@.custom_sites.direct_count' 2>/dev/null || true)"
+	proxy_sha="$(jsonfilter -i "$file" -e '@.custom_sites.proxy_sha256' 2>/dev/null || true)"
+	direct_sha="$(jsonfilter -i "$file" -e '@.custom_sites.direct_sha256' 2>/dev/null || true)"
+
+	if [ "$ok_value" != "true" ]; then
+		fail_with_details "custom_sites_preservation_snapshot_invalid" "无法确认用户自定义网站列表状态。" '"path":"'"$(json_escape "$file")"'","field":"ok","value":"'"$(json_escape "$ok_value")"'"'
+		return 1
+	fi
+	case "$initialized" in true|false) ;; *)
+		fail_with_details "custom_sites_preservation_snapshot_invalid" "无法确认用户自定义网站列表是否已初始化。" '"path":"'"$(json_escape "$file")"'","field":"initialized","value":"'"$(json_escape "$initialized")"'"'
+		return 1
+	;; esac
+	case "$proxy_count" in ''|*[!0-9]*)
+		fail_with_details "custom_sites_preservation_snapshot_invalid" "自訂代理網站数量无效。" '"path":"'"$(json_escape "$file")"'","value":"'"$(json_escape "$proxy_count")"'"'
+		return 1
+	;; esac
+	case "$direct_count" in ''|*[!0-9]*)
+		fail_with_details "custom_sites_preservation_snapshot_invalid" "自訂直連網站数量无效。" '"path":"'"$(json_escape "$file")"'","value":"'"$(json_escape "$direct_count")"'"'
+		return 1
+	;; esac
+	if [ "$initialized" = "true" ]; then
+		if ! printf '%s\n' "$proxy_sha" | grep -Eq '^[0-9a-f]{64}$'; then
+			fail_with_details "custom_sites_preservation_snapshot_invalid" "自訂代理網站 SHA256 无效。" '"path":"'"$(json_escape "$file")"'","value":"'"$(json_escape "$proxy_sha")"'"'
+			return 1
+		fi
+		if ! printf '%s\n' "$direct_sha" | grep -Eq '^[0-9a-f]{64}$'; then
+			fail_with_details "custom_sites_preservation_snapshot_invalid" "自訂直連網站 SHA256 无效。" '"path":"'"$(json_escape "$file")"'","value":"'"$(json_escape "$direct_sha")"'"'
+			return 1
+		fi
+	elif [ "$proxy_count" != "0" ] || [ "$direct_count" != "0" ] || [ -n "$proxy_sha" ] || [ -n "$direct_sha" ]; then
+		fail_with_details "custom_sites_preservation_snapshot_invalid" "未初始化的用户自定义网站列表包含不一致的计数或 SHA256。" '"path":"'"$(json_escape "$file")"'"'
+		return 1
+	fi
+
+	printf '%s|%s|%s|%s|%s\n' "$initialized" "$proxy_count" "$direct_count" "$proxy_sha" "$direct_sha"
+}
+
+custom_sites_preservation_json() {
+	local fields initialized proxy_count direct_count proxy_sha direct_sha
+	fields="$1"
+	IFS='|' read -r initialized proxy_count direct_count proxy_sha direct_sha <<EOF
+$fields
+EOF
+	printf '{"initialized":%s,"proxy_count":%s,"direct_count":%s,"proxy_sha256":"%s","direct_sha256":"%s"}' \
+		"$initialized" "$proxy_count" "$direct_count" "$(json_escape "$proxy_sha")" "$(json_escape "$direct_sha")"
+}
+
 core_update_check() {
 	local arch tmpdir manifest asset_url asset_sha asset_version current_sha relation update_available
 	log_line "localClash 核心更新检查：开始"
@@ -2490,7 +2543,7 @@ start_one_click_update() {
 }
 
 one_click_update_run() {
-	local tmpdir payload snapshot version sync_default_policy runtime_was_running takeover_was_effective profile_mode luci_changed subscription_ready subscription_refresh_failed subscription_cache_used subscription_refresh_json policy_template_sync_json dnsqualify_json mihomo_changed dashboard_changed restart_strategy runtime_recovered takeover_recovered mcp_healthy current_mode current_core
+	local tmpdir payload snapshot version sync_default_policy runtime_was_running takeover_was_effective profile_mode luci_changed subscription_ready subscription_refresh_failed subscription_cache_used subscription_refresh_json policy_template_sync_json custom_sites_preservation custom_sites_before_fields custom_sites_after_fields dnsqualify_json mihomo_changed dashboard_changed restart_strategy runtime_recovered takeover_recovered mcp_healthy current_mode current_core
 	tmpdir="$(one_click_update_state_dir)"
 	if [ "${ONE_CLICK_UPDATE_RESUME:-0}" = "1" ]; then
 		snapshot="$tmpdir/snapshot.json"
@@ -2641,6 +2694,7 @@ one_click_update_run() {
 	subscription_cache_used=false
 	subscription_refresh_json='null'
 	policy_template_sync_json='{"ok":true,"changed":false,"skipped":true,"summary":"未选择同步最新默认策略。"}'
+	custom_sites_preservation='null'
 	dnsqualify_json='null'
 	mihomo_changed=false
 	dashboard_changed=false
@@ -2707,6 +2761,17 @@ one_click_update_run() {
 
 	if [ "$sync_default_policy" = "true" ]; then
 		log_line "一键更新：准备同步最新默认策略"
+		if ! call_core custom-sites list --json > "$tmpdir/custom-sites-before.json"; then
+			log_line "一键更新：无法读取同步前的用户自定义网站列表"
+			cat "$tmpdir/custom-sites-before.json" 2>/dev/null || true
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		custom_sites_before_fields="$(custom_sites_preservation_fields "$tmpdir/custom-sites-before.json")" || {
+			printf '%s\n' "$custom_sites_before_fields"
+			rm -rf "$tmpdir"
+			return 1
+		}
 		if ! call_core config status --json > "$tmpdir/config-status.json"; then
 			log_line "一键更新：配置状态读取失败，无法同步默认策略"
 			cat "$tmpdir/config-status.json" 2>/dev/null || true
@@ -2748,6 +2813,24 @@ JSON
 			return 1
 		fi
 		policy_template_sync_json="$(cat "$tmpdir/policy-template-sync.json")"
+		if ! call_core custom-sites list --json > "$tmpdir/custom-sites-after.json"; then
+			log_line "一键更新：无法读取同步后的用户自定义网站列表"
+			cat "$tmpdir/custom-sites-after.json" 2>/dev/null || true
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		custom_sites_after_fields="$(custom_sites_preservation_fields "$tmpdir/custom-sites-after.json")" || {
+			printf '%s\n' "$custom_sites_after_fields"
+			rm -rf "$tmpdir"
+			return 1
+		}
+		if [ "$custom_sites_before_fields" != "$custom_sites_after_fields" ]; then
+			fail_with_details "custom_sites_preservation_failed" "同步最新默认策略后，用户自定义网站列表的数量或 SHA256 发生变化。" '"before":'"$(custom_sites_preservation_json "$custom_sites_before_fields")"',"after":'"$(custom_sites_preservation_json "$custom_sites_after_fields")"
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		custom_sites_preservation='{"verified":true,"before":'"$(custom_sites_preservation_json "$custom_sites_before_fields")"',"after":'"$(custom_sites_preservation_json "$custom_sites_after_fields")"'}'
+		log_line "一键更新：用户自定义网站列表已验证保留"
 	else
 		log_line "一键更新：未选择同步最新默认策略"
 	fi
@@ -2868,7 +2951,7 @@ JSON
 		return 1
 	fi
 	log_line "一键更新：已完成"
-	printf '{"ok":true,"changed":true,"summary":"一键更新已完成。","minimal_outage":{"runtime_kept_until_final_switch":true,"restart_strategy":"%s","runtime_was_running":%s,"runtime_recovered":%s,"takeover_was_effective":%s,"takeover_recovered":%s},"luci":%s,"core":%s,"dnsqualify":%s,"mihomo":%s,"dashboard":%s,"policy_template_sync":%s,"subscription":{"configured":%s,"refresh_failed":%s,"used_cached_artifact":%s,"refresh":%s},"mcp_service":%s}\n' \
+	printf '{"ok":true,"changed":true,"summary":"一键更新已完成。","minimal_outage":{"runtime_kept_until_final_switch":true,"restart_strategy":"%s","runtime_was_running":%s,"runtime_recovered":%s,"takeover_was_effective":%s,"takeover_recovered":%s},"luci":%s,"core":%s,"dnsqualify":%s,"mihomo":%s,"dashboard":%s,"policy_template_sync":%s,"custom_sites_preservation":%s,"subscription":{"configured":%s,"refresh_failed":%s,"used_cached_artifact":%s,"refresh":%s},"mcp_service":%s}\n' \
 		"$(json_escape "$restart_strategy")" \
 		"$runtime_was_running" \
 		"$runtime_recovered" \
@@ -2880,6 +2963,7 @@ JSON
 		"$(cat "$tmpdir/mihomo.json")" \
 		"$(cat "$tmpdir/dashboard.json")" \
 		"$policy_template_sync_json" \
+		"$custom_sites_preservation" \
 		"$subscription_ready" \
 		"$subscription_refresh_failed" \
 		"$subscription_cache_used" \
@@ -3121,6 +3205,14 @@ subscription_get() {
 	rm -f "$tmp" "$uris_file" "$urls_file"
 
 	ok '"configured":true,"uris":['"$uris"'],"urls":['"$urls"'],"count":'"$count"
+}
+
+custom_sites_get() {
+	call_core custom-sites list --json
+}
+
+custom_sites_transact() {
+	input_to_core_file custom-sites transact
 }
 
 subscription_save_refresh_file() {
@@ -4498,7 +4590,9 @@ case "$method" in
 	  "subscription_set": { "uris": [] },
   "subscription_setup": { "uris": [] },
   "subscription_setup_async": { "uris": [] },
-  "subscription_refresh": {},
+	  "subscription_refresh": {},
+	  "custom_sites_get": {},
+	  "custom_sites_transact": { "operation": "", "pattern": "", "route": "", "id": "" },
   "component_update": { "component": "localclash" },
   "component_update_async": { "component": "localclash" },
   "one_click_update": { "sync_default_policy": false },
@@ -4550,6 +4644,8 @@ JSON
 	subscription_setup_async) start_subscription_setup ;;
 	subscription_setup_run) with_lock subscription_setup_run ;;
 	subscription_refresh) with_lock call_core subscription refresh --json ;;
+	custom_sites_get) custom_sites_get ;;
+	custom_sites_transact) with_lock custom_sites_transact ;;
 	component_update) with_lock component_update ;;
 	component_update_async) start_component_update ;;
 	component_update_run) component_update_run ;;
