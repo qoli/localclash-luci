@@ -133,7 +133,7 @@ DNS hijack、接管状态、boot/hotplug 恢复，以及 runtime/takeover transa
 
 ![localClash 运行成功后的概览页](docs/assets/readme-welcome.png)
 
-点击 `打开 Dashboard` 可以进入 Mihomo Dashboard，查看节点、连接和规则命中情况。
+点击 `打开 Dashboard` 会读取当前 Mihomo 运行配置，使用路由器的 LAN 地址、Controller 端口和 secret 自动进入 Dashboard，无需用户再次填写连接参数。Dashboard 可用于查看节点、连接和规则命中情况。
 
 ## 让 Agent 管理 localClash
 

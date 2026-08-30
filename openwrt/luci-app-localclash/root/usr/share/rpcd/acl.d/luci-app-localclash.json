@@ -2,7 +2,11 @@
   "luci-app-localclash": {
     "description": "Grant LuCI access to localClash rpcd helper methods",
     "read": {
+      "file": {
+        "/root/localclash/.runtime/mihomo/config.yaml": [ "read" ]
+      },
       "ubus": {
+        "file": [ "read" ],
         "localclash": [ "status", "subscription_get", "custom_sites_get", "service_status", "bootstrap_logs", "task_status", "bootstrap_task_status", "boot_restore_status", "takeover_status", "takeover_logs", "core_update_check", "luci_update_check", "mcp_help", "one_click_update_preferences", "dnsqualify_status" ]
       }
     },

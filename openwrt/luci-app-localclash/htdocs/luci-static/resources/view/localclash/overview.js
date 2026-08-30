@@ -2,6 +2,8 @@
 'require view';
 'require rpc';
 'require ui';
+'require fs';
+'require localclash.dashboard as dashboardAccess';
 'require localclash.takeover-issue-report as takeoverIssueReport';
 
 var callStatus = rpc.declare({
@@ -129,6 +131,8 @@ var callMcpHelp = rpc.declare({
 
 var lastOverviewStatusData = null;
 var oneClickUpdatePreferencesData = null;
+var dashboardURL = null;
+var DASHBOARD_CONFIG_PATH = '/root/localclash/.runtime/mihomo/config.yaml';
 
 function statusText(value) {
 	if (value === null || value === undefined || value === '')
@@ -582,23 +586,16 @@ function linkButton(label, href, extraClass) {
 	}, [ label ]);
 }
 
-function defaultDashboardURL() {
-	var host = window.location.hostname || '';
-
-	if (!host && window.location.host)
-		host = window.location.host.replace(/:\d+$/, '');
-	if (!host)
-		host = '192.168.1.1';
-	if (host.charAt(0) !== '[' && host.indexOf(':') !== -1)
-		host = '[' + host + ']';
-
-	return 'http://' + host + ':9090/ui';
+function loadDashboardURL() {
+	return fs.read(DASHBOARD_CONFIG_PATH).then(function(config) {
+		return dashboardAccess.buildURL(config, window.location);
+	});
 }
 
-function dashboardButton(extraClass) {
+function dashboardLink(extraClass) {
 	return E('a', {
 		'class': 'btn cbi-button localclash-button ' + (extraClass || ''),
-		'href': defaultDashboardURL(),
+		'href': dashboardURL,
 		'target': '_blank',
 		'rel': 'noopener noreferrer',
 		'role': 'button'
@@ -1080,11 +1077,10 @@ function statePanelActions(state) {
 		}, [ _('正在检查…') ]) ];
 
 	if (state.id === 'running')
-		return [
-			dashboardButton('cbi-button-apply'),
+		return (dashboardURL ? [ dashboardLink('cbi-button-apply') ] : []).concat([
 			commandButton(_('重启'), callRuntimeRestart),
 			runtimeStopButton()
-		];
+		]);
 
 	if (state.id === 'runtime_stopped')
 		return [ liveTaskButton(_('启动并接管'), callRuntimeStartTakeover, 'cbi-button-apply') ];
@@ -1397,8 +1393,8 @@ function summaryTable(data, takeover, task, state) {
 					commandButton(_('查看接管日志'), callTakeoverLogs, null, { keepOpen: true, copyResult: true, privacyConfirm: true })
 				])
 			]),
-			summaryActionRow(_('Dashboard'), statusBadge(dashboardReady ? _('可用') : _('缺失'), dashboardReady ? 'success' : 'warning'), dashboardReady ? [
-				dashboardButton('cbi-button-action')
+			summaryActionRow(_('Dashboard'), statusBadge(dashboardReady ? _('可用') : _('缺失'), dashboardReady ? 'success' : 'warning'), dashboardReady && dashboardURL ? [
+				dashboardLink('cbi-button-action')
 			] : []),
 			summaryActionRow(_('订阅'), statusBadge(subscriptionReady ? _('已配置') : _('缺失'), subscriptionReady ? 'success' : 'warning'), [
 				linkButton(_('编辑'), L.url('admin/services/localclash/subscription'))
@@ -1426,7 +1422,7 @@ function summaryLoadingTable() {
 				E('td', { 'class': 'td', 'data-title': _('目前状态'), 'id': 'localclash-overview-takeover-status' }, [ _('检查中…') ]),
 				tableActionCell([])
 			]),
-			summaryActionRow(_('Dashboard'), defaultDashboardURL(), []),
+			summaryActionRow(_('Dashboard'), dashboardURL, []),
 			summaryActionRow(_('订阅'), pending, []),
 			summaryActionRow(_('开机自动恢复'), pending, [])
 		])
@@ -1676,9 +1672,10 @@ function refreshMcpGuidance() {
 
 return view.extend({
 	load: function() {
-		return callOneClickUpdatePreferences().catch(function() {
-			return null;
-		});
+		return Promise.all([
+			callOneClickUpdatePreferences().catch(function() { return null; }),
+			loadDashboardURL().catch(function() { return null; })
+		]);
 	},
 
 	render: function(results) {
@@ -1688,7 +1685,8 @@ return view.extend({
 			message: _('正在读取路由器状态，请稍候。')
 		};
 
-		oneClickUpdatePreferencesData = results || null;
+		oneClickUpdatePreferencesData = results[0] || null;
+		dashboardURL = results[1];
 		deferAfterPaint(function() {
 			refreshOverviewStatus();
 			resumeTaskIfNeeded();

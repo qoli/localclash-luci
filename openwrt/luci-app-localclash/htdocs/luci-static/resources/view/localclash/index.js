@@ -2,6 +2,8 @@
 'require view';
 'require rpc';
 'require ui';
+'require fs';
+'require localclash.dashboard as dashboardAccess';
 
 var callStatus = rpc.declare({
 	object: 'localclash',
@@ -9,6 +11,8 @@ var callStatus = rpc.declare({
 	expect: { '': {} }
 });
 
+var dashboardURL = null;
+var DASHBOARD_CONFIG_PATH = '/root/localclash/.runtime/mihomo/config.yaml';
 var callBootstrapCoreAsync = rpc.declare({
 	object: 'localclash',
 	method: 'bootstrap_core_async',
@@ -426,7 +430,7 @@ function advancedStatusTable(data, takeover, updateCheck) {
 				runtimeProfile.core_path
 			])),
 			statusRow(_('Dashboard'), statusWithDetails(componentInstalled(status, 'dashboard') ? _('已安装') : _('缺失'), [
-				defaultDashboardURL()
+				dashboardURL
 			])),
 			statusRow(_('订阅'), subscriptionConfigured(status) ? _('已配置') : _('缺失')),
 			statusRow(_('Mihomo 运行时'), runtimeRunning(status) ? _('运行中') : _('未运行')),
@@ -977,23 +981,16 @@ function commandButton(label, handler, extraClass, options) {
 	}, [ label ]);
 }
 
-function defaultDashboardURL() {
-	var host = window.location.hostname || '';
-
-	if (!host && window.location.host)
-		host = window.location.host.replace(/:\d+$/, '');
-	if (!host)
-		host = '192.168.1.1';
-	if (host.charAt(0) !== '[' && host.indexOf(':') !== -1)
-		host = '[' + host + ']';
-
-	return 'http://' + host + ':9090/ui';
+function loadDashboardURL() {
+	return fs.read(DASHBOARD_CONFIG_PATH).then(function(config) {
+		return dashboardAccess.buildURL(config, window.location);
+	});
 }
 
-function dashboardButton(extraClass) {
+function dashboardLink(extraClass) {
 	return E('a', {
 		'class': 'btn cbi-button localclash-button ' + (extraClass || ''),
-		'href': defaultDashboardURL(),
+		'href': dashboardURL,
 		'target': '_blank',
 		'rel': 'noopener noreferrer',
 		'role': 'button'
@@ -1026,10 +1023,11 @@ function bootRestoreControls() {
 
 return view.extend({
 	load: function() {
-		return Promise.resolve(null);
+		return loadDashboardURL().catch(function() { return null; });
 	},
 
-	render: function() {
+	render: function(url) {
+		dashboardURL = url;
 		deferAfterPaint(function() {
 			refreshStatus();
 			refreshDNSOptimization();
@@ -1075,13 +1073,12 @@ return view.extend({
 				commandButton(_('启动 MCP 服务'), callServiceStart, 'cbi-button-apply'),
 				commandButton(_('停止 MCP 服务'), callServiceStop, 'cbi-button-reset')
 			])),
-			section(_('运行时'), actionRow([
-				dashboardButton('cbi-button-action'),
+			section(_('运行时'), actionRow((dashboardURL ? [ dashboardLink('cbi-button-action') ] : []).concat([
 				commandButton(_('启动'), callRuntimeStart, 'cbi-button-apply'),
 				liveTaskButton(_('启动并接管'), callRuntimeStartTakeover, 'cbi-button-apply'),
 				commandButton(_('重启'), callRuntimeRestart),
 				commandButton(_('停止'), callRuntimeStop, 'cbi-button-reset')
-			])),
+			]))),
 			section(_('DNS 默认选择与最佳化'), E('div', { 'id': 'localclash-dns-optimization-body' }, [
 				advancedStatusLoadingTable()
 			])),
