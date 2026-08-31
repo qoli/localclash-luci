@@ -923,6 +923,7 @@ reconcile_task_status() {
 	age=$(( $(now_epoch) - started ))
 	[ "$started" -gt 0 ] && [ "$age" -lt 10 ] && return 0
 	if ! ps w 2>/dev/null | grep -q '[l]ocalclash .*_run'; then
+		task_status_running || return 0
 		log_line "任务状态：检测到后台任务已中断"
 		write_task_stale_result
 	fi

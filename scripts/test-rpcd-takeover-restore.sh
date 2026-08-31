@@ -267,6 +267,16 @@ reconcile_task_status
 grep -q '一键更新任务已中断' "$TASK_RESULT" || fail_test "stale one-click task message should name one-click update"
 grep -q '点击一键更新重试' "$TASK_STATUS" || fail_test "stale one-click task action should name one-click retry"
 
+printf '{"ok":true,"running":true,"done":false,"started_at":1,"task":"one_click_update","summary":"一键更新任务正在运行。"}\n' > "$TASK_STATUS"
+rm -f "$TASK_PID" "$TASK_RESULT"
+ps() {
+	printf '{"ok":true,"running":false,"done":true,"started_at":1,"completed_at":2,"task":"one_click_update","exit_code":0,"result":{"ok":true}}\n' > "$TASK_STATUS"
+}
+reconcile_task_status
+unset -f ps
+[ ! -f "$TASK_RESULT" ] || fail_test "task reconciliation overwrote a concurrently completed task"
+grep -q '"running":false' "$TASK_STATUS" || fail_test "task reconciliation did not preserve the concurrent completion"
+
 result="$(boot_restore_disable)"
 printf '%s\n' "$result" | grep -q '"enabled":false' || fail_test "boot restore disable failed: ${result}"
 [ ! -f "$BOOT_AUTO_RESTORE_FILE" ] || fail_test "boot restore disable should clear boot policy"
