@@ -242,6 +242,10 @@ bootstrap_core() {
 
 dnsqualify_install() {
 	trace "dnsqualify_install"
+	if [ "${MOCK_DNSQUALIFY_FAIL:-0}" = "1" ]; then
+		printf '{"ok":false,"code":"dnsqualify_manifest_download_failed","message":"manifest unavailable"}\n'
+		return 1
+	fi
 	printf '{"ok":true,"changed":true,"summary":"dnsqualify updated"}\n'
 }
 
@@ -272,6 +276,13 @@ capture_resume_failure() {
 
 takeover_apply() {
 	trace "takeover_apply"
+	if [ "${MOCK_TAKEOVER_APPLY_FAIL:-0}" = "1" ]; then
+		printf '{"ok":false,"code":"takeover_apply_failed","message":"apply failed"}\n'
+		return 1
+	fi
+	if [ "${MOCK_TAKEOVER_LOST_AFTER_FAILURE:-0}" = "1" ]; then
+		: > "${tmp_dir}/takeover-recovered"
+	fi
 	printf '{"ok":true,"changed":true,"summary":"takeover applied"}\n'
 }
 
@@ -279,7 +290,11 @@ call_core() {
 	trace "call_core $*"
 	case "$*" in
 		"runtime status --json")
-			printf '{"status":{"running":true}}\n'
+			if [ "${MOCK_INITIAL_RUNTIME_STOPPED:-0}" = "1" ]; then
+				printf '{"status":{"running":false}}\n'
+			else
+				printf '{"status":{"running":true}}\n'
+			fi
 			;;
 		"takeover status --json")
 			printf '{"status":{"effective":true,"runtime_running":true,"profile_mode":"router"}}\n'
@@ -351,7 +366,31 @@ call_core() {
 call_takeover() {
 	trace "call_takeover $*"
 	case "$*" in
-		"status --json") printf '{"status":{"effective":true,"runtime_running":true,"profile_mode":"router"}}\n' ;;
+		"status --json")
+			if [ "${MOCK_TAKEOVER_INITIAL_INACTIVE:-0}" = "1" ]; then
+				printf '{"status":{"effective":false,"runtime_running":true,"profile_mode":"router"}}\n'
+			elif [ "${MOCK_RUNTIME_NOT_RECOVERED:-0}" = "1" ]; then
+				takeover_status_count="$(cat "${tmp_dir}/takeover-status-count" 2>/dev/null || printf '0')"
+				takeover_status_count=$((takeover_status_count + 1))
+				printf '%s\n' "$takeover_status_count" > "${tmp_dir}/takeover-status-count"
+				if [ "$takeover_status_count" -eq 1 ]; then
+					printf '{"status":{"effective":true,"runtime_running":true,"profile_mode":"router"}}\n'
+				else
+					printf '{"status":{"effective":false,"runtime_running":false,"profile_mode":"router"}}\n'
+				fi
+			elif [ "${MOCK_TAKEOVER_LOST_AFTER_FAILURE:-0}" = "1" ]; then
+				takeover_status_count="$(cat "${tmp_dir}/takeover-status-count" 2>/dev/null || printf '0')"
+				takeover_status_count=$((takeover_status_count + 1))
+				printf '%s\n' "$takeover_status_count" > "${tmp_dir}/takeover-status-count"
+				if [ "$takeover_status_count" -eq 1 ] || [ -f "${tmp_dir}/takeover-recovered" ]; then
+					printf '{"status":{"effective":true,"runtime_running":true,"profile_mode":"router"}}\n'
+				else
+					printf '{"status":{"effective":false,"runtime_running":true,"profile_mode":"router"}}\n'
+				fi
+			else
+				printf '{"status":{"effective":true,"runtime_running":true,"profile_mode":"router"}}\n'
+			fi
+			;;
 		"apply --json") takeover_apply ;;
 		"stop --json") printf '{"ok":true,"changed":true,"summary":"stopped"}\n' ;;
 		*) return 1 ;;
@@ -531,11 +570,101 @@ call_takeover status --json
 call_core component update dashboard --json
 call_core subscription status --json
 call_core subscription refresh --json
+call_takeover status --json
 EOF
 
 if ! diff -u "$expected" "${tmp_dir}/trace"; then
 	fail_test "subscription refresh failure boundary mismatch"
 fi
+
+: > "${tmp_dir}/trace"
+rm -f "${tmp_dir}/takeover-status-count" "${tmp_dir}/takeover-recovered"
+set_task_input '{"version":1,"sync_default_policy":false}'
+MOCK_DNSQUALIFY_FAIL=1
+MOCK_TAKEOVER_LOST_AFTER_FAILURE=1
+export MOCK_DNSQUALIFY_FAIL MOCK_TAKEOVER_LOST_AFTER_FAILURE
+capture_one_click_update
+clear_task_input
+unset MOCK_DNSQUALIFY_FAIL MOCK_TAKEOVER_LOST_AFTER_FAILURE
+assert_json "$result"
+[ "$result_rc" -ne 0 ] || fail_test "dnsqualify failure with takeover loss returned success"
+printf '%s\n' "$result" | grep -q '"outcome":"failed_recovered"' || fail_test "recovered failure outcome missing: ${result}"
+printf '%s\n' "$result" | grep -q '"code":"dnsqualify_manifest_download_failed"' || fail_test "original dnsqualify failure was not preserved: ${result}"
+printf '%s\n' "$result" | grep -q '"action":"takeover_applied"' || fail_test "takeover recovery evidence missing: ${result}"
+cat > "$expected" <<EOF
+call_core runtime status --json
+call_takeover status --json
+luci_update
+one_click_update_reexec
+bootstrap_core
+dnsqualify_install
+call_takeover status --json
+takeover_apply
+call_takeover status --json
+EOF
+if ! diff -u "$expected" "${tmp_dir}/trace"; then
+	fail_test "dnsqualify failure recovery order mismatch"
+fi
+
+: > "${tmp_dir}/trace"
+rm -f "${tmp_dir}/takeover-status-count" "${tmp_dir}/takeover-recovered"
+set_task_input '{"version":1,"sync_default_policy":false}'
+MOCK_DNSQUALIFY_FAIL=1
+MOCK_TAKEOVER_LOST_AFTER_FAILURE=1
+MOCK_TAKEOVER_APPLY_FAIL=1
+export MOCK_DNSQUALIFY_FAIL MOCK_TAKEOVER_LOST_AFTER_FAILURE MOCK_TAKEOVER_APPLY_FAIL
+capture_one_click_update
+clear_task_input
+unset MOCK_DNSQUALIFY_FAIL MOCK_TAKEOVER_LOST_AFTER_FAILURE MOCK_TAKEOVER_APPLY_FAIL
+assert_json "$result"
+[ "$result_rc" -ne 0 ] || fail_test "failed takeover recovery returned success"
+printf '%s\n' "$result" | grep -q '"outcome":"attention_required"' || fail_test "attention-required outcome missing: ${result}"
+printf '%s\n' "$result" | grep -q '"code":"one_click_update_recovery_failed"' || fail_test "recovery failure code missing: ${result}"
+printf '%s\n' "$result" | grep -q '"cause":{"ok":false,"code":"dnsqualify_manifest_download_failed"' || fail_test "nested original error missing: ${result}"
+
+: > "${tmp_dir}/trace"
+rm -f "${tmp_dir}/takeover-status-count" "${tmp_dir}/takeover-recovered"
+set_task_input '{"version":1,"sync_default_policy":false}'
+MOCK_DNSQUALIFY_FAIL=1
+MOCK_RUNTIME_NOT_RECOVERED=1
+export MOCK_DNSQUALIFY_FAIL MOCK_RUNTIME_NOT_RECOVERED
+capture_one_click_update
+clear_task_input
+unset MOCK_DNSQUALIFY_FAIL MOCK_RUNTIME_NOT_RECOVERED
+assert_json "$result"
+[ "$result_rc" -ne 0 ] || fail_test "missing runtime recovery returned success"
+printf '%s\n' "$result" | grep -q '"outcome":"attention_required"' || fail_test "runtime recovery failure should require attention: ${result}"
+printf '%s\n' "$result" | grep -q '"code":"one_click_update_runtime_not_recovered"' || fail_test "runtime recovery failure detail missing: ${result}"
+printf '%s\n' "$result" | grep -q '"attempts":6' || fail_test "runtime recovery attempts were not bounded at six: ${result}"
+
+: > "${tmp_dir}/trace"
+rm -f "${tmp_dir}/takeover-status-count" "${tmp_dir}/takeover-recovered" "$TAKEOVER_REPAIR_TICKET" "$TAKEOVER_STATE_STATUS"
+set_task_input '{"version":1,"sync_default_policy":false}'
+MOCK_DNSQUALIFY_FAIL=1
+MOCK_TAKEOVER_INITIAL_INACTIVE=1
+export MOCK_DNSQUALIFY_FAIL MOCK_TAKEOVER_INITIAL_INACTIVE
+capture_one_click_update
+clear_task_input
+unset MOCK_DNSQUALIFY_FAIL MOCK_TAKEOVER_INITIAL_INACTIVE
+assert_json "$result"
+[ "$result_rc" -ne 0 ] || fail_test "inactive takeover dnsqualify failure returned success"
+printf '%s\n' "$result" | grep -q '"action":"not_required"' || fail_test "inactive takeover recovery should be unnecessary: ${result}"
+grep -q '^takeover_apply$' "${tmp_dir}/trace" && fail_test "inactive takeover failure unexpectedly applied takeover"
+
+: > "${tmp_dir}/trace"
+rm -f "${tmp_dir}/takeover-status-count" "${tmp_dir}/takeover-recovered"
+set_task_input '{"version":1,"sync_default_policy":false}'
+MOCK_DNSQUALIFY_FAIL=1
+MOCK_INITIAL_RUNTIME_STOPPED=1
+export MOCK_DNSQUALIFY_FAIL MOCK_INITIAL_RUNTIME_STOPPED
+capture_one_click_update
+clear_task_input
+unset MOCK_DNSQUALIFY_FAIL MOCK_INITIAL_RUNTIME_STOPPED
+assert_json "$result"
+[ "$result_rc" -ne 0 ] || fail_test "inconsistent initial snapshot returned success"
+printf '%s\n' "$result" | grep -q '"outcome":"attention_required"' || fail_test "inconsistent initial snapshot should require attention: ${result}"
+printf '%s\n' "$result" | grep -q '"code":"one_click_update_reconcile_snapshot_invalid"' || fail_test "inconsistent initial snapshot error missing: ${result}"
+grep -q '^takeover_apply$' "${tmp_dir}/trace" && fail_test "inconsistent initial snapshot unexpectedly applied takeover"
 
 : > "${tmp_dir}/trace"
 rm -f "${tmp_dir}/custom-sites-read-count"

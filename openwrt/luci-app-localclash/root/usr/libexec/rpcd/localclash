@@ -2554,6 +2554,145 @@ start_one_click_update() {
 	ok '"started":true,"running":true,"summary":"一键更新任务已启动。准备阶段不会停止当前运行时；只有最终切换运行时时可能短暂断网。"'
 }
 
+one_click_update_failure_reconcile() {
+	local runtime_was_running takeover_was_effective profile_mode tmpdir status_file apply_file runtime_running effective attempt apply_result apply_ok
+	runtime_was_running="$1"
+	takeover_was_effective="$2"
+	profile_mode="$3"
+	tmpdir="$(mktemp -d /tmp/localclash-one-click-reconcile.XXXXXX)" || {
+		fail "one_click_update_reconcile_tmpdir_failed" "一键更新失败后无法创建网络接管恢复状态目录。"
+		return 1
+	}
+	status_file="$tmpdir/status.json"
+	apply_file="$tmpdir/apply.json"
+
+	case "$runtime_was_running:$takeover_was_effective" in
+		true:true|true:false|false:false) ;;
+		*)
+			fail_with_details "one_click_update_reconcile_snapshot_invalid" "更新前的运行时与网络接管快照不一致，不能安全执行失败恢复。" '"runtime_was_running":"'"$(json_escape "$runtime_was_running")"'","takeover_was_effective":"'"$(json_escape "$takeover_was_effective")"'"'
+			rm -rf "$tmpdir"
+			return 1
+			;;
+	esac
+	if [ "$takeover_was_effective" != "true" ]; then
+		printf '{"ok":true,"attempted":false,"action":"not_required","summary":"更新前网络接管未启用，无需执行失败恢复。"}\n'
+		rm -rf "$tmpdir"
+		return 0
+	fi
+	if [ "$profile_mode" != "router" ]; then
+		fail_with_details "one_click_update_reconcile_snapshot_invalid" "更新前网络接管已生效，但 runtime profile 不是 router。" '"profile_mode":"'"$(json_escape "$profile_mode")"'"'
+		rm -rf "$tmpdir"
+		return 1
+	fi
+
+	log_line "一键更新：失败恢复开始，正在核对运行时和网络接管"
+	attempt=1
+	while [ "$attempt" -le 6 ]; do
+		if call_takeover status --json > "$status_file"; then
+			runtime_running="$(jsonfilter -i "$status_file" -e '@.status.runtime_running' 2>/dev/null || true)"
+			effective="$(jsonfilter -i "$status_file" -e '@.status.effective' 2>/dev/null || true)"
+			if [ "$runtime_running" = "true" ]; then
+				break
+			fi
+		else
+			runtime_running=""
+			effective=""
+		fi
+		if [ "$attempt" -lt 6 ]; then
+			sleep 2
+			attempt=$((attempt + 1))
+		else
+			break
+		fi
+	done
+
+	if [ "$runtime_running" != "true" ]; then
+		log_line "一键更新：失败恢复未执行，Mihomo 运行时未能在限定时间内恢复"
+		fail_with_details "one_click_update_runtime_not_recovered" "一键更新失败，且 Mihomo 运行时未能恢复；无法重新应用网络接管。" '"attempts":'"$attempt"',"runtime_running":"'"$(json_escape "$runtime_running")"'"'
+		rm -rf "$tmpdir"
+		return 1
+	fi
+	if [ "$effective" = "true" ]; then
+		log_line "一键更新：失败恢复确认网络接管仍然生效"
+		printf '{"ok":true,"attempted":false,"action":"verified","summary":"一键更新失败，但网络接管仍然生效。","attempts":%s}\n' "$attempt"
+		rm -rf "$tmpdir"
+		return 0
+	fi
+	if [ "$effective" != "false" ]; then
+		log_line "一键更新：失败恢复无法解析网络接管 effective 状态"
+		fail_with_details "one_click_update_takeover_status_invalid" "一键更新失败后无法读取有效的网络接管状态。" '"effective":"'"$(json_escape "$effective")"'"'
+		rm -rf "$tmpdir"
+		return 1
+	fi
+
+	log_line "一键更新：失败恢复检测到网络接管未生效，正在重新应用"
+	if takeover_apply one_click_update_failure > "$apply_file"; then
+		apply_result="$(cat "$apply_file")"
+		apply_ok="$(jsonfilter -s "$apply_result" -e '@.ok' 2>/dev/null || true)"
+		if [ "$apply_ok" != "true" ]; then
+			log_line "一键更新：失败恢复收到无效的网络接管应用结果"
+			fail "one_click_update_takeover_apply_result_invalid" "一键更新失败后，网络接管应用命令没有返回有效的成功结果。"
+			rm -rf "$tmpdir"
+			return 1
+		fi
+	else
+		apply_result="$(cat "$apply_file" 2>/dev/null || true)"
+		apply_ok="$(jsonfilter -s "$apply_result" -e '@.ok' 2>/dev/null || true)"
+		if [ "$apply_ok" != "false" ]; then
+			apply_result='{"ok":false,"code":"takeover_apply_result_invalid","message":"网络接管应用失败路径没有返回有效 JSON。"}'
+		fi
+		log_line "一键更新：失败恢复重新应用网络接管失败"
+		fail_with_details "one_click_update_takeover_apply_failed" "一键更新失败，且网络接管重新应用失败。" '"apply_result":'"${apply_result:-null}"
+		rm -rf "$tmpdir"
+		return 1
+	fi
+	if ! call_takeover status --json > "$status_file"; then
+		log_line "一键更新：失败恢复无法验证网络接管"
+		fail_with_details "one_click_update_takeover_verify_failed" "一键更新失败，网络接管已重新应用，但无法读取最终状态。" '"apply_result":'"$apply_result"
+		rm -rf "$tmpdir"
+		return 1
+	fi
+	effective="$(jsonfilter -i "$status_file" -e '@.status.effective' 2>/dev/null || true)"
+	if [ "$effective" != "true" ]; then
+		log_line "一键更新：失败恢复后网络接管仍未生效"
+		fail_with_details "one_click_update_takeover_verify_failed" "一键更新失败，且网络接管恢复后仍未生效。" '"effective":"'"$(json_escape "$effective")"'","apply_result":'"$apply_result"
+		rm -rf "$tmpdir"
+		return 1
+	fi
+	log_line "一键更新：失败恢复已重新应用并验证网络接管"
+	printf '{"ok":true,"attempted":true,"action":"takeover_applied","summary":"一键更新失败；网络接管已重新应用并验证生效。","attempts":%s,"apply_result":%s}\n' "$attempt" "$apply_result"
+	rm -rf "$tmpdir"
+}
+
+one_click_update_failure_result() {
+	local cause_file recovery_file recovery_ok cause cause_ok cause_code cause_message recovery recovery_result_ok
+	cause_file="$1"
+	recovery_file="$2"
+	recovery_ok="$3"
+	cause="$(cat "$cause_file" 2>/dev/null || true)"
+	cause_ok="$(jsonfilter -s "$cause" -e '@.ok' 2>/dev/null || true)"
+	cause_code="$(jsonfilter -s "$cause" -e '@.code' 2>/dev/null || true)"
+	cause_message="$(jsonfilter -s "$cause" -e '@.message' 2>/dev/null || true)"
+	recovery="$(cat "$recovery_file" 2>/dev/null || true)"
+	recovery_result_ok="$(jsonfilter -s "$recovery" -e '@.ok' 2>/dev/null || true)"
+	if { [ "$recovery_ok" = "true" ] && [ "$recovery_result_ok" != "true" ]; } || { [ "$recovery_ok" != "true" ] && [ "$recovery_result_ok" != "false" ]; }; then
+		recovery_ok=false
+		recovery='{"ok":false,"code":"one_click_update_recovery_result_invalid","message":"失败恢复路径没有产生有效结果。"}'
+	fi
+	if [ "$cause_ok" != "false" ] || [ -z "$cause_code" ] || [ -z "$cause_message" ]; then
+		cause='{"ok":false,"code":"one_click_update_result_invalid","message":"一键更新失败路径没有产生有效的错误结果。","details":{},"next_actions":[]}'
+		cause_code="one_click_update_result_invalid"
+		cause_message="一键更新失败路径没有产生有效的错误结果。"
+	fi
+	if [ "$recovery_ok" = "true" ]; then
+		printf '{"ok":false,"changed":true,"outcome":"failed_recovered","code":"%s","message":"%s","cause":%s,"recovery":%s,"next_actions":["修正原始更新错误后重新执行一键更新。"]}\n' \
+			"$(json_escape "$cause_code")" "$(json_escape "$cause_message")" "$cause" "$recovery"
+		return 0
+	fi
+	printf '{"ok":false,"changed":true,"outcome":"attention_required","code":"one_click_update_recovery_failed","message":"一键更新失败，且无法恢复更新前的网络接管状态。","cause":%s,"recovery":%s,"next_actions":["查看网络接管日志并手动应用接管。"]}\n' \
+		"$cause" "${recovery:-null}"
+}
+
 one_click_update_run() {
 	local tmpdir payload snapshot version sync_default_policy runtime_was_running takeover_was_effective profile_mode luci_changed subscription_ready subscription_refresh_json policy_template_sync_json custom_sites_preservation custom_sites_before_fields custom_sites_after_fields dnsqualify_json mihomo_changed dashboard_changed runtime_recovered takeover_recovered mcp_healthy current_mode current_core software_checkpoint_json material_checkpoint_json
 	tmpdir="$(one_click_update_state_dir)"
@@ -2708,6 +2847,45 @@ one_click_update_run() {
 			return 1
 		fi
 	fi
+	one_click_update_continue "$tmpdir" "$sync_default_policy" "$runtime_was_running" "$takeover_was_effective" "$profile_mode"
+}
+
+one_click_update_continue() {
+	local tmpdir runtime_was_running takeover_was_effective profile_mode result_file recovery_file rc recovery_rc
+	tmpdir="$1"
+	runtime_was_running="$3"
+	takeover_was_effective="$4"
+	profile_mode="$5"
+	result_file="/tmp/localclash-one-click-result.$$.json"
+	recovery_file="/tmp/localclash-one-click-recovery.$$.json"
+	rm -f "$result_file" "$recovery_file"
+	if one_click_update_continue_execute "$@" > "$result_file"; then
+		rc=0
+	else
+		rc=$?
+	fi
+	if [ "$rc" -eq 0 ]; then
+		cat "$result_file"
+		rm -f "$result_file" "$recovery_file"
+		return 0
+	fi
+	if one_click_update_failure_reconcile "$runtime_was_running" "$takeover_was_effective" "$profile_mode" > "$recovery_file"; then
+		recovery_rc=0
+	else
+		recovery_rc=$?
+	fi
+	one_click_update_failure_result "$result_file" "$recovery_file" "$([ "$recovery_rc" -eq 0 ] && printf true || printf false)"
+	rm -f "$result_file" "$recovery_file"
+	return "$rc"
+}
+
+one_click_update_continue_execute() {
+	local tmpdir sync_default_policy runtime_was_running takeover_was_effective profile_mode subscription_ready subscription_refresh_json policy_template_sync_json custom_sites_preservation custom_sites_before_fields custom_sites_after_fields dnsqualify_json mihomo_changed dashboard_changed runtime_recovered takeover_recovered mcp_healthy current_mode current_core software_checkpoint_json material_checkpoint_json
+	tmpdir="$1"
+	sync_default_policy="$2"
+	runtime_was_running="$3"
+	takeover_was_effective="$4"
+	profile_mode="$5"
 
 	subscription_ready=false
 	subscription_refresh_json='null'
