@@ -888,6 +888,32 @@ function takeoverState(takeover) {
 	return state || '-';
 }
 
+function takeoverInterrupted(takeover) {
+	var status;
+	var state;
+
+	if (!takeover || takeover.pending === true || takeover.ok === false)
+		return false;
+
+	status = takeover.status && typeof takeover.status === 'object' ? takeover.status : takeover;
+	if (status.effective === false)
+		return true;
+	if (status.active === false || status.running === false || status.enabled === false)
+		return true;
+
+	state = stringState(status);
+	return /inactive|disabled|stopped|interrupt/.test(state);
+}
+
+function takeoverSummaryActions(takeover) {
+	var actions = [];
+
+	if (takeoverInterrupted(takeover))
+		actions.push(commandButton(_('应用接管'), callTakeoverApply, 'cbi-button-apply'));
+	actions.push(commandButton(_('查看接管日志'), callTakeoverLogs, null, { keepOpen: true, copyResult: true, privacyConfirm: true }));
+	return actions;
+}
+
 function bootRestoreSummary(bootRestore) {
 	if (bootRestore && bootRestore.enabled === true)
 		return _('已启用');
@@ -906,6 +932,7 @@ function refreshTakeoverStatus() {
 			cell.textContent = text;
 		if (hero)
 			hero.textContent = text;
+		replaceContent('localclash-overview-takeover-actions', takeoverSummaryActions(takeover));
 		updateStatePanelTakeoverAppearance(text, false);
 	}).catch(function(err) {
 		var text = takeoverFailureText(err);
@@ -916,6 +943,7 @@ function refreshTakeoverStatus() {
 			cell.textContent = text;
 		if (hero)
 			hero.textContent = text;
+		replaceContent('localclash-overview-takeover-actions', takeoverSummaryActions(null));
 		updateStatePanelTakeoverAppearance(text, true);
 	});
 }
@@ -1389,9 +1417,7 @@ function summaryTable(data, takeover, task, state) {
 				E('td', { 'class': 'td', 'data-title': _('目前状态') }, [
 					statusBadge(takeoverText, takeoverTone, { 'id': 'localclash-overview-takeover-status' })
 				]),
-				tableActionCell([
-					commandButton(_('查看接管日志'), callTakeoverLogs, null, { keepOpen: true, copyResult: true, privacyConfirm: true })
-				])
+				E('td', { 'class': 'td cbi-section-actions', 'id': 'localclash-overview-takeover-actions' }, takeoverSummaryActions(takeover))
 			]),
 			summaryActionRow(_('Dashboard'), statusBadge(dashboardReady ? _('可用') : _('缺失'), dashboardReady ? 'success' : 'warning'), dashboardReady && dashboardURL ? [
 				dashboardLink('cbi-button-action')
@@ -1420,7 +1446,7 @@ function summaryLoadingTable() {
 			E('tr', { 'class': 'tr cbi-rowstyle-1' }, [
 				E('td', { 'class': 'td', 'data-title': _('项目') }, [ _('网络接管') ]),
 				E('td', { 'class': 'td', 'data-title': _('目前状态'), 'id': 'localclash-overview-takeover-status' }, [ _('检查中…') ]),
-				tableActionCell([])
+				E('td', { 'class': 'td cbi-section-actions', 'id': 'localclash-overview-takeover-actions' }, takeoverSummaryActions(null))
 			]),
 			summaryActionRow(_('Dashboard'), dashboardURL, []),
 			summaryActionRow(_('订阅'), pending, []),
