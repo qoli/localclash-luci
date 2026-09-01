@@ -29,6 +29,7 @@ GITHUB_RELEASE_MIRRORS="${LOCALCLASH_GITHUB_RELEASE_MIRRORS:-https://gh-proxy.co
 GITHUB_RAW_MIRRORS="${LOCALCLASH_GITHUB_RAW_MIRRORS:-https://gh-proxy.com/https://raw.githubusercontent.com https://ghproxy.imciel.com/https://raw.githubusercontent.com https://gitproxy.mrhjx.cn/https://raw.githubusercontent.com https://gh.jasonzeng.dev/https://raw.githubusercontent.com https://gh.monlor.com/https://raw.githubusercontent.com https://gh.noki.icu/https://raw.githubusercontent.com https://ghfast.top/https://raw.githubusercontent.com https://fastly.jsdelivr.net/gh}"
 FETCH_TIMEOUT="${LOCALCLASH_FETCH_TIMEOUT:-20}"
 TASK_STEP_TIMEOUT="${LOCALCLASH_TASK_STEP_TIMEOUT:-240}"
+TASK_HEARTBEAT_INTERVAL="${LOCALCLASH_TASK_HEARTBEAT_INTERVAL:-5}"
 TAKEOVER_SKIP_FILE="${LOCALCLASH_TAKEOVER_SKIP_FILE:-/tmp/localclash-skip-takeover}"
 TAKEOVER_REPAIR_TICKET="${LOCALCLASH_TAKEOVER_REPAIR_TICKET:-/tmp/localclash/router-takeover/repair-ticket}"
 TAKEOVER_STATE_STATUS="${LOCALCLASH_TAKEOVER_STATE_STATUS:-/tmp/localclash/router-takeover/status}"
@@ -1053,28 +1054,37 @@ task_cancel() {
 }
 
 run_with_heartbeat() {
-	local label output tmp_output pid elapsed rc
-	label="$1"
-	output="$2"
-	shift 2
+	run_with_heartbeat_timeout "$TASK_STEP_TIMEOUT" "$@"
+}
+
+run_with_heartbeat_until_complete() {
+	run_with_heartbeat_timeout 0 "$@"
+}
+
+run_with_heartbeat_timeout() {
+	local timeout label output tmp_output pid elapsed rc
+	timeout="$1"
+	label="$2"
+	output="$3"
+	shift 3
 	elapsed=0
 	tmp_output="${output}.run.$$"
 	rm -f "$tmp_output"
 	( "$@" > "$tmp_output" ) &
 	pid="$!"
 	while kill -0 "$pid" 2>/dev/null; do
-		sleep 5
+		sleep "$TASK_HEARTBEAT_INTERVAL"
 		if kill -0 "$pid" 2>/dev/null; then
-			elapsed=$((elapsed + 5))
+			elapsed=$((elapsed + TASK_HEARTBEAT_INTERVAL))
 			log_line "${label}：仍在执行（${elapsed}s）"
-			if [ "$TASK_STEP_TIMEOUT" -gt 0 ] && [ "$elapsed" -ge "$TASK_STEP_TIMEOUT" ]; then
-				log_line "${label}：超过 ${TASK_STEP_TIMEOUT}s，已停止等待"
+			if [ "$timeout" -gt 0 ] && [ "$elapsed" -ge "$timeout" ]; then
+				log_line "${label}：超过 ${timeout}s，已停止等待"
 				kill_process_tree -TERM "$pid"
 				sleep 2
 				kill_process_tree -KILL "$pid"
 				wait "$pid" 2>/dev/null || true
 				rm -f "$tmp_output"
-				printf '{"ok":false,"code":"step_timeout","message":"%s 超时，请检查路由器是否能访问下载源，或稍后重试。","details":{"timeout_seconds":%s},"next_actions":["确认路由器可以访问下载源后重试。"]}\n' "$(json_escape "$label")" "$TASK_STEP_TIMEOUT" > "$output"
+				printf '{"ok":false,"code":"step_timeout","message":"%s 超时，请检查路由器是否能访问下载源，或稍后重试。","details":{"timeout_seconds":%s},"next_actions":["确认路由器可以访问下载源后重试。"]}\n' "$(json_escape "$label")" "$timeout" > "$output"
 				return 124
 			fi
 		fi
@@ -2997,7 +3007,7 @@ one_click_update_continue_execute() {
 		return 1
 	}
 	if [ "$subscription_ready" = "true" ] && [ "$sync_default_policy" != "true" ]; then
-		if ! run_with_heartbeat "一键更新：正在刷新订阅" "$tmpdir/subscription-refresh.json" call_core subscription refresh --json; then
+		if ! run_with_heartbeat_until_complete "一键更新：正在刷新订阅" "$tmpdir/subscription-refresh.json" call_core subscription refresh --json; then
 			log_line "一键更新：订阅刷新失败；软件检查点保持生效，配置材料未切换"
 			cat "$tmpdir/subscription-refresh.json"
 			rm -rf "$tmpdir"
@@ -3061,7 +3071,7 @@ one_click_update_continue_execute() {
   "refresh_subscription": true
 }
 JSON
-		if ! run_with_heartbeat "一键更新：正在同步最新默认策略" "$tmpdir/policy-template-sync.json" call_core config apply-template --input "$tmpdir/template-sync.json" --json; then
+		if ! run_with_heartbeat_until_complete "一键更新：正在同步最新默认策略" "$tmpdir/policy-template-sync.json" call_core config apply-template --input "$tmpdir/template-sync.json" --json; then
 			log_line "一键更新：默认策略同步失败"
 			cat "$tmpdir/policy-template-sync.json"
 			rm -rf "$tmpdir"
@@ -3479,7 +3489,7 @@ subscription_save_refresh_file() {
 	fi
 
 	log_line "订阅设置：正在刷新订阅"
-	if ! run_with_heartbeat "订阅设置：正在刷新订阅" "$tmpdir/refresh.json" call_core subscription refresh --json; then
+	if ! run_with_heartbeat_until_complete "订阅设置：正在刷新订阅" "$tmpdir/refresh.json" call_core subscription refresh --json; then
 		cat "$tmpdir/refresh.json"
 		return 1
 	fi
