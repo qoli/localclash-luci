@@ -12,7 +12,7 @@ var callSubscriptionGet = rpc.declare({
 var callSubscriptionSetupAsync = rpc.declare({
 	object: 'localclash',
 	method: 'subscription_setup_async',
-	params: [ 'uris' ],
+	params: [ 'uris', 'g204_filter_enabled' ],
 	expect: { '': {} }
 });
 
@@ -249,6 +249,11 @@ function subscriptionUris() {
 		.filter(function(line) { return line.length > 0; });
 }
 
+function g204FilterEnabled() {
+	var checkbox = document.getElementById('localclash-g204-filter-enabled');
+	return !!(checkbox && checkbox.checked);
+}
+
 function requireSubscriptionUrls() {
 	var uris = subscriptionUris();
 
@@ -286,10 +291,13 @@ function setSubscriptionLoadStatus(text, isError) {
 function refreshSubscriptionInput() {
 	return callSubscriptionGet().then(function(subscription) {
 		var textarea = document.getElementById('localclash-subscription-urls');
+		var g204Checkbox = document.getElementById('localclash-g204-filter-enabled');
 		var savedUris = subscription && Array.isArray(subscription.uris) ? subscription.uris.join('\n') : '';
 
 		if (textarea && textarea.getAttribute('data-dirty') !== 'true')
 			textarea.value = savedUris;
+		if (g204Checkbox && g204Checkbox.getAttribute('data-dirty') !== 'true')
+			g204Checkbox.checked = !!(subscription && subscription.g204_filter_enabled === true);
 
 		setSubscriptionLoadStatus(savedUris ? _('订阅内容已加载。') : _('尚未保存订阅。'));
 	}).catch(function(err) {
@@ -339,9 +347,22 @@ return view.extend({
 					'id': 'localclash-subscription-load-status',
 					'class': 'localclash-subscription-status'
 				}, [ _('正在加载订阅内容…') ]),
+				E('label', { 'class': 'cbi-value' }, [
+					E('input', {
+						'id': 'localclash-g204-filter-enabled',
+						'type': 'checkbox',
+						'change': function(ev) {
+							ev.currentTarget.setAttribute('data-dirty', 'true');
+						}
+					}),
+					' ', _('使用 g204 筛选“自动选择”（默认关闭）')
+				]),
+				E('p', { 'class': 'description' }, [
+					_('关闭时“自动选择”使用完整订阅节点；ChatGPT 能力始终独立建立。')
+				]),
 				actionRow([
 					liveTaskButton(_('保存并应用订阅'), function() {
-						return callSubscriptionSetupAsync(requireSubscriptionUrls());
+						return callSubscriptionSetupAsync(requireSubscriptionUrls(), g204FilterEnabled());
 					}, 'cbi-button-apply')
 				])
 			])

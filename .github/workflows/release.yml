@@ -68,6 +68,7 @@ jobs:
           node scripts/test-takeover-issue-report.js
           node scripts/test-custom-sites-ui.js
           node scripts/test-dashboard-ui.js
+          node scripts/test-subscription-ui.js
           node scripts/test-one-click-update-ui.js
           sh -n openwrt/luci-app-localclash/root/usr/libexec/rpcd/localclash
           sh -n packaging/istore/install.sh
