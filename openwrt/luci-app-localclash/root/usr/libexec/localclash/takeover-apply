@@ -26,9 +26,19 @@ cleanup_localclash_nft() {
     nft flush chain inet fw4 "$chain" >/dev/null 2>&1 || true
     nft delete chain inet fw4 "$chain" >/dev/null 2>&1 || true
   done
-  for set_name in localclash_localnetwork localclash_localnetwork6 localclash_localdns4 localclash_localdns6; do
+  for set_name in localclash_localnetwork localclash_localnetwork6 localclash_localdns4 localclash_localdns6 localclash_bypass_iif; do
     nft flush set inet fw4 "$set_name" >/dev/null 2>&1 || true
     nft delete set inet fw4 "$set_name" >/dev/null 2>&1 || true
+  done
+}
+
+add_bypass_iifnames() {
+  command -v uci >/dev/null 2>&1 || return 0
+  uci -q show network 2>/dev/null | sed -n "s/^network\.\([^.=]*\)\.localclash_bypass='1'$/\1/p" | while read -r iifname; do
+    case "$iifname" in
+      ''|*[!A-Za-z0-9_.:-]*) continue ;;
+    esac
+    nft "add element inet fw4 localclash_bypass_iif { \"$iifname\" }" >/dev/null 2>&1 || true
   done
 }
 
@@ -244,16 +254,20 @@ add set inet fw4 localclash_localnetwork { type ipv4_addr; flags interval; auto-
 add element inet fw4 localclash_localnetwork { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4 }
 add set inet fw4 localclash_localdns4 { type ipv4_addr; flags interval; auto-merge; }
 add set inet fw4 localclash_localdns6 { type ipv6_addr; flags interval; auto-merge; }
+add set inet fw4 localclash_bypass_iif { type ifname; }
 EOF_NFT
 add_dynamic_localdns4
 add_dynamic_localdns6
+add_bypass_iifnames
 nft -f - <<EOF_NFT
 add chain inet fw4 localclash
+add rule inet fw4 localclash iifname @localclash_bypass_iif counter return comment "localClash ingress bypass"
 add rule inet fw4 localclash ip daddr @localclash_localnetwork counter return
 add rule inet fw4 localclash ct direction reply counter return
 add rule inet fw4 localclash ip protocol tcp counter redirect to $REDIR_PORT
 insert rule inet fw4 dstnat position 0 meta nfproto ipv4 ip protocol tcp counter jump localclash comment "localClash TCP redirect"
 add chain inet fw4 localclash_mangle
+add rule inet fw4 localclash_mangle iifname @localclash_bypass_iif counter return comment "localClash ingress bypass"
 add rule inet fw4 localclash_mangle meta l4proto { tcp, udp } iifname "$TUN_DEVICE" counter return
 add rule inet fw4 localclash_mangle ip daddr @localclash_localnetwork counter return
 add rule inet fw4 localclash_mangle ct direction reply counter return
@@ -261,6 +275,7 @@ add rule inet fw4 localclash_mangle ip protocol udp mark set $FWMARK counter acc
 add rule inet fw4 localclash_mangle ip protocol icmp icmp type echo-request mark set $FWMARK counter accept comment "localClash ICMP mark"
 insert rule inet fw4 mangle_prerouting position 0 meta nfproto ipv4 counter jump localclash_mangle comment "localClash TUN mark"
 add chain inet fw4 localclash_dns_redirect
+add rule inet fw4 localclash_dns_redirect iifname @localclash_bypass_iif counter return comment "localClash ingress bypass"
 add rule inet fw4 localclash_dns_redirect ip daddr @localclash_localdns4 counter return comment "localClash local DNS bypass"
 add rule inet fw4 localclash_dns_redirect ip6 daddr @localclash_localdns6 counter return comment "localClash local DNS bypass"
 add rule inet fw4 localclash_dns_redirect meta l4proto { tcp, udp } th dport 53 counter redirect to $DNS_PORT comment "localClash DNS hijack"
@@ -279,12 +294,14 @@ nft 'add chain inet fw4 nat_output { type nat hook output priority -1; }' >/dev/
 nft "insert rule inet fw4 nat_output position 0 meta l4proto { tcp, udp } th dport 53 ip daddr 127.0.0.1 counter redirect to $DNS_PORT comment \"localClash DNS hijack\""
 
 nft 'add chain inet fw4 localclash_v6' >/dev/null 2>&1 || true
+nft 'add rule inet fw4 localclash_v6 iifname @localclash_bypass_iif counter return comment "localClash ingress bypass"' >/dev/null 2>&1 || true
 nft 'add rule inet fw4 localclash_v6 ip6 daddr @localclash_localnetwork6 counter return' >/dev/null 2>&1 || true
 nft 'add rule inet fw4 localclash_v6 ct direction reply counter return' >/dev/null 2>&1 || true
 nft add rule inet fw4 localclash_v6 ip6 nexthdr tcp counter redirect to "$REDIR_PORT" >/dev/null 2>&1 || true
 nft "insert rule inet fw4 dstnat position 0 meta nfproto ipv6 ip6 nexthdr tcp counter jump localclash_v6 comment \"localClash IPv6 TCP redirect\"" >/dev/null 2>&1 || true
 
 nft 'add chain inet fw4 localclash_mangle_v6' >/dev/null 2>&1 || true
+nft 'add rule inet fw4 localclash_mangle_v6 iifname @localclash_bypass_iif counter return comment "localClash ingress bypass"' >/dev/null 2>&1 || true
 nft add rule inet fw4 localclash_mangle_v6 meta l4proto { tcp, udp } iifname "$TUN_DEVICE" counter return >/dev/null 2>&1 || true
 nft 'add rule inet fw4 localclash_mangle_v6 ip6 daddr @localclash_localnetwork6 counter return' >/dev/null 2>&1 || true
 nft 'add rule inet fw4 localclash_mangle_v6 ct direction reply counter return' >/dev/null 2>&1 || true

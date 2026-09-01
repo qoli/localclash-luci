@@ -138,6 +138,11 @@ grep -Fq 'WORKDIR="${LOCALCLASH_WORKDIR:-/root/localclash}"' "$manager" || fail_
 grep -q 'ip rule add fwmark' "$apply_impl" || fail_test "apply implementation missing policy route"
 grep -q 'localClash DNS hijack' "$apply_impl" || fail_test "apply implementation missing DNS hijack"
 grep -q 'discover_lan_networks' "$apply_impl" || fail_test "apply implementation missing OpenWrt LAN discovery"
+grep -q "localclash_bypass='1'" "$apply_impl" || fail_test "apply implementation missing explicit ingress-bypass discovery"
+grep -q 'localclash iifname @localclash_bypass_iif' "$apply_impl" || fail_test "TCP redirect chain missing ingress bypass"
+grep -q 'localclash_mangle iifname @localclash_bypass_iif' "$apply_impl" || fail_test "IPv4 TUN mark chain missing ingress bypass"
+grep -q 'localclash_dns_redirect iifname @localclash_bypass_iif' "$apply_impl" || fail_test "DNS redirect chain missing ingress bypass"
+grep -q 'localclash_mangle_v6 iifname @localclash_bypass_iif' "$apply_impl" || fail_test "IPv6 TUN mark chain missing ingress bypass"
 grep -q 'nft delete chain inet fw4' "$stop_impl" || fail_test "stop implementation missing nft cleanup"
 if grep -q 'localclash.*takeover' "$apply_impl"; then
 	fail_test "OpenWrt implementation calls back into Core takeover"
