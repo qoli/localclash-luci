@@ -49,7 +49,8 @@ warned = helper.crossListDuplicateIDs({
 assert.deepStrictEqual(Object.assign({}, warned), {}, 'LuCI must not perform wildcard intersection analysis');
 assert.throws(() => helper.crossListDuplicateIDs({ proxy: [] }), /proxy\/direct arrays are required/);
 
-assert(viewSource.includes("_('完整匹配')"));
+assert(viewSource.includes("_('DOMAIN-SUFFIX 后缀匹配')"));
+assert(!viewSource.includes("_('完整匹配')"));
 assert(viewSource.includes("_('通配符匹配')"));
 assert(viewSource.includes("_('代理出口')"));
 assert(viewSource.includes("_('直连')"));

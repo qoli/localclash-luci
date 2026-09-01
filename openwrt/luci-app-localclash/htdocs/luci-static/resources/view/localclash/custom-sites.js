@@ -86,7 +86,7 @@ function replaceContent(id, content) {
 }
 
 function matchLabel(match) {
-	return match === 'wildcard' ? _('通配符匹配') : _('完整匹配');
+	return match === 'wildcard' ? _('通配符匹配') : _('DOMAIN-SUFFIX 后缀匹配');
 }
 
 function showMutationResult(result) {
@@ -199,7 +199,7 @@ function showAddDialog() {
 				input
 			]),
 			E('p', { 'class': 'localclash-muted' }, [
-				_('不含 * 或 ? 时使用完整匹配；含 * 或 ? 时使用 Mihomo DOMAIN-WILDCARD 通配符匹配。')
+				_('不含 * 或 ? 时使用 Mihomo DOMAIN-SUFFIX 后缀匹配；含 * 或 ? 时使用 DOMAIN-WILDCARD 通配符匹配。')
 			]),
 			E('fieldset', { 'class': 'localclash-route-choice' }, [
 				E('legend', {}, [ _('策略') ]),

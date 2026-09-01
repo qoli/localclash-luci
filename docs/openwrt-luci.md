@@ -74,7 +74,7 @@ LuCI should manage only the beginner closed loop:
 Advanced edits remain MCP or SSH work. LuCI must not expose a full editor for
 packs, proxy groups, arbitrary custom rules, external rule providers, runtime
 profiles, or generated Mihomo YAML. The narrow `网站分流` page is the explicit
-exception: it only records a complete or DOMAIN-WILDCARD host pattern and a
+exception: it only records a DOMAIN-SUFFIX or DOMAIN-WILDCARD host pattern and a
 proxy/direct decision through the Core-owned custom-site interface.
 
 ## Role Responsibilities
@@ -150,7 +150,7 @@ state, but must not render full URLs after save.
 
 The `网站分流` page sits between `订阅` and `进阶`. It accepts one host pattern at
 a time and one decision: `代理出口` or `直连`. A pattern without `*` or `?` uses
-Mihomo `DOMAIN`; a pattern containing either wildcard uses
+Mihomo `DOMAIN-SUFFIX`; a pattern containing either wildcard uses
 `DOMAIN-WILDCARD`. The Core validates and normalizes the pattern.
 
 The page lists `自訂代理網站` and `自訂直連網站` separately. Both lists are
