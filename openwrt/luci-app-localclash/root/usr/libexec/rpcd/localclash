@@ -3385,32 +3385,28 @@ subscription_set() {
 }
 
 subscription_get() {
-	local tmp configured g204_filter_enabled uris urls count uri uris_file urls_file
+	local tmp configured uris urls count uri uris_file urls_file
 	uris=""
 	urls=""
 	count=0
-	g204_filter_enabled=false
 
 	if ! core_installed; then
-		ok '"configured":false,"g204_filter_enabled":false,"uris":[],"urls":[],"count":0'
+		ok '"configured":false,"uris":[],"urls":[],"count":0'
 		return 0
 	fi
 
 	tmp="/tmp/localclash-subscription-get.$$.json"
 	if ! call_core subscription get --json > "$tmp" 2>/dev/null; then
 		rm -f "$tmp"
-		ok '"configured":false,"g204_filter_enabled":false,"uris":[],"urls":[],"count":0'
+		ok '"configured":false,"uris":[],"urls":[],"count":0'
 		return 0
 	fi
 	configured="$(jsonfilter -i "$tmp" -e '@.status.configured' 2>/dev/null || printf false)"
 	if [ "$configured" != "true" ]; then
 		rm -f "$tmp"
-		ok '"configured":false,"g204_filter_enabled":false,"uris":[],"urls":[],"count":0'
+		ok '"configured":false,"uris":[],"urls":[],"count":0'
 		return 0
 	fi
-	g204_filter_enabled="$(jsonfilter -i "$tmp" -e '@.status.g204_filter_enabled' 2>/dev/null || printf false)"
-	[ "$g204_filter_enabled" = "true" ] || g204_filter_enabled=false
-
 	uris_file="$tmp.uris"
 	urls_file="$tmp.urls"
 	jsonfilter -i "$tmp" -e '@.status.uris[*]' > "$uris_file" 2>/dev/null || true
@@ -3432,7 +3428,7 @@ subscription_get() {
 	done < "$urls_file"
 	rm -f "$tmp" "$uris_file" "$urls_file"
 
-	ok '"configured":true,"g204_filter_enabled":'"$g204_filter_enabled"',"uris":['"$uris"'],"urls":['"$urls"'],"count":'"$count"
+	ok '"configured":true,"uris":['"$uris"'],"urls":['"$urls"'],"count":'"$count"
 }
 
 custom_sites_get() {
@@ -3524,14 +3520,11 @@ subscription_setup_file() {
 }
 
 write_bootstrap_subscription_input() {
-	local payload output uris_file count uri g204_filter_enabled
+	local payload output uris_file count uri
 	payload="$1"
 	output="$2"
 	uris_file="$output.uris"
 	count=0
-	g204_filter_enabled="$(jsonfilter -s "$payload" -e '@.g204_filter_enabled' 2>/dev/null || printf false)"
-	[ "$g204_filter_enabled" = "true" ] || g204_filter_enabled=false
-
 	jsonfilter -s "$payload" -e '@.uris[*]' > "$uris_file" 2>/dev/null || true
 	if [ ! -s "$uris_file" ]; then
 		jsonfilter -s "$payload" -e '@.urls[*]' > "$uris_file" 2>/dev/null || true
@@ -3545,7 +3538,7 @@ write_bootstrap_subscription_input() {
 		printf '"%s"' "$(json_escape "$uri")" >> "$output"
 		count=$((count + 1))
 	done < "$uris_file"
-	printf '],"g204_filter_enabled":%s}\n' "$g204_filter_enabled" >> "$output"
+	printf ']}\n' >> "$output"
 	rm -f "$uris_file"
 
 	[ "$count" -gt 0 ]
@@ -4859,9 +4852,9 @@ case "$method" in
 {
 	  "status": {},
 	  "subscription_get": {},
-	  "subscription_set": { "uris": [], "g204_filter_enabled": false },
-	  "subscription_setup": { "uris": [], "g204_filter_enabled": false },
-  "subscription_setup_async": { "uris": [], "g204_filter_enabled": false },
+	  "subscription_set": { "uris": [] },
+	  "subscription_setup": { "uris": [] },
+  "subscription_setup_async": { "uris": [] },
 	  "subscription_refresh": {},
 	  "custom_sites_get": {},
 	  "custom_sites_transact": { "operation": "", "pattern": "", "route": "", "id": "" },

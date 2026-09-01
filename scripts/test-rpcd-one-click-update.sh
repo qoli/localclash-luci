@@ -341,7 +341,7 @@ call_core() {
 		config\ apply-template\ --input\ *\ --json)
 			cp "$4" "${tmp_dir}/template-sync-input.json"
 			if [ "${MOCK_TEMPLATE_TRANSACTION_FAIL:-0}" = "1" ]; then
-				printf '{"ok":false,"code":"command_failed","message":"material transaction failed and prior state was restored: g204 probe failed"}\n'
+				printf '{"ok":false,"code":"command_failed","message":"material transaction failed and prior state was restored: capability probe failed"}\n'
 				return 1
 			fi
 			printf '{"ok":true,"changed":true,"summary":"default policy synced","status":{"transaction":{"committed":true}}}\n'
