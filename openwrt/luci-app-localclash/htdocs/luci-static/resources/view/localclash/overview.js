@@ -1006,7 +1006,7 @@ function refreshOverviewStatus() {
 		lastOverviewStatusData = data.ok === false && data.error ? null : data;
 		replaceContent('localclash-overview-summary-body', data.ok === false && data.error ? summaryErrorTable(data.error) : summaryTable(data, takeover, task, state));
 		return refreshTakeoverStatus().then(function() {
-			return refreshOneClickUpdateCheck(lastOverviewStatusData);
+			return refreshOneClickUpdateCheck(lastOverviewStatusData, task);
 		});
 	});
 }
@@ -1331,10 +1331,10 @@ function oneClickUpdateSummary(luciCheck, coreCheck) {
 	return _('正在检查更新…');
 }
 
-function applyOneClickUpdateCheck(luciCheck, coreCheck) {
+function applyOneClickUpdateCheck(luciCheck, coreCheck, task) {
 	var status = document.getElementById('localclash-one-click-update-status');
 	var button = document.getElementById('localclash-one-click-update-button');
-	var enabled = (luciCheck && luciCheck.update_available === true) || (coreCheck && coreCheck.update_available === true);
+	var enabled = !(task && task.running === true);
 
 	if (status)
 		status.textContent = oneClickUpdateSummary(luciCheck, coreCheck);
@@ -1342,7 +1342,7 @@ function applyOneClickUpdateCheck(luciCheck, coreCheck) {
 		button.disabled = !enabled;
 }
 
-function refreshOneClickUpdateCheck(data) {
+function refreshOneClickUpdateCheck(data, task) {
 	var status = document.getElementById('localclash-one-click-update-status');
 	var button = document.getElementById('localclash-one-click-update-button');
 
@@ -1365,7 +1365,7 @@ function refreshOneClickUpdateCheck(data) {
 			return { ok: false, message: err.message || String(err) };
 		})
 	]).then(function(results) {
-		applyOneClickUpdateCheck(results[0] || {}, results[1] || {});
+		applyOneClickUpdateCheck(results[0] || {}, results[1] || {}, task);
 	});
 }
 
