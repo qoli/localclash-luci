@@ -133,6 +133,8 @@ printf '%s\n' "$output" | grep -q 'runtime_facts_core_missing' || fail_test "mis
 for implementation in "$manager" "$apply_impl" "$stop_impl"; do
 	sh -n "$implementation"
 done
+grep -Fq 'CORE="${LOCALCLASH_CORE:-/usr/local/bin/localclash}"' "$manager" || fail_test "takeover manager Core path does not match the installed product Core"
+grep -Fq 'WORKDIR="${LOCALCLASH_WORKDIR:-/root/localclash}"' "$manager" || fail_test "takeover manager workdir does not match the installed product state directory"
 grep -q 'ip rule add fwmark' "$apply_impl" || fail_test "apply implementation missing policy route"
 grep -q 'localClash DNS hijack' "$apply_impl" || fail_test "apply implementation missing DNS hijack"
 grep -q 'discover_lan_networks' "$apply_impl" || fail_test "apply implementation missing OpenWrt LAN discovery"

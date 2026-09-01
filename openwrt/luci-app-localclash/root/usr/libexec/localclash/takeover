@@ -1,8 +1,8 @@
 #!/bin/sh
 set -u
 
-CORE="${LOCALCLASH_CORE:-/usr/bin/localclash}"
-WORKDIR="${LOCALCLASH_WORKDIR:-/etc/localclash}"
+CORE="${LOCALCLASH_CORE:-/usr/local/bin/localclash}"
+WORKDIR="${LOCALCLASH_WORKDIR:-/root/localclash}"
 STATE_DIR="${LOCALCLASH_TAKEOVER_STATE_DIR:-/tmp/localclash/router-takeover}"
 SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 APPLY_IMPL="${LOCALCLASH_TAKEOVER_APPLY_IMPL:-$SELF_DIR/takeover-apply}"
