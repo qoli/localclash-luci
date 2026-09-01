@@ -2996,7 +2996,7 @@ one_click_update_continue_execute() {
 		rm -rf "$tmpdir"
 		return 1
 	}
-	if [ "$subscription_ready" = "true" ]; then
+	if [ "$subscription_ready" = "true" ] && [ "$sync_default_policy" != "true" ]; then
 		if ! run_with_heartbeat "一键更新：正在刷新订阅" "$tmpdir/subscription-refresh.json" call_core subscription refresh --json; then
 			log_line "一键更新：订阅刷新失败；软件检查点保持生效，配置材料未切换"
 			cat "$tmpdir/subscription-refresh.json"
@@ -3004,6 +3004,9 @@ one_click_update_continue_execute() {
 			return 1
 		fi
 		subscription_refresh_json="$(cat "$tmpdir/subscription-refresh.json")"
+	elif [ "$subscription_ready" = "true" ]; then
+		subscription_refresh_json='{"ok":true,"changed":false,"deferred":true,"summary":"订阅刷新将与默认策略和能力快照在同一材料事务中提交。"}'
+		log_line "一键更新：订阅刷新已并入默认策略材料事务"
 	else
 		subscription_refresh_json='{"ok":true,"changed":false,"summary":"未配置订阅，跳过订阅和配置材料检查点。","skipped":true}'
 		material_checkpoint_json='{"ok":true,"changed":false,"skipped":true,"summary":"未配置订阅，现行运行时材料保持不变。"}'
@@ -3054,7 +3057,8 @@ one_click_update_continue_execute() {
   "runtime_profile": "$current_mode",
   "core": "$current_core",
   "allow_overwrite_modified": true,
-  "reset_patches": true
+  "reset_patches": true,
+  "refresh_subscription": true
 }
 JSON
 		if ! run_with_heartbeat "一键更新：正在同步最新默认策略" "$tmpdir/policy-template-sync.json" call_core config apply-template --input "$tmpdir/template-sync.json" --json; then
@@ -3064,6 +3068,7 @@ JSON
 			return 1
 		fi
 		policy_template_sync_json="$(cat "$tmpdir/policy-template-sync.json")"
+		subscription_refresh_json="$policy_template_sync_json"
 		if ! call_core custom-sites list --json > "$tmpdir/custom-sites-after.json"; then
 			log_line "一键更新：无法读取同步后的用户自定义网站列表"
 			cat "$tmpdir/custom-sites-after.json" 2>/dev/null || true
@@ -4143,12 +4148,13 @@ start_bootstrap_default() {
 }
 
 bootstrap_default_run() {
-	local tmpdir mihomo_attempt payload selected_core selected_template subscription_input subscription_changed subscription_ready runtime_started runtime_result service_result
+	local tmpdir mihomo_attempt payload selected_core selected_template subscription_input subscription_changed subscription_ready refresh_subscription runtime_started runtime_result service_result
 	payload='{"version":1}'
 	selected_core="meta"
 	selected_template="localclash-default"
 	subscription_changed=false
 	subscription_ready=false
+	refresh_subscription=false
 	runtime_started=false
 
 	if [ -f "$TASK_INPUT" ]; then
@@ -4241,13 +4247,17 @@ bootstrap_default_run() {
 		fi
 	fi
 
+	if [ "$subscription_changed" = true ] || subscription_configured; then
+		refresh_subscription=true
+	fi
 	cat > "$tmpdir/template.json" <<JSON
 {
   "version": 1,
   "template": "$selected_template",
   "runtime_profile": "router",
   "core": "$selected_core",
-  "allow_overwrite_modified": false
+  "allow_overwrite_modified": false,
+  "refresh_subscription": $refresh_subscription
 }
 JSON
 

@@ -340,7 +340,11 @@ call_core() {
 			;;
 		config\ apply-template\ --input\ *\ --json)
 			cp "$4" "${tmp_dir}/template-sync-input.json"
-			printf '{"ok":true,"changed":true,"summary":"default policy synced"}\n'
+			if [ "${MOCK_TEMPLATE_TRANSACTION_FAIL:-0}" = "1" ]; then
+				printf '{"ok":false,"code":"command_failed","message":"material transaction failed and prior state was restored: g204 probe failed"}\n'
+				return 1
+			fi
+			printf '{"ok":true,"changed":true,"summary":"default policy synced","status":{"transaction":{"committed":true}}}\n'
 			;;
 		"config render --json")
 			if [ "${MOCK_CONFIG_RENDER_FAIL:-0}" = "1" ]; then
@@ -679,6 +683,7 @@ printf '%s\n' "$result" | grep -q '"proxy_count":1' || fail_test "custom-site pr
 printf '%s\n' "$result" | grep -q '"direct_count":1' || fail_test "custom-site direct count evidence missing: ${result}"
 grep -q '"sync_default_policy":true' "${STATE_DIR}/luci-preferences.json" || fail_test "one-click run did not persist true sync preference"
 grep -q '"reset_patches":[[:space:]]*true' "${tmp_dir}/template-sync-input.json" || fail_test "template sync did not request a complete patch reset"
+grep -q '"refresh_subscription":[[:space:]]*true' "${tmp_dir}/template-sync-input.json" || fail_test "template sync did not request an atomic subscription refresh"
 grep -q '"refresh_policy_template_patches"' "${tmp_dir}/template-sync-input.json" && fail_test "template sync must not preserve user patches"
 grep -q '"core":[[:space:]]*"smart"' "${tmp_dir}/template-sync-input.json" || fail_test "template sync did not preserve current smart core"
 
@@ -700,7 +705,6 @@ takeover_apply
 call_takeover status --json
 call_core component update dashboard --json
 call_core subscription status --json
-call_core subscription refresh --json
 call_core custom-sites list --json
 call_core config status --json
 call_core config apply-template --input <template-sync> --json
@@ -742,6 +746,20 @@ unset MOCK_CUSTOM_SITES_INVALID
 assert_json "$result"
 [ "$result_rc" -ne 0 ] || fail_test "invalid custom-site snapshot returned success"
 printf '%s\n' "$result" | grep -q '"code":"custom_sites_preservation_snapshot_invalid"' || fail_test "invalid custom-site snapshot was not explicit: ${result}"
+
+: > "${tmp_dir}/trace"
+rm -f "${tmp_dir}/custom-sites-read-count"
+set_task_input '{"version":1,"sync_default_policy":true}'
+MOCK_TEMPLATE_TRANSACTION_FAIL=1
+export MOCK_TEMPLATE_TRANSACTION_FAIL
+capture_one_click_update
+clear_task_input
+unset MOCK_TEMPLATE_TRANSACTION_FAIL
+assert_json "$result"
+[ "$result_rc" -ne 0 ] || fail_test "failed material transaction returned success"
+printf '%s\n' "$result" | grep -q 'prior state was restored' || fail_test "material rollback evidence missing: ${result}"
+grep -q '^call_core subscription refresh --json$' "${tmp_dir}/trace" && fail_test "policy transaction unexpectedly used a separate subscription refresh"
+grep -q '^call_core config render --json$' "${tmp_dir}/trace" && fail_test "failed policy transaction reached post-transaction render"
 
 : > "${tmp_dir}/trace"
 set_task_input '{"version":1,"sync_default_policy":false}'
