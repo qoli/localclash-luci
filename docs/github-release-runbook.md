@@ -29,12 +29,18 @@ source lock 不代表必须发布 LuCI，发布决定仍以 LuCI 变更为准。
 3. 按 source lock 获取并验证 dnsqualify 的精确 commit，再执行 test 和 vet；
 4. 构建 IPK、APK、dnsqualify 和两个 `.run`；
 5. 验证精确资产集合、全部 SHA-256 和 Makeself 内容；
-6. 在无网络 Docker 容器安装 x86_64 bundle，并验证架构不匹配时明确失败；
-7. 上传保留 7 天的候选 Actions artifact，不创建 Release。
+6. 上传保留 7 天的候选 Actions artifact，不创建 Release。
 
 `.github/workflows/release.yml` 对 tag 重新执行同一套检查，全部成功后才创建
 GitHub Release。已存在 Release、tag 与 Makefile 版本不一致、tag commit 不一致，
 都会直接失败。
+
+上述 CI/Release 自动检查只覆盖源码测试、构建和资产完整性，不执行也不替代
+iStoreOS QEMU 功能验收。唯一功能发布门槛是 Core 维护的
+[iStoreOS Release 测试 SOP](https://github.com/qoli/localClash/blob/main/docs/istoreos-release-test-sop.md)
+（相邻仓库路径：`../localClash/docs/istoreos-release-test-sop.md`）。
+Docker installer mock 测试已退役；Docker IPK/APK 构建与部署工具保留。
+ARM 真机不是强制发布门槛，x86 QEMU 通过也不代表 ARM runtime 已验证。
 
 Release 页面顶部的普通用户下载指南由
 `scripts/generate-release-notes.py` 根据 tag 和 Makefile 包版本生成。指南直接列出
@@ -111,7 +117,6 @@ python3 scripts/prepare-dnsqualify-source.py
 tag="$(awk -F':=' '/^PKG_VERSION:=/ { version=$2 } /^PKG_RELEASE:=/ { release=$2 } END { print "v" version "-" release }' openwrt/luci-app-localclash/Makefile)"
 export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
 scripts/build-release-assets.sh "$tag"
-scripts/test-istore-installer.sh "$tag"
 ```
 
 构建脚本只接受与 Makefile 完全一致的 tag。`dist/` 和 `.build/` 是本地生成
@@ -122,9 +127,14 @@ scripts/test-istore-installer.sh "$tag"
 提交并推送源代码后，等待 `CI` workflow 成功。核对候选 artifact，而不是只看
 单个 build step。失败必须在源代码或脚本中修复；不得从本机手工上传替代产物。
 
-## 5. 创建并推送 Tag
+## 5. 人工通过 QEMU SOP，再创建并推送 Tag
 
-再次确认 `main` commit、版本和 CI run 后创建 tag：
+推送 release tag 前，必须由发布者按上述 canonical SOP 完成 iStoreOS QEMU
+功能验收，并记录通过结果、对应源码 commit、候选产物及其校验值和证据位置。
+CI 绿色、成功构建或 Makeself 校验通过都不能代替这项人工门槛；尚未通过时不得
+推送 tag。验收后若源码或候选产物改变，必须对最终候选重新验收。
+
+确认 QEMU SOP 已通过，再次核对 `main` commit、版本和 CI run 后创建 tag：
 
 ```sh
 tag="v<PKG_VERSION>-<PKG_RELEASE>"
@@ -136,6 +146,7 @@ git push origin "$tag"
 
 如需对已经存在但尚未公开 Release 的 tag 重跑，可从 Actions 手动运行
 `Release` 并输入该 tag。workflow 始终 checkout 该 tag，不会改用 `main`。
+手动重跑同样要求该 tag 对应的 QEMU SOP 验收已经通过。
 
 ## 6. 发布后验证
 
@@ -154,7 +165,9 @@ git ls-remote --tags origin "$tag"
 - 自有资产数量和名称与 CI allow-list 完全一致；
 - 每个 `.sha256` 都能校验对应产物；
 - 两个 `.run` 通过 `--info`、`--list`、`--check` 和 `--noexec`；
-- x86_64 和 aarch64 的真实 iStoreOS 验收已完成后，才对外宣称两个架构可用。
+- 核对发布产物与 QEMU 验收候选的对应关系，并保留验收证据；
+- 按证据说明架构覆盖范围：x86 QEMU 通过不代表 ARM runtime 已验证。
+  ARM 真机不是强制发布门槛；没有独立 ARM runtime 证据时，不得宣称已验证。
 
 发布后如发现资产错误，增加 `PKG_RELEASE` 并发布新版本。不要 clobber、移动或
 重新绑定已经公开的 tag。

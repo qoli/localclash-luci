@@ -18,6 +18,8 @@ concurrency:
   group: localclash-luci-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
+# 发布者须在推送 tag 或手动发布前通过 iStoreOS QEMU SOP；本 workflow 不执行该门槛。
+# https://github.com/qoli/localClash/blob/main/docs/istoreos-release-test-sop.md
 jobs:
   test-and-release:
     runs-on: ubuntu-latest
@@ -99,7 +101,6 @@ jobs:
           set -euo pipefail
           export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
           scripts/build-release-assets.sh "$RELEASE_TAG"
-          scripts/test-istore-installer.sh "$RELEASE_TAG"
           scripts/generate-release-notes.py "$RELEASE_TAG" dist/release-notes.md
 
       - name: Publish GitHub release

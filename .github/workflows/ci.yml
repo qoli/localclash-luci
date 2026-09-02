@@ -14,6 +14,8 @@ concurrency:
   group: localclash-luci-ci-${{ github.ref }}
   cancel-in-progress: true
 
+# 源码、构建和资产检查不替代推送发布 tag 前的人工 iStoreOS QEMU 功能门槛。
+# https://github.com/qoli/localClash/blob/main/docs/istoreos-release-test-sop.md
 jobs:
   test-and-package:
     runs-on: ubuntu-latest
@@ -74,7 +76,6 @@ jobs:
           tag="$(awk -F':=' '/^PKG_VERSION:=/ { version=$2 } /^PKG_RELEASE:=/ { release=$2 } END { print "v" version "-" release }' openwrt/luci-app-localclash/Makefile)"
           export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
           scripts/build-release-assets.sh "$tag"
-          scripts/test-istore-installer.sh "$tag"
 
       - name: Upload package candidates
         uses: actions/upload-artifact@v4
