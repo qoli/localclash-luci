@@ -4255,7 +4255,12 @@ bootstrap_default_run() {
 		fi
 	fi
 
-	if [ "$subscription_changed" = true ] || subscription_configured; then
+	# A newly supplied subscription was already refreshed by
+	# subscription_save_refresh_file above. Do not ask Core to refresh it again
+	# inside apply-template: on a first bootstrap the pack-selection artifact does
+	# not exist until the template is imported, so it cannot yet be a transaction
+	# target. Existing installations keep the atomic refresh path.
+	if [ "$subscription_changed" != true ] && subscription_configured; then
 		refresh_subscription=true
 	fi
 	cat > "$tmpdir/template.json" <<JSON

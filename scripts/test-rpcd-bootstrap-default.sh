@@ -10,8 +10,10 @@ awk '/^method="\$\{1:-\}"/ { exit } { print }' "${helper}" > "${tmp_dir}/functio
 # shellcheck disable=SC1090
 . "${tmp_dir}/functions.sh"
 
-TASK_INPUT="${tmp_dir}/missing-input.json"
+TASK_INPUT="${tmp_dir}/bootstrap-input.json"
 LOG="${tmp_dir}/helper.log"
+subscription_input_available=true
+configured_subscription_available=false
 
 trace() {
 	printf '%s\n' "$1" >> "${tmp_dir}/trace"
@@ -49,7 +51,18 @@ dashboard_installed() {
 
 subscription_configured() {
 	trace "subscription_configured"
-	return 1
+	[ "$configured_subscription_available" = true ]
+}
+
+write_bootstrap_subscription_input() {
+	trace "write_bootstrap_subscription_input"
+	[ "$subscription_input_available" = true ] || return 1
+	printf '{"version":1,"uris":["https://example.com/subscription"]}\n' > "$2"
+}
+
+subscription_save_refresh_file() {
+	trace "subscription_save_refresh_file"
+	printf '{"ok":true}\n'
 }
 
 service_start() {
@@ -59,6 +72,14 @@ service_start() {
 
 call_core() {
 	trace "call_core $*"
+	if [ "$1 $2 $3" = "config apply-template --input" ]; then
+		cp "$4" "${tmp_dir}/template-input.json"
+	fi
+	printf '{"ok":true}\n'
+}
+
+runtime_start_takeover_run() {
+	trace "runtime_start_takeover_run $*"
 	printf '{"ok":true}\n'
 }
 
@@ -73,5 +94,15 @@ first_call="$(sed -n '1p' "${tmp_dir}/trace")"
 if ! grep -Eq '^call_core config apply-template --input .*/template\.json --json$' "${tmp_dir}/trace"; then
 	fail_test "config apply-template was not called"
 fi
+
+grep -q '"refresh_subscription":[[:space:]]*false' "${tmp_dir}/template-input.json" || fail_test "newly refreshed subscription requested a duplicate transactional refresh"
+
+: > "${tmp_dir}/trace"
+subscription_input_available=false
+configured_subscription_available=true
+result="$(bootstrap_default_run)"
+
+printf '%s\n' "$result" | grep -q '"ok":true' || fail_test "existing-subscription bootstrap did not succeed: ${result}"
+grep -q '"refresh_subscription":[[:space:]]*true' "${tmp_dir}/template-input.json" || fail_test "existing subscription did not retain the transactional refresh"
 
 printf 'rpcd bootstrap default tests passed\n'
