@@ -4160,13 +4160,12 @@ start_bootstrap_default() {
 }
 
 bootstrap_default_run() {
-	local tmpdir mihomo_attempt payload selected_core selected_template subscription_input subscription_changed subscription_ready refresh_subscription runtime_started runtime_result service_result
+	local tmpdir mihomo_attempt payload selected_core selected_template subscription_input subscription_changed subscription_ready runtime_started runtime_result service_result
 	payload='{"version":1}'
 	selected_core="meta"
 	selected_template="localclash-default"
 	subscription_changed=false
 	subscription_ready=false
-	refresh_subscription=false
 	runtime_started=false
 
 	if [ -f "$TASK_INPUT" ]; then
@@ -4218,8 +4217,9 @@ bootstrap_default_run() {
 
 	subscription_input="$tmpdir/subscription.json"
 	if write_bootstrap_subscription_input "$payload" "$subscription_input"; then
-		log_line "默认初始化：正在保存并刷新订阅"
-		if ! subscription_save_refresh_file "$subscription_input" "$tmpdir"; then
+		log_line "默认初始化：正在保存订阅源（模板应用后刷新）"
+		if ! call_core subscription set --input "$subscription_input" --json > "$tmpdir/set.json"; then
+			cat "$tmpdir/set.json"
 			rm -rf "$tmpdir"
 			return 1
 		fi
@@ -4259,14 +4259,9 @@ bootstrap_default_run() {
 		fi
 	fi
 
-	# A newly supplied subscription was already refreshed by
-	# subscription_save_refresh_file above. Do not ask Core to refresh it again
-	# inside apply-template: on a first bootstrap the pack-selection artifact does
-	# not exist until the template is imported, so it cannot yet be a transaction
-	# target. Existing installations keep the atomic refresh path.
-	if [ "$subscription_changed" != true ] && subscription_configured; then
-		refresh_subscription=true
-	fi
+	# Bootstrap must establish the selected template's capability requirements
+	# before refreshing subscriptions. Its first pack-selection artifact may not
+	# exist yet, so bootstrap does not use the existing-material refresh transaction.
 	cat > "$tmpdir/template.json" <<JSON
 {
   "version": 1,
@@ -4274,7 +4269,7 @@ bootstrap_default_run() {
   "runtime_profile": "router",
   "core": "$selected_core",
   "allow_overwrite_modified": false,
-  "refresh_subscription": $refresh_subscription
+  "refresh_subscription": false
 }
 JSON
 
@@ -4285,9 +4280,31 @@ JSON
 		rm -rf "$tmpdir"
 		return 1
 	fi
-
-	if [ "$subscription_changed" = true ] || subscription_configured; then
+	if [ "$subscription_changed" = true ]; then
 		subscription_ready=true
+	else
+		# Saved sources can be refreshed even when the first merged artifact does
+		# not exist yet. subscription_configured() also requires that artifact.
+		if ! call_core subscription status --json > "$tmpdir/subscription-status.json"; then
+			log_line "默认初始化：订阅状态读取失败"
+			cat "$tmpdir/subscription-status.json"
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		subscription_ready="$(json_bool_required "$tmpdir/subscription-status.json" '@.status.configured' "subscription_status_invalid" "无法读取已保存的订阅源状态。")" || {
+			printf '%s\n' "$subscription_ready"
+			rm -rf "$tmpdir"
+			return 1
+		}
+	fi
+	if [ "$subscription_ready" = true ]; then
+		log_line "默认初始化：模板已应用，正在刷新订阅能力材料"
+		if ! run_with_heartbeat_until_complete "默认初始化：正在刷新订阅能力材料" "$tmpdir/capability-refresh.json" call_core subscription refresh --json; then
+			log_line "默认初始化：订阅能力材料刷新失败"
+			cat "$tmpdir/capability-refresh.json"
+			rm -rf "$tmpdir"
+			return 1
+		fi
 		log_line "默认初始化：正在生成 Mihomo 配置"
 		if ! run_with_heartbeat "默认初始化：正在生成 Mihomo 配置" "$tmpdir/render.json" call_core config render --json; then
 			log_line "默认初始化：配置生成失败"

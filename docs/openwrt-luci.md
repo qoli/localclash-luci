@@ -970,11 +970,18 @@ Method contracts:
 - `bootstrap_default`: optional input `{ "uris": ["https://...", "vless://..."], "core":
   "meta|smart", "template": "localclash-default|minimal" }`. It installs or
   updates the localClash core, base assets, Mihomo, and dashboard; when URIs are
-  present, it saves and refreshes them before applying `router` runtime profile
-  with the selected core/template. If a subscription is available after this
-  step, it renders config, starts Mihomo, and applies router takeover before the
-  background task is marked complete. The helper must not log or return full
-  URLs.
+  present, it saves their sources without refreshing yet. It first applies the
+  `router` runtime profile and selected template with `refresh_subscription:false`,
+  then refreshes saved subscriptions and the template's required capabilities
+  through Core before rendering. Retries read Core's `status.configured` for
+  saved sources, independently of `merged.exists`; missing or invalid status
+  fails explicitly. Neither a merged subscription, the first pack-selection
+  artifact, nor capability snapshots are prerequisites for importing the
+  template. A refresh failure is fatal and
+  prevents render/start; LuCI never manufactures capability snapshots. If a
+  subscription is available, it renders config, starts Mihomo, and applies router
+  takeover before the background task is marked complete. The helper must not
+  log or return full URLs.
 - `component_update`: input `{ "component": "localclash|mihomo|dashboard" }`.
   `localclash` uses the bootstrap helper to install or update from the latest
   release manifest; other values call
