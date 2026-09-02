@@ -51,6 +51,22 @@ chmod +x "${tmp_dir}/bin/uclient-fetch" "${tmp_dir}/bin/nslookup"
 PATH="${tmp_dir}/bin:${PATH}"
 
 awk '/^method="\$\{1:-\}"/ { exit } { print }' "${helper}" > "${tmp_dir}/functions.sh"
+(
+	unset LOCALCLASH_FETCH_TIMEOUT
+	. "${tmp_dir}/functions.sh"
+	[ "$FETCH_TIMEOUT" = 120 ] || {
+		printf 'test-rpcd-download-logging: default fetch timeout must be 120s\n' >&2
+		exit 1
+	}
+)
+(
+	LOCALCLASH_FETCH_TIMEOUT=7
+	. "${tmp_dir}/functions.sh"
+	[ "$FETCH_TIMEOUT" = 7 ] || {
+		printf 'test-rpcd-download-logging: explicit fetch timeout override was ignored\n' >&2
+		exit 1
+	}
+)
 # shellcheck disable=SC1090
 . "${tmp_dir}/functions.sh"
 
