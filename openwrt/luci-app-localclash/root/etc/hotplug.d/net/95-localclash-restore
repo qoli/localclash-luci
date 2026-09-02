@@ -1,0 +1,19 @@
+#!/bin/sh
+
+# TUN recreation is a kernel net event, not a netifd iface ifup event.
+case "${ACTION:-}" in add|remove) ;; *) exit 0 ;; esac
+case "${INTERFACE:-}" in ''|.|..|*[!a-zA-Z0-9_.:-]*) exit 0 ;; esac
+HELPER="${LOCALCLASH_HELPER:-/usr/libexec/rpcd/localclash}"
+[ -x "$HELPER" ] || exit 0
+STAMP_DIR="${LOCALCLASH_NET_RESTORE_STAMP_DIR:-/tmp/localclash-net-restore}"
+umask 077
+mkdir -p "$STAMP_DIR" || exit 1
+TOKEN="$$"
+STAMP="$STAMP_DIR/$INTERFACE"
+printf '%s\n' "$TOKEN" > "$STAMP.$TOKEN" || exit 1
+mv -f "$STAMP.$TOKEN" "$STAMP" || exit 1
+# Removal invalidates a queued worker; only a fresh add can request repair.
+[ "$ACTION" = add ] || exit 0
+LOCALCLASH_NET_RESTORE_STAMP_DIR="$STAMP_DIR" \
+LOCALCLASH_TAKEOVER_EVENT_ID="net:$INTERFACE:$TOKEN" \
+"$HELPER" call takeover_net_restore "$INTERFACE" "$TOKEN" >/dev/null 2>&1 &

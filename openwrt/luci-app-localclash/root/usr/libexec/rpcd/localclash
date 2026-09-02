@@ -4496,6 +4496,113 @@ takeover_stop() {
 	return "$rc"
 }
 
+# Return 75 only while the event's runtime or the serialized transaction is
+# pending. All sleeps belong to the unlocked, bounded worker below.
+takeover_net_restore_attempt() {
+	local device token deadline stamp facts schema profile tun enabled running ready rc value
+	device="$1"
+	token="$2"
+	deadline="$3"
+	stamp="${LOCALCLASH_NET_RESTORE_STAMP_DIR:-/tmp/localclash-net-restore}/$device"
+	if [ "$(cat "$stamp" 2>/dev/null)" != "$token" ]; then
+		ok '"changed":false,"skipped":true,"reason":"event_superseded"'
+		return 0
+	fi
+	if takeover_skip_enabled || ! takeover_restore_requested; then
+		ok '"changed":false,"skipped":true,"reason":"repair_not_requested"'
+		return 0
+	fi
+	facts="$(call_core runtime facts --json)" || { rc=$?; printf '%s\n' "$facts"; return "$rc"; }
+	schema="$(printf '%s\n' "$facts" | jsonfilter -e '@.status.schema_version' 2>/dev/null)"
+	profile="$(printf '%s\n' "$facts" | jsonfilter -e '@.status.profile_mode' 2>/dev/null)"
+	tun="$(printf '%s\n' "$facts" | jsonfilter -e '@.status.tun_device' 2>/dev/null)"
+	enabled="$(printf '%s\n' "$facts" | jsonfilter -e '@.status.tun_enabled' 2>/dev/null)"
+	running="$(printf '%s\n' "$facts" | jsonfilter -e '@.status.runtime_running' 2>/dev/null)"
+	ready="$(printf '%s\n' "$facts" | jsonfilter -e '@.status.controller_ready' 2>/dev/null)"
+	if [ "$schema" != 1 ] || [ -z "$profile" ]; then
+		fail "net_restore_facts_invalid" "TUN 恢复缺少受支持的 Core 运行时事实。"
+		return 1
+	fi
+	for value in "$enabled" "$running" "$ready"; do
+		case "$value" in true|false) ;; *) fail "net_restore_facts_invalid" "TUN 恢复的 Core 运行时事实无效。"; return 1 ;; esac
+	done
+	if [ "$running" = false ] && [ "$ready" = true ]; then
+		fail "net_restore_facts_invalid" "Core 控制器就绪状态与运行状态不一致。"
+		return 1
+	fi
+	if [ "$enabled" = true ] && [ -z "$tun" ]; then
+		fail "net_restore_facts_invalid" "Core 未提供已启用的 TUN 设备名称。"
+		return 1
+	fi
+	if [ "$profile" != router ] || [ "$enabled" != true ] || [ "$tun" != "$device" ]; then
+		ok '"changed":false,"skipped":true,"reason":"not_managed_router_tun"'
+		return 0
+	fi
+	if [ "$running" != true ] || [ "$ready" != true ]; then
+		return 75
+	fi
+	# Re-read the event after the controller probe, before any network mutation.
+	[ "$(cat "$stamp" 2>/dev/null)" = "$token" ] || return 75
+	[ "$(now_epoch)" -lt "$deadline" ] || return 75
+	LOCALCLASH_TAKEOVER_RESTORE_SOURCE=net_hotplug takeover_restore_run
+}
+
+takeover_net_restore_try() {
+	local rc
+	if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+		# Another transaction may have made the directory but not written its PID.
+		[ ! -s "$LOCK_DIR/pid" ] || clear_stale_lock
+		return 75
+	fi
+	printf '%s\n' "$$" > "$LOCK_DIR/pid"
+	trap 'rm -rf "$LOCK_DIR" 2>/dev/null || true' EXIT
+	trap 'exit 130' INT
+	trap 'exit 143' TERM
+	takeover_net_restore_attempt "$@"
+	rc=$?
+	rm -rf "$LOCK_DIR" 2>/dev/null || true
+	trap - EXIT INT TERM
+	return "$rc"
+}
+
+takeover_net_restore() {
+	local device token attempts interval attempt rc deadline option
+	device="$1"
+	token="$2"
+	case "$device" in ''|.|..|*[!a-zA-Z0-9_.:-]*) fail "net_restore_event_invalid" "TUN 恢复事件的设备名称无效。"; return 1 ;; esac
+	case "$token" in ''|*[!0-9]*) fail "net_restore_event_invalid" "TUN 恢复事件标识无效。"; return 1 ;; esac
+	attempts="${LOCALCLASH_NET_RESTORE_ATTEMPTS:-60}"
+	interval="${LOCALCLASH_NET_RESTORE_INTERVAL:-2}"
+	for option in "$attempts" "$interval"; do
+		case "$option" in ''|*[!0-9]*) fail "net_restore_options_invalid" "TUN 恢复重试参数无效。"; return 1 ;; esac
+	done
+	if [ "$attempts" -lt 1 ] || [ "$attempts" -gt 60 ] || [ "$interval" -lt 1 ] || [ "$interval" -gt 5 ]; then
+		fail "net_restore_options_invalid" "TUN 恢复重试参数超出范围。"
+		return 1
+	fi
+	takeover_event_scope
+	takeover_log_event_safe net_hotplug worker_started device "$device" token "$token"
+	deadline=$(($(now_epoch) + 180))
+	attempt=1
+	while [ "$attempt" -le "$attempts" ] && [ "$(now_epoch)" -lt "$deadline" ]; do
+		takeover_net_restore_try "$device" "$token" "$deadline"
+		rc=$?
+		if [ "$rc" -ne 75 ]; then
+			takeover_log_event_safe net_hotplug worker_finished device "$device" token "$token" exit_code "$rc" attempts "$attempt"
+			return "$rc"
+		fi
+		attempt=$((attempt + 1))
+		if [ "$attempt" -le "$attempts" ] && ! sleep "$interval"; then
+			takeover_log_event_safe net_hotplug worker_failed device "$device" token "$token" reason sleep_failed
+			fail "net_restore_sleep_failed" "TUN 恢复等待失败，已停止重试。"
+			return 1
+		fi
+	done
+	takeover_log_event_safe net_hotplug worker_failed device "$device" token "$token" reason readiness_timeout
+	fail "net_restore_timeout" "TUN 重建后未在限定时间内完成网络接管恢复，请检查运行时和接管状态。"
+	return 1
+}
+
 takeover_restore_run() {
 	local tmpdir effective runtime_running profile_mode rc source error_fields error_code error_message
 	source="${LOCALCLASH_TAKEOVER_RESTORE_SOURCE:-same_boot_repair}"
@@ -4972,6 +5079,7 @@ JSON
 	takeover_logs) takeover_logs ;;
 	takeover_apply) with_lock takeover_apply ;;
 	takeover_restore) with_lock takeover_restore_run ;;
+	takeover_net_restore) takeover_net_restore "${3:-}" "${4:-}" ;;
 	takeover_stop) with_lock takeover_stop ;;
 	takeover_trace) shift 2; takeover_trace "$@" ;;
 	reset) with_lock reset ;;
