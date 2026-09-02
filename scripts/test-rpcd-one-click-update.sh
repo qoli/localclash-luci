@@ -371,6 +371,10 @@ call_takeover() {
 	trace "call_takeover $*"
 	case "$*" in
 		"status --json")
+			if [ "${MOCK_TAKEOVER_STATUS_FAIL:-0}" = "1" ]; then
+				printf '{"ok":false,"code":"runtime_facts_failed","message":"Core runtime facts could not be read."}\n'
+				return 1
+			fi
 			if [ "${MOCK_TAKEOVER_INITIAL_INACTIVE:-0}" = "1" ]; then
 				printf '{"status":{"effective":false,"runtime_running":true,"profile_mode":"router"}}\n'
 			elif [ "${MOCK_RUNTIME_NOT_RECOVERED:-0}" = "1" ]; then
@@ -665,10 +669,23 @@ capture_one_click_update
 clear_task_input
 unset MOCK_DNSQUALIFY_FAIL MOCK_INITIAL_RUNTIME_STOPPED
 assert_json "$result"
-[ "$result_rc" -ne 0 ] || fail_test "inconsistent initial snapshot returned success"
-printf '%s\n' "$result" | grep -q '"outcome":"attention_required"' || fail_test "inconsistent initial snapshot should require attention: ${result}"
-printf '%s\n' "$result" | grep -q '"code":"one_click_update_reconcile_snapshot_invalid"' || fail_test "inconsistent initial snapshot error missing: ${result}"
-grep -q '^takeover_apply$' "${tmp_dir}/trace" && fail_test "inconsistent initial snapshot unexpectedly applied takeover"
+[ "$result_rc" -ne 0 ] || fail_test "stopped-runtime dnsqualify failure returned success"
+printf '%s\n' "$result" | grep -q '"outcome":"failed_recovered"' || fail_test "stopped-runtime failure should need no recovery: ${result}"
+printf '%s\n' "$result" | grep -q '"action":"not_required"' || fail_test "stopped-runtime failure unexpectedly required takeover recovery: ${result}"
+grep -q '^call_takeover status --json$' "${tmp_dir}/trace" && fail_test "stopped runtime unexpectedly requested takeover facts"
+
+: > "${tmp_dir}/trace"
+set_task_input '{"version":1,"sync_default_policy":false}'
+MOCK_INITIAL_RUNTIME_STOPPED=1
+MOCK_TAKEOVER_STATUS_FAIL=1
+export MOCK_INITIAL_RUNTIME_STOPPED MOCK_TAKEOVER_STATUS_FAIL
+result="$(run_one_click_update)"
+clear_task_input
+unset MOCK_INITIAL_RUNTIME_STOPPED MOCK_TAKEOVER_STATUS_FAIL
+assert_json "$result"
+printf '%s\n' "$result" | grep -q '"ok":true' || fail_test "stopped runtime was blocked by unavailable takeover facts: ${result}"
+printf '%s\n' "$result" | grep -q '"runtime":{"was_running":false' || fail_test "stopped runtime snapshot was not preserved: ${result}"
+grep -q '^call_takeover status --json$' "${tmp_dir}/trace" && fail_test "stopped runtime update called takeover status"
 
 : > "${tmp_dir}/trace"
 rm -f "${tmp_dir}/custom-sites-read-count"

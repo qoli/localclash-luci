@@ -2798,22 +2798,26 @@ one_click_update_run() {
 				return 1
 			}
 
-			log_line "一键更新：记录更新前网络接管状态"
-			if ! call_takeover status --json > "$tmpdir/takeover-before.json"; then
-				log_line "一键更新：网络接管状态读取失败"
-				cat "$tmpdir/takeover-before.json" 2>/dev/null || true
-				rm -rf "$tmpdir"
-				return 1
-			fi
-			takeover_was_effective="$(json_bool_required "$tmpdir/takeover-before.json" '@.status.effective' "takeover_status_invalid" "无法读取更新前网络接管状态。")" || {
-				printf '%s\n' "$takeover_was_effective"
-				rm -rf "$tmpdir"
-				return 1
-			}
-			profile_mode="$(jsonfilter -i "$tmpdir/takeover-before.json" -e '@.status.profile_mode' 2>/dev/null || true)"
-			if takeover_restore_requested; then
-				takeover_was_effective=true
-				profile_mode=router
+			if [ "$runtime_was_running" = "true" ]; then
+				log_line "一键更新：记录更新前网络接管状态"
+				if ! call_takeover status --json > "$tmpdir/takeover-before.json"; then
+					log_line "一键更新：网络接管状态读取失败"
+					cat "$tmpdir/takeover-before.json" 2>/dev/null || true
+					rm -rf "$tmpdir"
+					return 1
+				fi
+				takeover_was_effective="$(json_bool_required "$tmpdir/takeover-before.json" '@.status.effective' "takeover_status_invalid" "无法读取更新前网络接管状态。")" || {
+					printf '%s\n' "$takeover_was_effective"
+					rm -rf "$tmpdir"
+					return 1
+				}
+				profile_mode="$(jsonfilter -i "$tmpdir/takeover-before.json" -e '@.status.profile_mode' 2>/dev/null || true)"
+				if takeover_restore_requested; then
+					takeover_was_effective=true
+					profile_mode=router
+				fi
+			else
+				log_line "一键更新：更新前运行时未运行，无需读取网络接管运行时事实"
 			fi
 		else
 			log_line "一键更新：localClash 核心尚未安装，跳过运行时快照"
