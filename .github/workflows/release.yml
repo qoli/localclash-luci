@@ -72,6 +72,7 @@ jobs:
           node scripts/test-dashboard-ui.js
           node scripts/test-subscription-ui.js
           node scripts/test-one-click-update-ui.js
+          node scripts/test-runtime-restart-ui.js
           sh -n openwrt/luci-app-localclash/root/usr/libexec/rpcd/localclash
           sh -n packaging/istore/install.sh
           python3 -m py_compile scripts/generate-release-notes.py
