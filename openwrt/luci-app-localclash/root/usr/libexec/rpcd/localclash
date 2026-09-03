@@ -806,6 +806,17 @@ write_task_running() {
 	printf '{"ok":true,"running":true,"done":false,"started_at":%s,"task":"%s","summary":"%s"%s}\n' "$(now_epoch)" "$(json_escape "$task")" "$(json_escape "$summary")" "$extra" > "${TASK_STATUS}.tmp.$$" && mv "${TASK_STATUS}.tmp.$$" "$TASK_STATUS"
 }
 
+write_task_noncancellable() {
+	local summary task started
+	summary="$1"
+	task="$(task_name)"
+	started="$(task_started_at)"
+	case "$started" in
+		""|*[!0-9]*) started=0 ;;
+	esac
+	printf '{"ok":true,"running":true,"done":false,"started_at":%s,"task":"%s","summary":"%s","cancellable":false}\n' "$started" "$(json_escape "$task")" "$(json_escape "$summary")" > "${TASK_STATUS}.tmp.$$" && mv "${TASK_STATUS}.tmp.$$" "$TASK_STATUS"
+}
+
 write_task_pid() {
 	[ -n "$1" ] || return 0
 	printf '%s\n' "$1" > "$TASK_PID"
@@ -832,15 +843,18 @@ task_status_running() {
 }
 
 write_task_done() {
-	local rc result task started completed extra
+	local rc result task started completed extra cancellable
 	rc="$1"
 	result="$2"
 	task="$(task_name)"
 	started="$(task_started_at)"
 	completed="$(now_epoch)"
+	cancellable="$(jsonfilter -i "$TASK_STATUS" -e '@.cancellable' 2>/dev/null || true)"
 	extra=""
 	if [ "$task" = runtime_restart ]; then
 		extra=',"cancellable":false,"task_id":"'"$(json_escape "$(jsonfilter -i "$TASK_STATUS" -e '@.task_id')")"'"'
+	elif [ "$cancellable" = false ]; then
+		extra=',"cancellable":false'
 	fi
 	case "$started" in
 		""|*[!0-9]*) started=0 ;;
@@ -1026,12 +1040,18 @@ kill_process_tree() {
 }
 
 task_cancel() {
-	local pid lock_pid result killed
+	local pid lock_pid result killed task cancellable
 	killed=0
 	reconcile_task_status
-	if [ "$(task_name)" = runtime_restart ]; then
+	task="$(task_name)"
+	cancellable="$(jsonfilter -i "$TASK_STATUS" -e '@.cancellable' 2>/dev/null || true)"
+	if [ "$task" = runtime_restart ] || [ "$cancellable" = false ]; then
 		if task_status_running; then
-			fail "task_not_cancellable" "重启正在恢复运行时和网络接管，不能中途取消；关闭页面不会停止任务。"
+			if [ "$task" = subscription_set ]; then
+				fail "task_not_cancellable" "订阅已进入运行时重启和网络接管验证阶段，不能中途取消；关闭页面不会停止任务。"
+			else
+				fail "task_not_cancellable" "重启正在恢复运行时和网络接管，不能中途取消；关闭页面不会停止任务。"
+			fi
 			return 1
 		fi
 		# A terminal result must not be replaced while its worker releases the lock.
@@ -3608,7 +3628,7 @@ subscription_save_refresh_file() {
 }
 
 subscription_setup_file() {
-	local input tmpdir
+	local input tmpdir restart_json
 	input="$1"
 	tmpdir="$(mktemp -d /tmp/localclash-subscription.XXXXXX)" || {
 		fail "tmpdir_failed" "无法创建临时订阅目录。"
@@ -3627,9 +3647,25 @@ subscription_setup_file() {
 		return 1
 	fi
 
+	log_line "订阅设置：正在重启运行时并验证订阅生效"
+	if task_status_running && [ "$(task_name)" = subscription_set ]; then
+		if ! write_task_noncancellable "订阅已保存并生成配置，正在重启运行时和验证网络接管。"; then
+			fail "task_status_write_failed" "订阅已保存并生成配置，但无法进入不可取消的重启阶段；未执行重启。"
+			rm -rf "$tmpdir"
+			return 1
+		fi
+	fi
+	if ! run_with_heartbeat_until_complete "订阅设置：正在重启运行时并验证订阅生效" "$tmpdir/restart.json" runtime_restart_continuity_run process_restart observe "" subscription_setup; then
+		log_line "订阅设置：运行时重启或最终状态验证失败"
+		cat "$tmpdir/restart.json"
+		rm -rf "$tmpdir"
+		return 1
+	fi
+	restart_json="$(cat "$tmpdir/restart.json")"
+
 	rm -rf "$tmpdir"
 	log_line "订阅设置：已完成"
-	ok '"changed":true,"summary":"订阅已保存、刷新，并已生成配置。","next_actions":["准备好后启动运行时。"]'
+	printf '{"ok":true,"changed":true,"summary":"订阅已保存、刷新，配置已生成，运行时已重启并验证生效。","runtime_restart":%s,"next_actions":[]}\n' "$restart_json"
 }
 
 write_bootstrap_subscription_input() {

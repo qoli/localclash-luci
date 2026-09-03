@@ -955,6 +955,14 @@ Method contracts:
   file.
 - `subscription_refresh`: no input. Calls
   `localclash subscription refresh --json`.
+- `subscription_setup_async`: input `{ "uris": ["https://...", "vless://..."] }`.
+  在共享后台任务中依序保存来源、刷新订阅、生成配置，再复用
+  `runtime_restart_continuity_run process_restart` 重启运行时并验证最终运行状态与
+  原网络接管状态。前置步骤、重启或最终验证任一步失败时，任务明确失败且保留原始
+  错误；只有全部完成才报告订阅已生效。此串接不会再启动第二个共用 task files 的
+  背景任务。进入运行时重启前，当前订阅任务会原子切换为不可取消，页面随
+  `task_status.cancellable=false` 隐藏中止按钮，避免在接管恢复和最终验证之间
+  切断交易。
 - `custom_sites_get`: no input. Calls
   `localclash custom-sites list --json` and returns the authoritative proxy and
   direct lists unchanged.

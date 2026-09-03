@@ -184,6 +184,10 @@ function liveTaskButton(label, handler, extraClass) {
 
 			function waitForTaskCompletion() {
 				return callTaskStatus().then(function(task) {
+					if (task && task.cancellable === false) {
+						modal.cancelButton.disabled = true;
+						modal.cancelButton.style.display = 'none';
+					}
 					if (task && task.done)
 						return task.result || task;
 					if (task && task.running === false && task.result)
