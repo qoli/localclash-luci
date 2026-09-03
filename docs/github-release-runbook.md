@@ -47,9 +47,18 @@ Release 页面顶部的普通用户下载指南由
 IPK、APK 及两个 iStoreOS 离线包的用途和下载链接；GitHub 自动生成的 changelog
 保留在指南下方。不要在 workflow 里手写版本化资产 URL。
 
-## 代理执行分工：Luna High
+## 代理执行分工：独立 Kimi Reviewer 与 Luna High
 
-代理执行发布时，主代理负责范围、候选身份、授权、协调、证据审核及最终放行；
+改动影响面、测试条目、前置依赖、执行顺序及证据沿用，必须由独立 Pi CLI
+环境中的 provider `kimi-coding`、model `k3-256k`（Kimi K3 256K）、thinking `max` Reviewer 判断。
+按 [SOP 第 1.4 节](https://github.com/qoli/localClash/blob/main/docs/istoreos-release-test-sop.md#14-獨立-pi-clikimi-影響面審查與測試依賴計畫)
+提供可追溯的客观资料包；不继承实现对话、项目／用户配置或 session，禁止工具
+和分享。直接使用 CLI 发送 prompt、逐行接收 JSON，不引入 pi-ai SDK；只安全复用
+Pi 登录中的 Kimi 凭证，保留失败的部分输出并核对完成事件。主代理及 Luna 不得
+自审替代或自行改写选测结论；缺少资料交回 Reviewer，
+改动或新证据影响测试计划时重新审查，不自动把针对性测试扩大为全部发布验收。
+
+代理执行发布时，主代理负责用户授权范围、候选身份、资料包、协调、证据审核及最终放行；
 **发布执行和测试任务必须交给 Luna High 子代理**，显式设置
 `model: gpt-5.6-luna`、`reasoning_effort: high`，不得继承默认模型或改用 Luna Max。
 测试包括下文的本地检查、构建验证、QEMU 验收、针对性回归及发布后验证；
@@ -66,6 +75,8 @@ IPK、APK 及两个 iStoreOS 离线包的用途和下载链接；GitHub 自动�
 后由执行子代理操作。主代理核对证据及文件回写，不以子代理的完成消息代替
 G99。针对性测试仍按 SOP 第 1.1–1.2 节选测，不自动扩成完整发布验收。
 本节不修改现有 CI runner，也不表示 GitHub Actions 已自动创建 Luna 子代理。
+Reviewer 的 ready 只表示可派发测试，不代表发布通过；保留 review ID、输入 SHA、
+原始回复、依赖计划及逐项执行结果，主代理按计划核对回写和 G99。
 
 ## 1. 准备版本提交
 
