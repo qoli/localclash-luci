@@ -451,8 +451,10 @@ function trackTask(title, startPromise, options) {
 	}).then(function(finalResult) {
 		if (finalResult && finalResult.ok === false)
 			modal.statusLine.textContent = formatText(_('任务失败：%s'), finalResult.message || finalResult.code || _('未知错误'));
-		else
-			modal.statusLine.textContent = _('任务完成。');
+		else {
+			var warnings = finalResult && Array.isArray(finalResult.warnings) ? finalResult.warnings : [];
+			modal.statusLine.textContent = warnings.length ? formatText(_('任务完成，但有警告：%s'), warnings.join('；')) : _('任务完成。');
+		}
 		modal.cancelButton.disabled = true;
 		modal.resultOutput.textContent = JSON.stringify(finalResult, null, 2);
 	}).catch(function(err) {

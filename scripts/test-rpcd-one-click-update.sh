@@ -42,6 +42,9 @@ json_bool() {
 	return 1
 }
 case "$expr" in
+	'@.warnings'|'@.warnings[*]')
+		printf '%s\n' "$content" | python3 -c 'import json,sys; value=json.load(sys.stdin); warnings=value.get("warnings", []) if isinstance(value, dict) else []; print(json.dumps(warnings) if sys.argv[1] == "@.warnings" else "\n".join(warnings))' "$expr"
+		;;
 	@.sync_default_policy)
 		json_bool sync_default_policy
 		;;
@@ -331,6 +334,8 @@ call_core() {
 				printf 'provider timeout\n' >&2
 				printf '{"ok":false,"code":"subscription_fetch_failed","message":"subscription source unavailable"}\n'
 				return 1
+			elif [ "${MOCK_SUBSCRIPTION_CACHE_WARNING:-0}" = "1" ]; then
+				printf '{"ok":true,"changed":true,"warnings":["source test: HTTP 522; using validated subscription cache"],"summary":"subscription refreshed"}\n'
 			else
 				printf '{"ok":true,"changed":true,"summary":"subscription refreshed"}\n'
 			fi
@@ -343,6 +348,10 @@ call_core() {
 			if [ "${MOCK_TEMPLATE_TRANSACTION_FAIL:-0}" = "1" ]; then
 				printf '{"ok":false,"code":"command_failed","message":"material transaction failed and prior state was restored: capability probe failed"}\n'
 				return 1
+			fi
+			if [ "${MOCK_SUBSCRIPTION_CACHE_WARNING:-0}" = "1" ]; then
+				printf '{"ok":true,"changed":true,"warnings":["source test: HTTP 522; using validated subscription cache"],"summary":"default policy synced","status":{"transaction":{"committed":true}}}\n'
+				return 0
 			fi
 			printf '{"ok":true,"changed":true,"summary":"default policy synced","status":{"transaction":{"committed":true}}}\n'
 			;;
@@ -793,5 +802,36 @@ unset MOCK_SUBSCRIPTION_REFRESH_FAIL MOCK_CONFIG_RENDER_FAIL
 printf '%s\n' "$result" | grep -q '"ok":false' || fail_test "subscription failure did not fail: ${result}"
 printf '%s\n' "$result" | grep -q '"code":"subscription_fetch_failed"' || fail_test "subscription failure code mismatch: ${result}"
 grep -q 'config render' "${tmp_dir}/trace" && fail_test "subscription failure reached config rendering"
+
+for sync_default_policy in false true; do
+	: > "${tmp_dir}/trace"
+	: > "$LOG"
+	rm -f "${tmp_dir}/custom-sites-read-count"
+	set_task_input "{\"version\":1,\"sync_default_policy\":${sync_default_policy}}"
+	MOCK_SUBSCRIPTION_CACHE_WARNING=1
+	export MOCK_SUBSCRIPTION_CACHE_WARNING
+	capture_one_click_update
+	clear_task_input
+	unset MOCK_SUBSCRIPTION_CACHE_WARNING
+	assert_json "$result"
+	[ "$result_rc" -eq 0 ] || fail_test "validated cache warning failed task: ${result}"
+	printf '%s\n' "$result" | python3 -c 'import json,sys; result=json.load(sys.stdin); assert result["ok"] is True; assert result["warnings"] == ["source test: HTTP 522; using validated subscription cache"]; assert result["subscription"]["refresh"]["warnings"] == result["warnings"]; assert "警告" in result["summary"]; assert result["checkpoints"]["material"]["ok"] is True' || fail_test "cache warning was not preserved in completion envelope"
+	grep -q '一键更新：警告：.*HTTP 522' "$LOG" || fail_test "cache warning missing from log"
+	grep -q '^call_core config render --json$' "${tmp_dir}/trace" || fail_test "cache warning skipped render"
+	grep -q '^call_core runtime restart --strategy hot_reload --json$' "${tmp_dir}/trace" || fail_test "cache warning skipped material checkpoint"
+done
+
+: > "${tmp_dir}/trace"
+set_task_input '{"version":1,"sync_default_policy":false}'
+MOCK_SUBSCRIPTION_CACHE_WARNING=1
+MOCK_CONFIG_RENDER_FAIL=1
+export MOCK_SUBSCRIPTION_CACHE_WARNING MOCK_CONFIG_RENDER_FAIL
+capture_one_click_update
+clear_task_input
+unset MOCK_SUBSCRIPTION_CACHE_WARNING MOCK_CONFIG_RENDER_FAIL
+assert_json "$result"
+[ "$result_rc" -ne 0 ] || fail_test "cache warning masked a subsequent render failure"
+printf '%s\n' "$result" | grep -q '"code":"cached_subscription_invalid"' || fail_test "cache warning replaced render failure: ${result}"
+grep -q '^call_core runtime restart --strategy hot_reload --json$' "${tmp_dir}/trace" && fail_test "render failure activated cached material"
 
 printf 'rpcd one-click update tests passed\n'

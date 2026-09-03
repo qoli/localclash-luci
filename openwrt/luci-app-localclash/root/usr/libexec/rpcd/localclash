@@ -2988,7 +2988,7 @@ one_click_update_continue() {
 }
 
 one_click_update_continue_execute() {
-	local tmpdir sync_default_policy runtime_was_running takeover_was_effective profile_mode subscription_ready subscription_refresh_json policy_template_sync_json custom_sites_preservation custom_sites_before_fields custom_sites_after_fields dnsqualify_json mihomo_changed dashboard_changed runtime_recovered takeover_recovered mcp_healthy current_mode current_core software_checkpoint_json material_checkpoint_json
+	local tmpdir sync_default_policy runtime_was_running takeover_was_effective profile_mode subscription_ready subscription_refresh_json policy_template_sync_json custom_sites_preservation custom_sites_before_fields custom_sites_after_fields dnsqualify_json mihomo_changed dashboard_changed runtime_recovered takeover_recovered mcp_healthy current_mode current_core software_checkpoint_json material_checkpoint_json warnings_json warning_text completion_summary
 	tmpdir="$1"
 	sync_default_policy="$2"
 	runtime_was_running="$3"
@@ -2997,6 +2997,8 @@ one_click_update_continue_execute() {
 
 	subscription_ready=false
 	subscription_refresh_json='null'
+	warnings_json='[]'
+	completion_summary='一键更新已完成。'
 	policy_template_sync_json='{"ok":true,"changed":false,"skipped":true,"summary":"未选择同步最新默认策略。"}'
 	custom_sites_preservation='null'
 	dnsqualify_json='null'
@@ -3199,6 +3201,17 @@ JSON
 		log_line "一键更新：未选择同步最新默认策略"
 	fi
 
+	warning_text="$(jsonfilter -s "$subscription_refresh_json" -e '@.warnings[*]' 2>/dev/null || true)"
+	if [ -n "$warning_text" ]; then
+		warnings_json="$(jsonfilter -s "$subscription_refresh_json" -e '@.warnings')" || {
+			fail "subscription_warnings_invalid" "无法读取订阅刷新警告。"
+			rm -rf "$tmpdir"
+			return 1
+		}
+		completion_summary='一键更新已完成，但有警告。'
+		log_line "一键更新：警告：$warning_text"
+	fi
+
 	if [ "$subscription_ready" = "true" ]; then
 		if ! run_with_heartbeat "一键更新：正在生成 Mihomo 配置" "$tmpdir/render.json" call_core config render --json; then
 			log_line "一键更新：配置生成失败"
@@ -3274,8 +3287,10 @@ JSON
 		rm -rf "$tmpdir"
 		return 1
 	fi
-	log_line "一键更新：已完成"
-	printf '{"ok":true,"changed":true,"summary":"一键更新已完成。","checkpoints":{"software":%s,"material":%s},"runtime":{"was_running":%s,"recovered":%s},"takeover":{"desired_enabled":%s,"recovered":%s},"luci":%s,"core":%s,"dnsqualify":%s,"mihomo":%s,"dashboard":%s,"policy_template_sync":%s,"custom_sites_preservation":%s,"subscription":{"configured":%s,"refresh":%s},"mcp_service":%s}\n' \
+	log_line "$completion_summary"
+	printf '{"ok":true,"changed":true,"summary":"%s","warnings":%s,"checkpoints":{"software":%s,"material":%s},"runtime":{"was_running":%s,"recovered":%s},"takeover":{"desired_enabled":%s,"recovered":%s},"luci":%s,"core":%s,"dnsqualify":%s,"mihomo":%s,"dashboard":%s,"policy_template_sync":%s,"custom_sites_preservation":%s,"subscription":{"configured":%s,"refresh":%s},"mcp_service":%s}\n' \
+		"$completion_summary" \
+		"$warnings_json" \
 		"$software_checkpoint_json" \
 		"$material_checkpoint_json" \
 		"$runtime_was_running" \

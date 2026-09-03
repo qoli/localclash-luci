@@ -72,6 +72,16 @@ function click(button) {
 }
 
 async function testView(view) {
+	for (const warnings of [[], ['source test: HTTP 522; using validated subscription cache']]) {
+		const warningTest = loadView(view);
+		await warningTest.context.trackTask('一键更新', Promise.resolve({ ok: true, warnings }));
+		assert.strictEqual(warningTest.modal().statusLine.textContent, warnings.length ? '任务完成，但有警告：' + warnings[0] : '任务完成。', view + ': completion warnings must be visible');
+		assert.strictEqual(warningTest.modal().cancelButton.disabled, true);
+	}
+	const failedWarningTest = loadView(view);
+	await failedWarningTest.context.trackTask('一键更新', Promise.resolve({ ok: false, message: 'cached subscription invalid', warnings: ['HTTP 522'] }));
+	assert.strictEqual(failedWarningTest.modal().statusLine.textContent, '任务失败：cached subscription invalid', view + ': warnings must not mask a failure');
+
 	let test = loadView(view);
 	test.state.statuses.push(task({ running: true }), task({ done: true, result: { ok: true } }));
 	await test.context.trackTask('重启', Promise.resolve({ started: true, task_id: 'restart-123', cancellable: false }), { cancellable: false });
