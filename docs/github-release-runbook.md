@@ -47,6 +47,26 @@ Release 页面顶部的普通用户下载指南由
 IPK、APK 及两个 iStoreOS 离线包的用途和下载链接；GitHub 自动生成的 changelog
 保留在指南下方。不要在 workflow 里手写版本化资产 URL。
 
+## 代理执行分工：Luna High
+
+代理执行发布时，主代理负责范围、候选身份、授权、协调、证据审核及最终放行；
+**发布执行和测试任务必须交给 Luna High 子代理**，显式设置
+`model: gpt-5.6-luna`、`reasoning_effort: high`，不得继承默认模型或改用 Luna Max。
+测试包括下文的本地检查、构建验证、QEMU 验收、针对性回归及发布后验证；
+不能只让子代理列计划，再由主代理代跑测试。
+
+派单、执行者记录、资源隔离、原始证据及修复回写遵守
+[SOP 第 1.3 节](https://github.com/qoli/localClash/blob/main/docs/istoreos-release-test-sop.md#13-luna-high-子代理執行契約)。
+默认一个执行子代理顺序工作；只有可隔离的独立任务才由主代理拆分并行，
+子代理不得继续派发，也不得共写同一 VM、端口、候选目录或验收总报告。
+指定模型／effort 无法启动时报告执行缺口，不静默换模型或由主代理代跑。
+已有有效证据可经适用性审核后沿用，保留原执行者，不要求因分工变化全部重跑。
+
+推送、tag 和 Release 操作必须处于用户发布授权内，并在主代理审核对应关卡
+后由执行子代理操作。主代理核对证据及文件回写，不以子代理的完成消息代替
+G99。针对性测试仍按 SOP 第 1.1–1.2 节选测，不自动扩成完整发布验收。
+本节不修改现有 CI runner，也不表示 GitHub Actions 已自动创建 Luna 子代理。
+
 ## 1. 准备版本提交
 
 确认 `main` 是预期分支，工作树没有无关修改，并检查最近 Release：
@@ -129,8 +149,9 @@ scripts/build-release-assets.sh "$tag"
 
 ## 5. 人工通过 QEMU SOP，再创建并推送 Tag
 
-推送 release tag 前，必须由发布者按上述 canonical SOP 完成 iStoreOS QEMU
-功能验收，并记录通过结果、对应源码 commit、候选产物及其校验值和证据位置。
+推送 release tag 前，必须由 Luna High 子代理按上述 canonical SOP 执行 iStoreOS
+QEMU 功能验收，主代理审核证据并由发布责任人放行；记录通过结果、对应源码
+commit、候选产物及其校验值、执行子代理身份和证据位置。
 CI 绿色、成功构建或 Makeself 校验通过都不能代替这项人工门槛；尚未通过时不得
 推送 tag。验收后若源码或候选产物改变，必须对最终候选重新验收。
 
