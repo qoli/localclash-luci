@@ -796,10 +796,14 @@ now_epoch() {
 }
 
 write_task_running() {
-	local summary task
+	local summary task extra
 	summary="$1"
 	task="${2:-task}"
-	printf '{"ok":true,"running":true,"done":false,"started_at":%s,"task":"%s","summary":"%s"}\n' "$(now_epoch)" "$(json_escape "$task")" "$(json_escape "$summary")" > "$TASK_STATUS"
+	extra=""
+	if [ "$task" = runtime_restart ]; then
+		extra=',"cancellable":false,"task_id":"'"$(json_escape "$3")"'"'
+	fi
+	printf '{"ok":true,"running":true,"done":false,"started_at":%s,"task":"%s","summary":"%s"%s}\n' "$(now_epoch)" "$(json_escape "$task")" "$(json_escape "$summary")" "$extra" > "${TASK_STATUS}.tmp.$$" && mv "${TASK_STATUS}.tmp.$$" "$TASK_STATUS"
 }
 
 write_task_pid() {
@@ -828,16 +832,20 @@ task_status_running() {
 }
 
 write_task_done() {
-	local rc result task started completed
+	local rc result task started completed extra
 	rc="$1"
 	result="$2"
 	task="$(task_name)"
 	started="$(task_started_at)"
 	completed="$(now_epoch)"
+	extra=""
+	if [ "$task" = runtime_restart ]; then
+		extra=',"cancellable":false,"task_id":"'"$(json_escape "$(jsonfilter -i "$TASK_STATUS" -e '@.task_id')")"'"'
+	fi
 	case "$started" in
 		""|*[!0-9]*) started=0 ;;
 	esac
-	printf '{"ok":true,"running":false,"done":true,"started_at":%s,"completed_at":%s,"task":"%s","exit_code":%s,"result":%s}\n' "$started" "$completed" "$(json_escape "$task")" "$rc" "$result" > "$TASK_STATUS"
+	printf '{"ok":true,"running":false,"done":true,"started_at":%s,"completed_at":%s,"task":"%s","exit_code":%s,"result":%s%s}\n' "$started" "$completed" "$(json_escape "$task")" "$rc" "$result" "$extra" > "${TASK_STATUS}.tmp.$$" && mv "${TASK_STATUS}.tmp.$$" "$TASK_STATUS"
 }
 
 lock_pid_alive() {
@@ -850,6 +858,8 @@ lock_pid_alive() {
 
 clear_stale_lock() {
 	[ -d "$LOCK_DIR" ] || return 0
+	# A newly reserved lock may not have published its owner yet.
+	[ -s "$LOCK_DIR/pid" ] || return 0
 	if ! lock_pid_alive; then
 		rm -rf "$LOCK_DIR" 2>/dev/null || true
 		log_line "任务锁：已清理失效任务锁"
@@ -866,6 +876,10 @@ write_task_stale_result() {
 	local result task message action
 	task="$(jsonfilter -i "$TASK_STATUS" -e '@.task' 2>/dev/null || true)"
 	case "$task" in
+		runtime_restart)
+			message="重启任务已中断，无法确认运行时和网络接管的最终状态。"
+			action="先检查运行时及网络接管状态，再决定下一步操作。"
+			;;
 		one_click_update)
 			message="一键更新任务已中断，请重试。"
 			action="点击一键更新重试。"
@@ -1015,6 +1029,15 @@ task_cancel() {
 	local pid lock_pid result killed
 	killed=0
 	reconcile_task_status
+	if [ "$(task_name)" = runtime_restart ]; then
+		if task_status_running; then
+			fail "task_not_cancellable" "重启正在恢复运行时和网络接管，不能中途取消；关闭页面不会停止任务。"
+			return 1
+		fi
+		# A terminal result must not be replaced while its worker releases the lock.
+		cat "$TASK_STATUS"
+		return 0
+	fi
 	if ! task_pid_alive && ! lock_pid_alive; then
 		log_line "任务控制：没有正在运行的任务可中止"
 		if [ -f "$TASK_STATUS" ]; then
@@ -1746,6 +1769,7 @@ runtime_restart_continuity_run() {
 	takeover_event_scope
 	takeover_log_event_safe "$source" "runtime_restart_started" "strategy" "$strategy" >/dev/null 2>&1 || true
 
+	log_line "运行时重启：正在检查重启前的运行时和网络接管"
 	if call_takeover status --json > "$tmpdir/before.json"; then
 		rc=0
 	else
@@ -1796,6 +1820,7 @@ runtime_restart_continuity_run() {
 		return 1
 	fi
 
+	log_line "运行时重启：正在重启 Mihomo 并等待就绪"
 	if call_core runtime restart --strategy "$strategy" --json > "$tmpdir/runtime.json"; then
 		rc=0
 	else
@@ -1815,6 +1840,7 @@ runtime_restart_continuity_run() {
 		return 1
 	fi
 
+	log_line "运行时重启：正在验证重启后的运行状态"
 	if call_core runtime status --json > "$tmpdir/runtime-after.json"; then
 		rc=0
 	else
@@ -1836,6 +1862,7 @@ runtime_restart_continuity_run() {
 	transition="preserved_inactive"
 	printf 'null\n' > "$tmpdir/takeover-apply.json"
 	if [ "$expected_effective" = "true" ]; then
+		log_line "运行时重启：正在恢复网络接管"
 		if takeover_apply "$source" > "$tmpdir/takeover-apply.json"; then
 			rc=0
 		else
@@ -1857,6 +1884,7 @@ runtime_restart_continuity_run() {
 		transition="restored"
 	fi
 
+	log_line "运行时重启：正在验证最终运行时和网络接管状态"
 	if call_takeover status --json > "$tmpdir/after.json"; then
 		rc=0
 	else
@@ -1903,6 +1931,7 @@ runtime_restart_continuity_run() {
 		summary="运行时已重启，网络接管保持未启用。"
 	fi
 	takeover_log_event_safe "$source" "runtime_restart_finished" "result" "success" "strategy" "$strategy" "takeover_transition" "$transition" >/dev/null 2>&1 || true
+	log_line "运行时重启：已完成，最终状态验证通过"
 	printf '{"ok":true,"changed":true,"outcome":"ready","summary":"%s","strategy":"%s","before":{"runtime_running":%s,"takeover_effective":%s,"profile_mode":"%s"},"runtime":%s,"takeover_restore":%s,"after":{"runtime_running":%s,"takeover_effective":%s,"profile_mode":"%s"},"takeover_transition":"%s"}\n' \
 		"$(json_escape "$summary")" \
 		"$(json_escape "$strategy")" \
@@ -1927,6 +1956,71 @@ runtime_restart() {
 		profile=router
 	fi
 	runtime_restart_continuity_run process_restart "$desired" "$profile" luci_runtime_restart
+}
+
+start_runtime_restart() {
+	local task_id bg_pid
+	clear_stale_lock
+	# Reserve the shared lifecycle lock before touching the singleton task files.
+	if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+		fail "task_locked" "另一个 localClash 操作正在运行，请查看当前任务，勿重复重启。"
+		return 1
+	fi
+	printf '%s\n' "$$" > "$LOCK_DIR/pid"
+	if task_pid_alive; then
+		rm -rf "$LOCK_DIR"
+		fail "task_locked" "另一个 localClash 后台任务正在收尾，请稍后再试。"
+		return 1
+	fi
+	task_id="$(now_epoch)-$$"
+	rm -f "$TASK_RESULT" "$TASK_INPUT" "$TASK_PID"
+	if ! write_task_running "重启任务正在运行，关闭页面不会停止任务。" runtime_restart "$task_id"; then
+		rm -rf "$LOCK_DIR"
+		fail "task_status_write_failed" "无法记录重启任务，未执行重启。"
+		return 1
+	fi
+	: > "$LOG"
+	log_line "运行时重启：已加入后台任务 task_id=$task_id"
+	"$HELPER_SELF" call runtime_restart_task_run "$task_id" </dev/null >>"$LOG" 2>&1 &
+	bg_pid="$!"
+	write_task_pid "$bg_pid"
+	# The worker waits for this handoff before executing any lifecycle operation.
+	printf '%s\n' "$bg_pid" > "$LOCK_DIR/pid"
+	ok '"started":true,"running":true,"task":"runtime_restart","task_id":"'"$task_id"'","cancellable":false,"summary":"重启任务已启动，将在后台完成运行时和网络接管验证。"'
+}
+
+runtime_restart_task_run() {
+	local task_id waited result rc result_ok
+	task_id="$1"
+	waited=0
+	while [ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" != "$$" ]; do
+		[ "$waited" -lt 5 ] || return 1
+		waited=$((waited + 1))
+		sleep 1
+	done
+	trap '[ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" != "$$" ] || rm -rf "$LOCK_DIR"' EXIT
+	trap 'exit 143' INT TERM
+	if [ -z "$task_id" ] || [ "$(jsonfilter -i "$TASK_STATUS" -e '@.task_id')" != "$task_id" ]; then
+		log_line "运行时重启：任务标识不一致，未执行重启"
+		return 1
+	fi
+	runtime_restart > "${TASK_RESULT}.tmp.$$"
+	rc=$?
+	result_ok="$(jsonfilter -i "${TASK_RESULT}.tmp.$$" -e '@.ok' 2>/dev/null)"
+	case "$rc:$result_ok" in
+		0:true) ;;
+		*:false) [ "$rc" -ne 0 ] || rc=1 ;;
+		*)
+			rc=1
+			printf '%s\n' '{"ok":false,"code":"runtime_restart_task_result_invalid","outcome":"attention_required","message":"重启任务未产生与退出状态一致的有效结果，请检查运行时和网络接管。","next_actions":["查看接管日志并核对最终状态。"]}' > "${TASK_RESULT}.tmp.$$"
+			;;
+	esac
+	mv "${TASK_RESULT}.tmp.$$" "$TASK_RESULT" || return 1
+	result="$(cat "$TASK_RESULT")"
+	write_task_done "$rc" "$result" || return 1
+	rm -f "$TASK_PID"
+	log_line "运行时重启：后台任务结束 task_id=$task_id exit_code=$rc"
+	return "$rc"
 }
 
 base_assets_installed() {
@@ -5068,7 +5162,8 @@ JSON
 	runtime_start) runtime_start ;;
 	runtime_start_takeover) start_runtime_takeover ;;
 	runtime_start_takeover_run) with_lock runtime_start_takeover_run ;;
-	runtime_restart) with_lock runtime_restart ;;
+	runtime_restart) start_runtime_restart ;;
+	runtime_restart_task_run) runtime_restart_task_run "${3:-}" ;;
 	runtime_stop) with_lock runtime_stop ;;
 	boot_restore_status) boot_restore_status ;;
 	boot_restore_enable) with_lock boot_restore_enable ;;

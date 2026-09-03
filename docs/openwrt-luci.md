@@ -1043,12 +1043,17 @@ Method contracts:
   `version: 1`, writes a temporary JSON file, calls
   `localclash apply --input <file> --json`, then removes the temp file.
 - `runtime_start`: no input. Calls `localclash runtime start --json`.
-- `runtime_restart`: no input. This is the LuCI-managed restart interface. It
-  observes and validates the current runtime/takeover state, calls
-  `localclash runtime restart --strategy process_restart --json`, restores
-  takeover only when it was effective before the restart, and verifies the
-  final runtime and takeover state before returning success. Unknown,
-  inconsistent, or partially restored state returns an explicit failure.
+- `runtime_restart`：无输入。先取得共享生命周期锁，快速返回
+  `started: true`、`task_id` 和 `cancellable: false`；忙碌时明确返回
+  `task_locked`，不排队重复重启。后台保留原完整交易：检查重启前状态、
+  调用 `localclash runtime restart --strategy process_restart --json`、
+  验证运行时、按原状态恢复接管、验证最终状态。仅全部通过才报告成功。
+  通过 `task_status` 查询相同 `task_id` 的进度和最终 `result`；日志显示
+  当前阶段。页面关闭或重新登录不停止任务，概览和进阶页可查看最近任务。
+  重启中禁止 `task_cancel`，避免在接管恢复前切断交易；意外中断明确
+  返回失败，要求先核对运行时和接管，不能把另一个任务的结果当成重启成功。
+  worker 完全脱离请求的标准输入输出，不依赖 rpcd 的单次执行期限；
+  Core 命令和接管检查仍保留各自的超时边界。
 - `runtime_stop`: no input. Calls the LuCI takeover manager to stop and verify
   takeover first; only then calls `localclash runtime stop --json`.
 - `takeover_status`: no input. Calls

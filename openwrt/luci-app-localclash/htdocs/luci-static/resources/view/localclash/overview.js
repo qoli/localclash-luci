@@ -286,6 +286,8 @@ function taskLabel(task) {
 	switch (task && task.task) {
 	case 'one_click_update':
 		return _('一键更新');
+	case 'runtime_restart':
+		return _('重启');
 	case 'runtime_start_takeover':
 		return _('启动并接管');
 	case 'bootstrap_core':
@@ -390,6 +392,7 @@ function trackTask(title, startPromise, options) {
 	options = options || {};
 	var startedAt = options.startedAt ? options.startedAt * 1000 : Date.now();
 	var modal = showTaskModal(title, options.cancellable !== false, options);
+	var taskId = options.task && options.task.task_id;
 	var timer;
 
 	function updateLogs() {
@@ -401,7 +404,7 @@ function trackTask(title, startPromise, options) {
 			modal.logOutput.scrollTop = modal.logOutput.scrollHeight;
 		}).catch(function(err) {
 			if (transientTaskRpcError(err)) {
-				modal.statusLine.textContent = _('LuCI 正在更新或会话已刷新；如果已跳转登录页，请重新登录，本任务会继续在路由器后台执行。');
+				modal.statusLine.textContent = _('暂时无法连接路由器或会话已过期；请等待连接恢复，或重新登录查看后台任务。');
 				return;
 			}
 			modal.statusLine.textContent = formatText(_('无法读取任务输出：%s'), err.message || String(err));
@@ -410,6 +413,10 @@ function trackTask(title, startPromise, options) {
 
 	function waitForTaskCompletion() {
 		return callBootstrapTaskStatus().then(function(task) {
+			if (taskId && (!task || task.task_id !== taskId))
+				throw new Error(_('任务记录已变化，请查看最近任务结果并核对运行时状态。'));
+			if (task && task.cancellable === false)
+				modal.cancelButton.style.display = 'none';
 			if (task && task.done)
 				return task.result || task;
 			if (task && task.running === false && task.result)
@@ -420,12 +427,16 @@ function trackTask(title, startPromise, options) {
 			if (!transientTaskRpcError(err))
 				throw err;
 
-			modal.statusLine.textContent = _('LuCI 正在更新或会话已刷新；如果已跳转登录页，请重新登录，本任务会继续在路由器后台执行。');
+			modal.statusLine.textContent = _('暂时无法连接路由器或会话已过期；请等待连接恢复，或重新登录查看后台任务。');
 			return delay(2000).then(waitForTaskCompletion);
 		});
 	}
 
 	return Promise.resolve(startPromise).then(function(result) {
+		if (result && result.task_id)
+			taskId = result.task_id;
+		if (result && result.cancellable === false)
+			modal.cancelButton.style.display = 'none';
 		var completion = (result && (result.started || result.running)) ? waitForTaskCompletion() : Promise.resolve(result);
 
 		timer = window.setInterval(updateLogs, 1000);
@@ -471,7 +482,8 @@ function resumeTaskIfNeeded() {
 			return trackTask(taskLabel(task), Promise.resolve({ started: true }), {
 				resume: true,
 				task: task,
-				startedAt: task.started_at || 0
+				startedAt: task.started_at || 0,
+				cancellable: task.cancellable !== false
 			});
 		return null;
 	}).catch(function() {
@@ -479,7 +491,7 @@ function resumeTaskIfNeeded() {
 	});
 }
 
-function liveTaskButton(label, handler, extraClass) {
+function liveTaskButton(label, handler, extraClass, options) {
 	return E('button', {
 		'type': 'button',
 		'class': 'btn cbi-button localclash-button ' + (extraClass || ''),
@@ -495,7 +507,7 @@ function liveTaskButton(label, handler, extraClass) {
 			button.classList.add('localclash-busy');
 			button.textContent = _('查看任务输出…');
 
-			return trackTask(label, Promise.resolve().then(handler)).finally(function() {
+			return trackTask(label, Promise.resolve().then(handler), options).finally(function() {
 				button.disabled = false;
 				button.removeAttribute('aria-busy');
 				button.classList.remove('localclash-busy');
@@ -503,6 +515,16 @@ function liveTaskButton(label, handler, extraClass) {
 			});
 		}
 	}, [ label ]);
+}
+
+function recentTaskButton() {
+	return liveTaskButton(_('查看最近任务'), function() {
+		return callBootstrapTaskStatus().then(function(task) {
+			if (!task || !task.task)
+				return { ok: false, message: _('暂无任务记录。') };
+			return task.done ? task.result : task;
+		});
+	}, null, { cancellable: false });
 }
 
 function commandButton(label, handler, extraClass, options) {
@@ -1106,7 +1128,7 @@ function statePanelActions(state) {
 
 	if (state.id === 'running')
 		return (dashboardURL ? [ dashboardLink('cbi-button-apply') ] : []).concat([
-			commandButton(_('重启'), callRuntimeRestart),
+			liveTaskButton(_('重启'), callRuntimeRestart, null, { cancellable: false }),
 			runtimeStopButton()
 		]);
 
@@ -1116,7 +1138,7 @@ function statePanelActions(state) {
 	if (state.id === 'task_running')
 		return [ liveTaskButton(_('查看任务输出'), function() {
 			return { ok: true, started: true, running: true };
-		}, 'cbi-button-apply') ];
+		}, 'cbi-button-apply', { cancellable: false }) ];
 
 	if (state.id === 'status_failed')
 		return [
@@ -1384,7 +1406,7 @@ function runtimeStopButton() {
 function runtimeActions(state) {
 	if (state && state.id === 'running')
 		return [
-			commandButton(_('重启'), callRuntimeRestart, 'cbi-button-apply'),
+			liveTaskButton(_('重启'), callRuntimeRestart, 'cbi-button-apply', { cancellable: false }),
 			runtimeStopButton()
 		];
 	if (state && state.id === 'runtime_stopped')
@@ -1411,7 +1433,7 @@ function summaryTable(data, takeover, task, state) {
 				E('th', { 'class': 'th', 'scope': 'col' }, [ _('目前状态') ]),
 				E('th', { 'class': 'th cbi-section-actions', 'scope': 'col' }, [ _('操作') ])
 			]),
-			summaryActionRow(_('Mihomo 核心'), statusBadge(mihomoSummary(data, status), mihomoRunning ? 'success' : 'warning'), []),
+			summaryActionRow(_('Mihomo 核心'), statusBadge(mihomoSummary(data, status), mihomoRunning ? 'success' : 'warning'), [ recentTaskButton() ]),
 			E('tr', { 'class': 'tr cbi-rowstyle-1' }, [
 				E('td', { 'class': 'td', 'data-title': _('项目') }, [ _('网络接管') ]),
 				E('td', { 'class': 'td', 'data-title': _('目前状态') }, [

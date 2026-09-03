@@ -272,6 +272,6 @@ assert_json "$result"
 [ "$result_rc" -ne 0 ] || fail_test "postflight takeover mismatch returned success"
 printf '%s\n' "$result" | grep -q '"code":"runtime_restart_postcondition_failed"' || fail_test "postflight mismatch code missing: $result"
 
-grep -q 'runtime_restart) with_lock runtime_restart' "$helper" || fail_test "public runtime_restart dispatch is not lifecycle-locked"
+grep -q 'runtime_restart) start_runtime_restart' "$helper" || fail_test "public runtime_restart dispatch is not asynchronous"
 
 printf 'rpcd runtime restart continuity tests passed\n'
