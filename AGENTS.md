@@ -33,3 +33,9 @@ LuCI 面向用户的表达语言维持为简体中文。
 - `scripts/test-rpcd-takeover-restore.sh`
 - `scripts/build-openwrt-ipk.sh`
 - `scripts/build-openwrt-apk.sh`
+
+## 功能测试与发布选测
+
+从相邻 Core 仓库的 `docs/istoreos-test-features.md` 和
+`docs/istoreos-release-test-sop.md` 开始：维护每个功能最后实际测试版本、结果和证据，
+按变更影响选择回归，核对后沿用未受影响功能的历史结果。发布不自动触发全表重测。

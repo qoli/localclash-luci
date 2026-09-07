@@ -250,7 +250,7 @@ localClash 现在提供 `一键更新`：更新 LuCI 界面、localClash 核心�
 
 - 产品边界：[docs/openwrt-luci.md](docs/openwrt-luci.md)
 - ucode 改写提案：[docs/ucode-rewrite-adaptation.md](docs/ucode-rewrite-adaptation.md)
-- 发布功能验收：[iStoreOS QEMU Release 测试 SOP](https://github.com/qoli/localClash/blob/main/docs/istoreos-release-test-sop.md)（唯一功能发布门槛；相邻仓库路径：`../localClash/docs/istoreos-release-test-sop.md`）
+- 发布功能验收：[iStoreOS 测试 SOP](https://github.com/qoli/localClash/blob/main/docs/istoreos-release-test-sop.md) 与 [功能测试表](https://github.com/qoli/localClash/blob/main/docs/istoreos-test-features.md)：追踪各功能最后实测版本，按改动选测，核对后沿用历史证据；不要求每次发布重跑全表。相邻仓库入口：`../localClash/docs/istoreos-release-test-sop.md`。
 - 发布流程：[docs/github-release-runbook.md](docs/github-release-runbook.md)
 
 ## 许可证

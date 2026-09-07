@@ -39,6 +39,9 @@ GitHub Release。已存在 Release、tag 与 Makefile 版本不一致、tag comm
 iStoreOS QEMU 功能验收。唯一功能发布门槛是 Core 维护的
 [iStoreOS Release 测试 SOP](https://github.com/qoli/localClash/blob/main/docs/istoreos-release-test-sop.md)
 （相邻仓库路径：`../localClash/docs/istoreos-release-test-sop.md`）。
+先维护 [功能测试表](https://github.com/qoli/localClash/blob/main/docs/istoreos-test-features.md)
+中的最后实际测试版本、结果和证据，再按本次改动选择必要回归；未受影响的功能
+经核对后沿用历史证据。发布不要求整张功能表都在本版重测。
 Docker installer mock 测试已退役；Docker IPK/APK 构建与部署工具保留。
 ARM 真机不是强制发布门槛，x86 QEMU 通过也不代表 ARM runtime 已验证。
 
@@ -49,34 +52,21 @@ IPK、APK 及两个 iStoreOS 离线包的用途和下载链接；GitHub 自动�
 
 ## 代理执行分工：独立 Kimi Reviewer 与 Luna High
 
-改动影响面、测试条目、前置依赖、执行顺序及证据沿用，必须由独立 Pi CLI
-环境中的 provider `kimi-coding`、model `k3-256k`（Kimi K3 256K）、thinking `max` Reviewer 判断。
-按 [SOP 第 1.4 节](https://github.com/qoli/localClash/blob/main/docs/istoreos-release-test-sop.md#14-獨立-pi-clikimi-影響面審查與測試依賴計畫)
-提供可追溯的客观资料包；不继承实现对话、项目／用户配置或 session，禁止工具
-和分享。直接使用 CLI 发送 prompt、逐行接收 JSON，不引入 pi-ai SDK；只安全复用
-Pi 登录中的 Kimi 凭证，保留失败的部分输出并核对完成事件。主代理及 Luna 不得
-自审替代或自行改写选测结论；缺少资料交回 Reviewer，
-改动或新证据影响测试计划时重新审查，不自动把针对性测试扩大为全部发布验收。
+按 Core 的 [代理执行规范](https://github.com/qoli/localClash/blob/main/docs/istoreos-test-agent-workflow.md)
+执行：独立 Pi CLI Reviewer（`kimi-coding` / `k3-256k` / thinking `max`）根据变更、
+功能表及原始证据决定 test/reuse、必要子断言和真实依赖。保持独立空环境，停用工具、
+项目配置和历史会话；保留资料包 SHA、原始响应及完成事件。资料不足补审具体缺口，
+不能由主代理或 Luna 自审替代，也不因不确定而自动要求全表测试。
 
-代理执行发布时，主代理负责用户授权范围、候选身份、资料包、协调、证据审核及最终放行；
-**发布执行和测试任务必须交给 Luna High 子代理**，显式设置
-`model: gpt-5.6-luna`、`reasoning_effort: high`，不得继承默认模型或改用 Luna Max。
-测试包括下文的本地检查、构建验证、QEMU 验收、针对性回归及发布后验证；
-不能只让子代理列计划，再由主代理代跑测试。
+测试及发布执行交给显式配置的 **Luna High** 子代理：`model: gpt-5.6-luna`、
+`reasoning_effort: high`。主代理协调授权、核对原始证据、整合功能表及本轮摘要。
+默认一个执行子代理，不得继续派发或共写 VM、端口、候选目录与现行报告。
+指定执行者不可用时报告相关执行缺口，不静默替换。沿用证据保留原版本及执行者。
 
-派单、执行者记录、资源隔离、原始证据及修复回写遵守
-[SOP 第 1.3 节](https://github.com/qoli/localClash/blob/main/docs/istoreos-release-test-sop.md#13-luna-high-子代理執行契約)。
-默认一个执行子代理顺序工作；只有可隔离的独立任务才由主代理拆分并行，
-子代理不得继续派发，也不得共写同一 VM、端口、候选目录或验收总报告。
-指定模型／effort 无法启动时报告执行缺口，不静默换模型或由主代理代跑。
-已有有效证据可经适用性审核后沿用，保留原执行者，不要求因分工变化全部重跑。
-
-推送、tag 和 Release 操作必须处于用户发布授权内，并在主代理审核对应关卡
-后由执行子代理操作。主代理核对证据及文件回写，不以子代理的完成消息代替
-G99。针对性测试仍按 SOP 第 1.1–1.2 节选测，不自动扩成完整发布验收。
-本节不修改现有 CI runner，也不表示 GitHub Actions 已自动创建 Luna 子代理。
-Reviewer 的 ready 只表示可派发测试，不代表发布通过；保留 review ID、输入 SHA、
-原始回复、依赖计划及逐项执行结果，主代理按计划核对回写和 G99。
+Reviewer ready 只允许派发测试，不代表产品 PASS 或发布授权。G99 审核本轮必要重验
+与仍适用的历史覆盖；不同功能最后测试版本不同不构成阻挡。只阻挡真正依赖缺失能力
+的分支，不能因排程中的前一项失败而停掉全部独立功能。
+推送、tag、Release、公告仍需用户授权及主代理最终审核；本节不改变 CI runner。
 
 ## 1. 准备版本提交
 
@@ -160,11 +150,11 @@ scripts/build-release-assets.sh "$tag"
 
 ## 5. 人工通过 QEMU SOP，再创建并推送 Tag
 
-推送 release tag 前，必须由 Luna High 子代理按上述 canonical SOP 执行 iStoreOS
-QEMU 功能验收，主代理审核证据并由发布责任人放行；记录通过结果、对应源码
-commit、候选产物及其校验值、执行子代理身份和证据位置。
-CI 绿色、成功构建或 Makeself 校验通过都不能代替这项人工门槛；尚未通过时不得
-推送 tag。验收后若源码或候选产物改变，必须对最终候选重新验收。
+推送 release tag 前，Luna High 按选测计划完成受影响功能的必要 QEMU 重验，
+主代理核对本轮结果及未受影响功能的历史证据适用性，再由发布责任人按 G99 放行。
+记录实际测试版本／源码 commit、候选资产校验值、执行者、沿用理由及证据位置。
+CI 绿色、成功构建或 Makeself 校验通过不能代替所选功能断言。源码或候选资产
+变化时重新判断受影响证据，只补必要重验，不自动重跑整张功能表。
 
 确认 QEMU SOP 已通过，再次核对 `main` commit、版本和 CI run 后创建 tag：
 

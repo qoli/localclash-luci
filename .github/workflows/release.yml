@@ -18,7 +18,8 @@ concurrency:
   group: localclash-luci-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
-# 发布者须在推送 tag 或手动发布前通过 iStoreOS QEMU SOP；本 workflow 不执行该门槛。
+# 发布者须按功能表完成影响选测与历史证据核对，再按 G99 放行；不要求每次全表重测。
+# 本 workflow 不执行 QEMU 或自动核验功能表。
 # https://github.com/qoli/localClash/blob/main/docs/istoreos-release-test-sop.md
 jobs:
   test-and-release:
