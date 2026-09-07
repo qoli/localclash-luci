@@ -85,6 +85,48 @@ fixture_url="http://198.18.0.2:28480/candidate/dnsqualify-linux-arm64"
 result="$(dnsqualify_install)"
 printf '%s\n' "$result" | grep -q '"changed":false' || fail_test "explicit same-directory candidate asset was rejected: $result"
 
+assert_asset_url_rejected() {
+	local label="$1" manifest_url="$2" arch="$3" asset_url="$4"
+	DNSQUALIFY_MANIFEST_OVERRIDE="$manifest_url"
+	DNSQUALIFY_MANIFEST_URL="$manifest_url"
+	if dnsqualify_asset_url_allowed "$fixture_version" "$arch" "$asset_url"; then
+		fail_test "$label unexpectedly passed the candidate source contract"
+	fi
+}
+
+assert_asset_url_rejected "different origin" \
+	"http://198.18.0.2:28480/candidate/dnsqualify-release-manifest.json" "arm64" \
+	"http://evil.example/candidate/dnsqualify-linux-arm64"
+assert_asset_url_rejected "dot-dot traversal" \
+	"http://198.18.0.2:28480/candidate/dnsqualify-release-manifest.json" "arm64" \
+	"http://198.18.0.2:28480/candidate/../other/dnsqualify-linux-arm64"
+assert_asset_url_rejected "encoded dot-dot traversal" \
+	"http://198.18.0.2:28480/candidate/dnsqualify-release-manifest.json" "arm64" \
+	"http://198.18.0.2:28480/candidate/%2e%2e/other/dnsqualify-linux-arm64"
+assert_asset_url_rejected "extra subdirectory" \
+	"http://198.18.0.2:28480/candidate/dnsqualify-release-manifest.json" "arm64" \
+	"http://198.18.0.2:28480/candidate/sub/dnsqualify-linux-arm64"
+assert_asset_url_rejected "prefix-sibling directory" \
+	"http://198.18.0.2:28480/candidate/dnsqualify-release-manifest.json" "arm64" \
+	"http://198.18.0.2:28480/candidate2/dnsqualify-linux-arm64"
+assert_asset_url_rejected "query suffix" \
+	"http://198.18.0.2:28480/candidate/dnsqualify-release-manifest.json" "arm64" \
+	"http://198.18.0.2:28480/candidate/dnsqualify-linux-arm64?x=1"
+assert_asset_url_rejected "fragment suffix" \
+	"http://198.18.0.2:28480/candidate/dnsqualify-release-manifest.json" "arm64" \
+	"http://198.18.0.2:28480/candidate/dnsqualify-linux-arm64#x"
+assert_asset_url_rejected "manifest without path" \
+	"http://198.18.0.2" "arm64" \
+	"http://198.18.0.2/dnsqualify-linux-arm64"
+assert_asset_url_rejected "double-slash mismatch" \
+	"http://198.18.0.2:28480/candidate/dnsqualify-release-manifest.json" "arm64" \
+	"http://198.18.0.2:28480/candidate//dnsqualify-linux-arm64"
+assert_asset_url_rejected "cross-architecture asset" \
+	"http://198.18.0.2:28480/candidate/dnsqualify-release-manifest.json" "amd64" \
+	"http://198.18.0.2:28480/candidate/dnsqualify-linux-arm64"
+
+DNSQUALIFY_MANIFEST_OVERRIDE="http://198.18.0.2:28480/candidate/dnsqualify-release-manifest.json"
+DNSQUALIFY_MANIFEST_URL="$DNSQUALIFY_MANIFEST_OVERRIDE"
 fixture_url="https://github.com/qoli/localclash-luci/releases/download/v0.1.0-41/dnsqualify-linux-arm64"
 set +e
 result="$(dnsqualify_install)"
@@ -101,6 +143,26 @@ set -e
 [ "$rc" -ne 0 ] || fail_test "different-directory candidate asset unexpectedly succeeded"
 printf '%s\n' "$result" | grep -q '"code":"dnsqualify_manifest_url_invalid"' || fail_test "different-directory candidate asset returned wrong error: $result"
 
+fixture_url="http://198.18.0.2:28480/candidate/dnsqualify-linux-arm64"
+fixture_sha="invalid"
+set +e
+result="$(dnsqualify_install)"
+rc=$?
+set -e
+[ "$rc" -ne 0 ] || fail_test "malformed candidate checksum unexpectedly succeeded"
+printf '%s\n' "$result" | grep -q '"code":"dnsqualify_manifest_checksum_invalid"' || fail_test "malformed candidate checksum returned wrong error: $result"
+
+fixture_sha="$(printf '0%.0s' {1..64})"
+before_sha="$(shasum -a 256 "$DNSQUALIFY" | awk '{print $1}')"
+set +e
+result="$(dnsqualify_install)"
+rc=$?
+set -e
+[ "$rc" -ne 0 ] || fail_test "candidate checksum mismatch unexpectedly succeeded"
+printf '%s\n' "$result" | grep -q '"code":"dnsqualify_download_failed"' || fail_test "candidate checksum mismatch returned wrong error: $result"
+after_sha="$(shasum -a 256 "$DNSQUALIFY" | awk '{print $1}')"
+[ "$before_sha" = "$after_sha" ] || fail_test "failed candidate update changed installed binary"
+
 DNSQUALIFY_MANIFEST_OVERRIDE=""
 DNSQUALIFY_MANIFEST_URL="https://github.com/qoli/localclash-luci/releases/latest/download/dnsqualify-release-manifest.json"
 fixture_url="https://example.invalid/dnsqualify-linux-arm64"
@@ -111,7 +173,13 @@ set -e
 [ "$rc" -ne 0 ] || fail_test "non-official default asset unexpectedly succeeded"
 printf '%s\n' "$result" | grep -q '"code":"dnsqualify_manifest_url_invalid"' || fail_test "non-official default asset returned wrong error: $result"
 
+if dnsqualify_asset_url_allowed "v0.1.0-42" "arm64" \
+	"https://github.com/qoli/localclash-luci/releases/download/v0.1.0-41/dnsqualify-linux-arm64"; then
+	fail_test "default official asset with wrong version unexpectedly passed"
+fi
+
 fixture_url="https://github.com/qoli/localclash-luci/releases/download/v0.1.0-41/dnsqualify-linux-arm64"
+fixture_sha="$(shasum -a 256 "$download_source" | awk '{print $1}')"
 
 before_sha="$(shasum -a 256 "$DNSQUALIFY" | awk '{print $1}')"
 fixture_sha="$(printf '0%.0s' {1..64})"
