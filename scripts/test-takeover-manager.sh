@@ -5,6 +5,8 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 manager="${repo_root}/openwrt/luci-app-localclash/root/usr/libexec/localclash/takeover"
 apply_impl="${repo_root}/openwrt/luci-app-localclash/root/usr/libexec/localclash/takeover-apply"
 stop_impl="${repo_root}/openwrt/luci-app-localclash/root/usr/libexec/localclash/takeover-stop"
+dns_guard="${repo_root}/openwrt/luci-app-localclash/root/usr/libexec/localclash/dns-guard"
+dns_probe="${repo_root}/openwrt/luci-app-localclash/root/usr/libexec/localclash/dns-probe"
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "${tmp_dir}"' EXIT
 mkdir -p "${tmp_dir}/bin" "${tmp_dir}/work" "${tmp_dir}/state"
@@ -52,6 +54,14 @@ case "$*" in
   "list chain inet fw4 forward"|"list chain inet fw4 input"|"list chain inet fw4 srcnat") printf 'base chain\n' ;;
   "list chain inet fw4 localclash"|"list chain inet fw4 localclash_mangle") [ -f "$rules" ] && printf 'owned\n' ;;
   "list chain inet fw4 localclash_dns_redirect") [ -f "$rules" ] && printf 'localClash DNS hijack\nlocalClash local DNS bypass\n' ;;
+  "list chain inet fw4 nat_output") [ -f "$rules" ] && printf 'localClash DNS lease redirect\n' ;;
+  "list set inet fw4 localclash_dns_proxy_lease4"|"list set inet fw4 localclash_dns_proxy_lease6")
+    if [ -f "$rules" ]; then
+      printf 'set lease { flags timeout;'
+      [ -f "${MOCK_LEASE_FILE:-}" ] && printf ' elements = { 202.96.134.133 timeout 15s expires 10s; }'
+      printf ' }\n'
+    fi
+    ;;
 esac
 exit 0
 EOF
@@ -92,6 +102,7 @@ run_manager() {
 	PATH="${tmp_dir}/bin:${PATH}" \
 	MOCK_FACTS_FILE="${tmp_dir}/facts.json" \
 	MOCK_RULES_FILE="${tmp_dir}/rules" \
+	MOCK_LEASE_FILE="${tmp_dir}/lease" \
 	LOCALCLASH_CORE="${tmp_dir}/bin/localclash" \
 	LOCALCLASH_WORKDIR="${tmp_dir}/work" \
 	LOCALCLASH_TAKEOVER_STATE_DIR="${tmp_dir}/state" \
@@ -113,6 +124,12 @@ printf '%s\n' "$output" | grep -q '"effective":true' || fail_test "apply did not
 
 output="$(run_manager status --json)" || fail_test "status failed after apply: ${output}"
 printf '%s\n' "$output" | grep -q '"effective":true' || fail_test "status did not observe effective takeover: ${output}"
+printf '%s\n' "$output" | grep -q '"dns":{"failure_policy":"fail_open","path":"wan","lease_active":false' || fail_test "empty DNS lease was not reported as WAN fallback: ${output}"
+
+: > "${tmp_dir}/lease"
+output="$(run_manager status --json)" || fail_test "status failed with active lease: ${output}"
+printf '%s\n' "$output" | grep -q '"dns":{"failure_policy":"fail_open","path":"mihomo","lease_active":true' || fail_test "active DNS lease was not reported as Mihomo: ${output}"
+rm -f "${tmp_dir}/lease"
 
 rm -f "${tmp_dir}/state/status"
 if output="$(run_manager stop --json)"; then
@@ -130,13 +147,19 @@ if output="$(PATH="${tmp_dir}/bin:${PATH}" MOCK_RULES_FILE="${tmp_dir}/rules" LO
 fi
 printf '%s\n' "$output" | grep -q 'runtime_facts_core_missing' || fail_test "missing Core error was not explicit: ${output}"
 
-for implementation in "$manager" "$apply_impl" "$stop_impl"; do
+for implementation in "$manager" "$apply_impl" "$stop_impl" "$dns_guard"; do
 	sh -n "$implementation"
 done
 grep -Fq 'CORE="${LOCALCLASH_CORE:-/usr/local/bin/localclash}"' "$manager" || fail_test "takeover manager Core path does not match the installed product Core"
 grep -Fq 'WORKDIR="${LOCALCLASH_WORKDIR:-/root/localclash}"' "$manager" || fail_test "takeover manager workdir does not match the installed product state directory"
 grep -q 'ip rule add fwmark' "$apply_impl" || fail_test "apply implementation missing policy route"
 grep -q 'localClash DNS hijack' "$apply_impl" || fail_test "apply implementation missing DNS hijack"
+grep -q 'redirect to 53 comment "localClash DNS hijack to dnsmasq"' "$apply_impl" || fail_test "LAN DNS is not redirected through dnsmasq"
+grep -q 'localclash_dns_proxy_lease4' "$apply_impl" || fail_test "apply implementation missing IPv4 DNS health lease"
+grep -q 'localclash_dns_proxy_lease6' "$apply_impl" || fail_test "apply implementation missing IPv6 DNS health lease"
+grep -q 'meta skuid.*localClash DNS lease redirect' "$apply_impl" || fail_test "dnsmasq lease redirect is not UID-scoped"
+grep -q 'readlink.*status_file%/status.*/exe' "$apply_impl" || fail_test "dnsmasq UID discovery does not distinguish the real worker from ujail"
+grep -q '^#!/usr/bin/lua$' "$dns_probe" || fail_test "LuCI-owned DNS probe is not executable through Lua"
 grep -q 'discover_lan_networks' "$apply_impl" || fail_test "apply implementation missing OpenWrt LAN discovery"
 grep -q "localclash_bypass='1'" "$apply_impl" || fail_test "apply implementation missing explicit ingress-bypass discovery"
 grep -q 'localclash iifname @localclash_bypass_iif' "$apply_impl" || fail_test "TCP redirect chain missing ingress bypass"

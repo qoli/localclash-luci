@@ -1,0 +1,158 @@
+#!/bin/sh
+set -u
+
+STATE_DIR="${LOCALCLASH_TAKEOVER_STATE_DIR:-/tmp/localclash/router-takeover}"
+NFT="${LOCALCLASH_NFT:-nft}"
+DNS_PROBE="${LOCALCLASH_DNS_PROBE:-/usr/libexec/localclash/dns-probe}"
+RESOLV_FILES="${LOCALCLASH_WAN_RESOLV_FILES:-/tmp/resolv.conf.d/resolv.conf.auto /tmp/resolv.conf.auto}"
+INTERVAL_SECONDS="${LOCALCLASH_DNS_GUARD_INTERVAL_SECONDS:-5}"
+LEASE_SECONDS="${LOCALCLASH_DNS_LEASE_SECONDS:-15}"
+PROBE_TIMEOUT_SECONDS="${LOCALCLASH_DNS_PROBE_TIMEOUT_SECONDS:-3}"
+PROBE_SUFFIX="${LOCALCLASH_DNS_PROBE_SUFFIX:-cloudflare.com}"
+STATUS_FILE="${LOCALCLASH_DNS_GUARD_STATUS_FILE:-$STATE_DIR/dns-guard-status.json}"
+
+json_escape() {
+	printf '%s' "$1" | tr '\n\r\t' '   ' | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+write_status() {
+	result="$1"
+	reason="$2"
+	path="$3"
+	tmp="${STATUS_FILE}.tmp.$$"
+	mkdir -p "$STATE_DIR" || return 1
+	printf '{"schema_version":1,"updated_at_epoch":%s,"result":"%s","reason":"%s","dns_path":"%s"}\n' \
+		"$(date +%s)" "$(json_escape "$result")" "$(json_escape "$reason")" "$(json_escape "$path")" > "$tmp" || return 1
+	chmod 600 "$tmp" 2>/dev/null || true
+	mv -f "$tmp" "$STATUS_FILE"
+}
+
+valid_positive_integer() {
+	case "$1" in ''|*[!0-9]*|0) return 1 ;; esac
+	return 0
+}
+
+validate_settings() {
+	valid_positive_integer "$INTERVAL_SECONDS" || return 1
+	valid_positive_integer "$LEASE_SECONDS" || return 1
+	valid_positive_integer "$PROBE_TIMEOUT_SECONDS" || return 1
+	[ "$LEASE_SECONDS" -gt "$INTERVAL_SECONDS" ] || return 1
+	case "$PROBE_SUFFIX" in ''|*[!A-Za-z0-9.-]*|.*|*..*|*.) return 1 ;; esac
+}
+
+takeover_generation() {
+	[ -f "$STATE_DIR/status" ] && grep -qx applied "$STATE_DIR/status" 2>/dev/null || return 1
+	[ -s "$STATE_DIR/generation" ] || return 1
+	cat "$STATE_DIR/generation"
+}
+
+lease_rules_ready() {
+	"$NFT" list chain inet fw4 localclash_dns_redirect 2>/dev/null | grep -q 'localClash DNS hijack to dnsmasq' || return 1
+	"$NFT" list chain inet fw4 nat_output 2>/dev/null | grep -q 'localClash DNS lease redirect' || return 1
+	"$NFT" list set inet fw4 localclash_dns_proxy_lease4 >/dev/null 2>&1 || return 1
+	"$NFT" list set inet fw4 localclash_dns_proxy_lease6 >/dev/null 2>&1 || return 1
+}
+
+run_probe() {
+	transport="$1"
+	name="$2"
+	case "$transport" in udp|tcp) ;; *) return 1 ;; esac
+	"$DNS_PROBE" 127.0.0.1 "$DNS_PORT" "$name" "$transport" "$PROBE_TIMEOUT_SECONDS" >/dev/null 2>&1
+}
+
+collect_wan_dns() {
+	: > "$WAN4_FILE"
+	: > "$WAN6_FILE"
+	for resolv_file in $RESOLV_FILES; do
+		[ -f "$resolv_file" ] || continue
+		awk '$1 == "nameserver" { print $2 }' "$resolv_file" 2>/dev/null | while read -r address; do
+			address=${address%%\%*}
+			case "$address" in
+				''|127.*|0.0.0.0|::|::1) ;;
+				*[!0-9.]*)
+					case "$address" in *[!0-9A-Fa-f:]*) ;; *) printf '%s\n' "$address" >> "$WAN6_FILE" ;; esac
+					;;
+				*) printf '%s\n' "$address" >> "$WAN4_FILE" ;;
+			esac
+		done
+	done
+	sort -u "$WAN4_FILE" -o "$WAN4_FILE"
+	sort -u "$WAN6_FILE" -o "$WAN6_FILE"
+	[ -s "$WAN4_FILE" ] || [ -s "$WAN6_FILE" ]
+}
+
+renew_once() {
+	generation_before="$(takeover_generation 2>/dev/null || true)"
+	if [ -z "$generation_before" ]; then
+		write_status inactive takeover_not_applied wan
+		return 0
+	fi
+	if ! lease_rules_ready; then
+		write_status inactive takeover_rules_missing wan
+		return 0
+	fi
+	DNS_PORT="$(cat "$STATE_DIR/dns-port" 2>/dev/null || true)"
+	valid_positive_integer "$DNS_PORT" || {
+		write_status failure invalid_dns_port wan
+		return 1
+	}
+	nonce="$(date +%s)-$$"
+	probe_name="${nonce}.${PROBE_SUFFIX}"
+	if ! run_probe udp "udp-${probe_name}" || ! run_probe tcp "tcp-${probe_name}"; then
+		write_status failure mihomo_dns_probe_failed lease_expiring
+		return 1
+	fi
+	tmp_dir="$(mktemp -d /tmp/localclash-dns-lease.XXXXXX)" || {
+		write_status failure temporary_directory_failed wan
+		return 1
+	}
+	WAN4_FILE="$tmp_dir/wan4"
+	WAN6_FILE="$tmp_dir/wan6"
+	batch="$tmp_dir/lease.nft"
+	if ! collect_wan_dns; then
+		rm -rf "$tmp_dir"
+		write_status failure wan_dns_unavailable lease_expiring
+		return 1
+	fi
+	generation_after="$(takeover_generation 2>/dev/null || true)"
+	if [ "$generation_after" != "$generation_before" ]; then
+		rm -rf "$tmp_dir"
+		write_status inactive generation_changed wan
+		return 0
+	fi
+	{
+		printf 'flush set inet fw4 localclash_dns_proxy_lease4\n'
+		printf 'flush set inet fw4 localclash_dns_proxy_lease6\n'
+		while read -r address; do
+			[ -n "$address" ] && printf 'add element inet fw4 localclash_dns_proxy_lease4 { %s timeout %ss }\n' "$address" "$LEASE_SECONDS"
+		done < "$WAN4_FILE"
+		while read -r address; do
+			[ -n "$address" ] && printf 'add element inet fw4 localclash_dns_proxy_lease6 { %s timeout %ss }\n' "$address" "$LEASE_SECONDS"
+		done < "$WAN6_FILE"
+	} > "$batch"
+	if ! "$NFT" -f "$batch"; then
+		rm -rf "$tmp_dir"
+		write_status failure lease_refresh_failed lease_expiring
+		return 1
+	fi
+	rm -rf "$tmp_dir"
+	write_status success lease_refreshed mihomo
+}
+
+run_loop() {
+	while :; do
+		renew_once || true
+		sleep "$INTERVAL_SECONDS" || exit 1
+	done
+}
+
+validate_settings || {
+	write_status failure invalid_guard_settings wan || true
+	exit 1
+}
+command_name="${1:-run}"
+case "$command_name" in
+	run) run_loop ;;
+	once) renew_once ;;
+	*) printf 'usage: dns-guard [run|once]\n' >&2; exit 2 ;;
+esac

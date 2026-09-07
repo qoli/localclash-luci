@@ -1,0 +1,111 @@
+#!/usr/bin/lua
+
+require "nixio.util"
+local nixio = require "nixio"
+
+local host = arg[1]
+local port = tonumber(arg[2])
+local name = arg[3]
+local network = arg[4]
+local timeout = tonumber(arg[5]) or 3
+
+local function fail(message)
+	io.stderr:write("dns-probe: ", message, "\n")
+	os.exit(1)
+end
+
+if host ~= "127.0.0.1" or not port or port < 1 or port > 65535 then
+	fail("server must be 127.0.0.1 with a valid port")
+end
+if network ~= "udp" and network ~= "tcp" then
+	fail("network must be udp or tcp")
+end
+if not name or #name < 1 or #name > 253 then
+	fail("query name must contain 1 to 253 characters")
+end
+if not timeout or timeout <= 0 then
+	fail("timeout must be positive")
+end
+
+local function u16(value)
+	return string.char(math.floor(value / 256) % 256, value % 256)
+end
+
+local function encode_name(value)
+	local output = {}
+	for label in value:gmatch("([^.]+)") do
+		if #label < 1 or #label > 63 or label:find("[^A-Za-z0-9-]") then
+			fail("query name contains an invalid label")
+		end
+		output[#output + 1] = string.char(#label)
+		output[#output + 1] = label
+	end
+	if #output == 0 or value:find("..", 1, true) or value:sub(1, 1) == "." then
+		fail("query name contains an empty label")
+	end
+	output[#output + 1] = "\0"
+	return table.concat(output)
+end
+
+math.randomseed(os.time() + nixio.getpid())
+local query_id = math.random(0, 65535)
+local query = u16(query_id) .. u16(0x0100) .. u16(1) .. u16(0) .. u16(0) .. u16(0) ..
+	encode_name(name) .. u16(1) .. u16(1)
+local socket_type = network == "udp" and "dgram" or "stream"
+local sock, code, message = nixio.socket("inet", socket_type)
+if not sock then
+	fail(message or tostring(code or "socket creation failed"))
+end
+sock:setopt("socket", "sndtimeo", timeout)
+sock:setopt("socket", "rcvtimeo", timeout)
+local connected
+connected, code, message = sock:connect(host, port)
+if not connected then
+	sock:close()
+	fail(message or tostring(code or "connect failed"))
+end
+
+local payload = network == "tcp" and (u16(#query) .. query) or query
+local sent
+sent, code, message = sock:sendall(payload)
+if not sent then
+	sock:close()
+	fail(message or tostring(code or "send failed"))
+end
+
+local response
+if network == "tcp" then
+	local length_data
+	length_data, code, message = sock:recvall(2)
+	if not length_data or #length_data ~= 2 then
+		sock:close()
+		fail(message or tostring(code or "TCP response length is missing"))
+	end
+	local response_length = length_data:byte(1) * 256 + length_data:byte(2)
+	response, code, message = sock:recvall(response_length)
+else
+	response, code, message = sock:recv(4096)
+end
+sock:close()
+if not response then
+	fail(message or tostring(code or "response read failed"))
+end
+if #response < 12 then
+	fail("response is shorter than the DNS header")
+end
+if response:byte(1) * 256 + response:byte(2) ~= query_id then
+	fail("response transaction ID does not match query")
+end
+local flags_high = response:byte(3)
+local rcode = response:byte(4) % 16
+if flags_high < 128 then
+	fail("packet is not marked as a DNS response")
+end
+if math.floor(flags_high / 2) % 2 == 1 then
+	fail("DNS response is truncated")
+end
+if rcode ~= 0 and rcode ~= 3 then
+	fail("DNS response returned unhealthy rcode " .. rcode)
+end
+
+io.write(string.format('{"ok":true,"network":"%s","rcode":%d,"response_bytes":%d}\n', network, rcode, #response))

@@ -378,6 +378,8 @@ function takeoverDetails(takeover) {
 		status.runtime_running !== undefined ? 'runtime=' + status.runtime_running : null,
 		status.tun_device ? 'tun=' + status.tun_device : null,
 		status.dns_port ? 'dns=' + status.dns_port : null,
+		status.dns && status.dns.path ? 'dns-path=' + status.dns.path : null,
+		status.dns && status.dns.failure_policy ? 'dns-failure=' + status.dns.failure_policy : null,
 		status.redir_port ? 'redir=' + status.redir_port : null
 	];
 }

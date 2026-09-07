@@ -2,6 +2,7 @@
 
 CORE="${LOCALCLASH_CORE:-/usr/local/bin/localclash}"
 TAKEOVER_MANAGER="${LOCALCLASH_TAKEOVER_MANAGER:-/usr/libexec/localclash/takeover}"
+DNS_GUARD="${LOCALCLASH_DNS_GUARD:-/usr/libexec/localclash/dns-guard}"
 DNSQUALIFY="${LOCALCLASH_DNSQUALIFY:-/usr/local/bin/dnsqualify}"
 DNSQUALIFY_ECS_DOH_PROXY="${LOCALCLASH_DNSQUALIFY_ECS_DOH_PROXY:-http://127.0.0.1:7894}"
 STATE_DIR="${LOCALCLASH_STATE_DIR:-/root/localclash}"
@@ -2389,6 +2390,7 @@ CORE="$CORE"
 WORKDIR="$STATE_DIR"
 MCP_ADDR="$MCP_ADDR"
 HELPER="/usr/libexec/rpcd/localclash"
+DNS_GUARD="$DNS_GUARD"
 
 start_service() {
 	if [ ! -x "\$CORE" ]; then
@@ -2403,6 +2405,12 @@ start_service() {
 	if [ -x "\$HELPER" ]; then
 		procd_open_instance boot_restore
 		procd_set_param command /bin/sh -c 'sleep "\${LOCALCLASH_BOOT_RESTORE_DELAY:-20}"; exec "\$1" call boot_restore_startup_run' localclash-boot-restore "\$HELPER"
+		procd_close_instance
+	fi
+	if [ -x "\$DNS_GUARD" ]; then
+		procd_open_instance dns_guard
+		procd_set_param command "\$DNS_GUARD" run
+		procd_set_param respawn
 		procd_close_instance
 	fi
 }

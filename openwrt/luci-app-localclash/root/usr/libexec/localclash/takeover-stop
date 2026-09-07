@@ -7,6 +7,10 @@ ROUTE_TABLE="${ROUTE_TABLE:-27747}"
 LEGACY_FWMARK="${LEGACY_FWMARK:-0x162}"
 LEGACY_ROUTE_TABLE="${LEGACY_ROUTE_TABLE:-0x162}"
 
+# Revoke renewal eligibility before deleting any nftables state. A concurrent
+# guard can finish its probe, but it must fail its generation recheck.
+rm -f "$STATE_DIR/generation" >/dev/null 2>&1 || true
+
 legacy_rules="$(ip rule show 2>/dev/null || true)"
 legacy_routes="$(ip route show table "$LEGACY_ROUTE_TABLE" 2>/dev/null || true)"
 legacy_rules6="$(ip -6 rule show 2>/dev/null || true)"
@@ -31,7 +35,7 @@ for chain in localclash localclash_output localclash_mangle localclash_mangle_ou
 	nft flush chain inet fw4 "$chain" >/dev/null 2>&1 || true
 	nft delete chain inet fw4 "$chain" >/dev/null 2>&1 || true
 done
-for set_name in localclash_localnetwork localclash_localnetwork6 localclash_localdns4 localclash_localdns6; do
+for set_name in localclash_localnetwork localclash_localnetwork6 localclash_localdns4 localclash_localdns6 localclash_bypass_iif localclash_dns_proxy_lease4 localclash_dns_proxy_lease6; do
 	nft flush set inet fw4 "$set_name" >/dev/null 2>&1 || true
 	nft delete set inet fw4 "$set_name" >/dev/null 2>&1 || true
 done
@@ -39,4 +43,4 @@ while ip rule del fwmark "$FWMARK" table "$ROUTE_TABLE" >/dev/null 2>&1; do :; d
 ip route del default table "$ROUTE_TABLE" >/dev/null 2>&1 || true
 while ip -6 rule del fwmark "$FWMARK" table "$ROUTE_TABLE" >/dev/null 2>&1; do :; done
 ip -6 route del default table "$ROUTE_TABLE" >/dev/null 2>&1 || true
-rm -f "$STATE_DIR/status" "$STATE_DIR/local_dns4" "$STATE_DIR/local_dns6" "$STATE_DIR/local_domains" "$STATE_DIR/local_dns4.tmp" "$STATE_DIR/local_dns6.tmp" "$STATE_DIR/local_domains.tmp" >/dev/null 2>&1 || true
+rm -f "$STATE_DIR/status" "$STATE_DIR/dns-port" "$STATE_DIR/dnsmasq-uid" "$STATE_DIR/dns-guard-status.json" "$STATE_DIR/local_dns4" "$STATE_DIR/local_dns6" "$STATE_DIR/local_domains" "$STATE_DIR/local_dns4.tmp" "$STATE_DIR/local_dns6.tmp" "$STATE_DIR/local_domains.tmp" >/dev/null 2>&1 || true

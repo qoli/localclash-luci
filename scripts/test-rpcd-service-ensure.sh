@@ -33,6 +33,8 @@ printf '%s\n' "$result" | grep -q '"ok":true' || fail_test "service ensure faile
 sh -n "$SERVICE" || fail_test "generated service script has invalid shell syntax"
 grep -q 'procd_open_instance mcp' "$SERVICE" || fail_test "generated service script is missing the mcp instance"
 grep -q 'procd_open_instance boot_restore' "$SERVICE" || fail_test "generated service script is missing the boot_restore instance"
+grep -q 'procd_open_instance dns_guard' "$SERVICE" || fail_test "generated service script is missing the DNS guard instance"
+grep -q 'procd_set_param command "$DNS_GUARD" run' "$SERVICE" || fail_test "generated service script does not run the LuCI-owned DNS guard"
 [ ! -e "$SERVICE.tmp.$$" ] || fail_test "service ensure left its temporary file behind"
 
 blocked="${tmp_dir}/blocked"
