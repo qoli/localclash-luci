@@ -15,7 +15,19 @@ json_escape() {
 	printf '%s' "$1" | tr '\n\r\t' '   ' | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
+clear_inactive_status() {
+	[ -z "$(takeover_generation 2>/dev/null || true)" ] || return 0
+	rm -f "$STATUS_FILE" >/dev/null 2>&1 || true
+}
+
 write_status() {
+	expected_generation="$1"
+	shift
+	[ -n "$expected_generation" ] || {
+		clear_inactive_status
+		return 0
+	}
+	[ "$(takeover_generation 2>/dev/null || true)" = "$expected_generation" ] || return 0
 	result="$1"
 	reason="$2"
 	path="$3"
@@ -24,6 +36,10 @@ write_status() {
 	printf '{"schema_version":1,"updated_at_epoch":%s,"result":"%s","reason":"%s","dns_path":"%s"}\n' \
 		"$(date +%s)" "$(json_escape "$result")" "$(json_escape "$reason")" "$(json_escape "$path")" > "$tmp" || return 1
 	chmod 600 "$tmp" 2>/dev/null || true
+	if [ "$(takeover_generation 2>/dev/null || true)" != "$expected_generation" ]; then
+		rm -f "$tmp"
+		return 0
+	fi
 	mv -f "$tmp" "$STATUS_FILE"
 }
 
@@ -84,26 +100,26 @@ collect_wan_dns() {
 renew_once() {
 	generation_before="$(takeover_generation 2>/dev/null || true)"
 	if [ -z "$generation_before" ]; then
-		write_status inactive takeover_not_applied wan
+		clear_inactive_status
 		return 0
 	fi
 	if ! lease_rules_ready; then
-		write_status inactive takeover_rules_missing wan
+		write_status "$generation_before" inactive takeover_rules_missing wan
 		return 0
 	fi
 	DNS_PORT="$(cat "$STATE_DIR/dns-port" 2>/dev/null || true)"
 	valid_positive_integer "$DNS_PORT" || {
-		write_status failure invalid_dns_port wan
+		write_status "$generation_before" failure invalid_dns_port wan
 		return 1
 	}
 	nonce="$(date +%s)-$$"
 	probe_name="${nonce}.${PROBE_SUFFIX}"
 	if ! run_probe udp "udp-${probe_name}" || ! run_probe tcp "tcp-${probe_name}"; then
-		write_status failure mihomo_dns_probe_failed lease_expiring
+		write_status "$generation_before" failure mihomo_dns_probe_failed lease_expiring
 		return 1
 	fi
 	tmp_dir="$(mktemp -d /tmp/localclash-dns-lease.XXXXXX)" || {
-		write_status failure temporary_directory_failed wan
+		write_status "$generation_before" failure temporary_directory_failed wan
 		return 1
 	}
 	WAN4_FILE="$tmp_dir/wan4"
@@ -111,13 +127,12 @@ renew_once() {
 	batch="$tmp_dir/lease.nft"
 	if ! collect_wan_dns; then
 		rm -rf "$tmp_dir"
-		write_status failure wan_dns_unavailable lease_expiring
+		write_status "$generation_before" failure wan_dns_unavailable lease_expiring
 		return 1
 	fi
 	generation_after="$(takeover_generation 2>/dev/null || true)"
 	if [ "$generation_after" != "$generation_before" ]; then
 		rm -rf "$tmp_dir"
-		write_status inactive generation_changed wan
 		return 0
 	fi
 	{
@@ -132,11 +147,11 @@ renew_once() {
 	} > "$batch"
 	if ! "$NFT" -f "$batch"; then
 		rm -rf "$tmp_dir"
-		write_status failure lease_refresh_failed lease_expiring
+		write_status "$generation_before" failure lease_refresh_failed lease_expiring
 		return 1
 	fi
 	rm -rf "$tmp_dir"
-	write_status success lease_refreshed mihomo
+	write_status "$generation_before" success lease_refreshed mihomo
 }
 
 run_loop() {
@@ -147,7 +162,8 @@ run_loop() {
 }
 
 validate_settings || {
-	write_status failure invalid_guard_settings wan || true
+	generation="$(takeover_generation 2>/dev/null || true)"
+	write_status "$generation" failure invalid_guard_settings wan || true
 	exit 1
 }
 command_name="${1:-run}"

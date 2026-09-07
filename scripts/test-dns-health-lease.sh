@@ -17,6 +17,7 @@ cat > "${tmp_dir}/bin/dns-probe" <<'EOF'
 printf '%s\n' "$*" >> "$MOCK_PROBE_LOG"
 [ "${MOCK_PROBE_FAIL:-0}" = 0 ] || exit 1
 [ "${MOCK_CHANGE_GENERATION:-0}" = 0 ] || case "$*" in *tcp*) printf 'generation-2\n' > "$MOCK_GENERATION_FILE" ;; esac
+[ "${MOCK_REMOVE_GENERATION:-0}" = 0 ] || case "$*" in *tcp*) rm -f "$MOCK_GENERATION_FILE"; exit 1 ;; esac
 printf '{"ok":true}\n'
 EOF
 
@@ -52,6 +53,7 @@ run_guard() {
 	LOCALCLASH_DNS_PROBE_TIMEOUT_SECONDS=1 \
 	MOCK_PROBE_FAIL="${MOCK_PROBE_FAIL:-0}" \
 	MOCK_CHANGE_GENERATION="${MOCK_CHANGE_GENERATION:-0}" \
+	MOCK_REMOVE_GENERATION="${MOCK_REMOVE_GENERATION:-0}" \
 	MOCK_GENERATION_FILE="${tmp_dir}/state/generation" \
 	"$guard" once
 }
@@ -77,15 +79,32 @@ grep -q 'mihomo_dns_probe_failed' "${tmp_dir}/state/guard.json" || fail_test "pr
 MOCK_PROBE_FAIL=0
 MOCK_CHANGE_GENERATION=1
 printf 'generation-1\n' > "${tmp_dir}/state/generation"
-rm -f "${tmp_dir}/nft.log"
+rm -f "${tmp_dir}/nft.log" "${tmp_dir}/state/guard.json"
 run_guard || fail_test "generation change should be a successful no-op"
 [ ! -e "${tmp_dir}/nft.log" ] || fail_test "stale guard generation renewed the lease"
-grep -q 'generation_changed' "${tmp_dir}/state/guard.json" || fail_test "generation change status missing"
+[ ! -e "${tmp_dir}/state/guard.json" ] || fail_test "stale guard generation wrote status"
 
 MOCK_CHANGE_GENERATION=0
-rm -f "${tmp_dir}/state/status" "${tmp_dir}/nft.log"
+printf 'generation-1\n' > "${tmp_dir}/state/generation"
+rm -f "${tmp_dir}/nft.log" "${tmp_dir}/state/guard.json"
+MOCK_REMOVE_GENERATION=1
+if run_guard; then
+	fail_test "probe interrupted by takeover stop returned success"
+fi
+[ ! -e "${tmp_dir}/nft.log" ] || fail_test "stopped takeover guard mutated the lease"
+[ ! -e "${tmp_dir}/state/guard.json" ] || fail_test "stopped takeover guard recreated status"
+
+MOCK_REMOVE_GENERATION=0
+rm -f "${tmp_dir}/state/status" "${tmp_dir}/state/generation" "${tmp_dir}/nft.log"
+printf '{"result":"stale"}\n' > "${tmp_dir}/state/guard.json"
 run_guard || fail_test "inactive guard should be a successful no-op"
 [ ! -e "${tmp_dir}/nft.log" ] || fail_test "inactive guard mutated the lease"
-grep -q 'takeover_not_applied' "${tmp_dir}/state/guard.json" || fail_test "inactive status missing"
+[ ! -e "${tmp_dir}/state/guard.json" ] || fail_test "inactive guard status was not removed"
+
+printf '{"result":"stale"}\n' > "${tmp_dir}/state/guard.json"
+if LOCALCLASH_DNS_GUARD_INTERVAL_SECONDS=invalid run_guard; then
+	fail_test "invalid inactive guard settings returned success"
+fi
+[ ! -e "${tmp_dir}/state/guard.json" ] || fail_test "invalid inactive guard recreated status"
 
 printf 'dns health lease tests passed\n'
