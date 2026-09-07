@@ -23,6 +23,7 @@ MIRROR_CACHE_DIR="/tmp/localclash-mirror-cache"
 MCP_ADDR="${LOCALCLASH_MCP_ADDR:-0.0.0.0:8765}"
 MCP_HELP="/usr/share/localclash/mcp-help.txt"
 MANIFEST_URL="${LOCALCLASH_RELEASE_MANIFEST:-https://github.com/qoli/localClash/releases/latest/download/localclash-release-manifest.json}"
+DNSQUALIFY_MANIFEST_OVERRIDE="${LOCALCLASH_DNSQUALIFY_RELEASE_MANIFEST:-}"
 DNSQUALIFY_MANIFEST_URL="${LOCALCLASH_DNSQUALIFY_RELEASE_MANIFEST:-https://github.com/qoli/localclash-luci/releases/latest/download/dnsqualify-release-manifest.json}"
 LUCI_RELEASE_API="${LOCALCLASH_LUCI_RELEASE_API:-https://api.github.com/repos/qoli/localclash-luci/releases/latest}"
 GITHUB_MIRROR="${LOCALCLASH_GITHUB_MIRROR:-auto}"
@@ -3795,6 +3796,18 @@ dnsqualify_installed_version() {
 	"$DNSQUALIFY" --version 2>/dev/null | sed -n 's/^dnsqualify \(v[^ ]*\)$/\1/p' | head -n 1
 }
 
+dnsqualify_asset_url_allowed() {
+	local asset_version="$1" arch="$2" asset_url="$3" expected_url manifest_dir
+	if [ -n "$DNSQUALIFY_MANIFEST_OVERRIDE" ]; then
+		manifest_dir="${DNSQUALIFY_MANIFEST_URL%/*}"
+		[ "$manifest_dir" != "$DNSQUALIFY_MANIFEST_URL" ] || return 1
+		expected_url="$manifest_dir/dnsqualify-linux-$arch"
+	else
+		expected_url="https://github.com/qoli/localclash-luci/releases/download/$asset_version/dnsqualify-linux-$arch"
+	fi
+	[ "$asset_url" = "$expected_url" ]
+}
+
 dnsqualify_install() {
 	local arch tmpdir manifest binary manifest_schema asset_os asset_url asset_sha asset_version current_sha reported_version install_dir tmp_binary
 	if ! command -v jsonfilter >/dev/null 2>&1; then
@@ -3845,14 +3858,11 @@ dnsqualify_install() {
 			return 1
 			;;
 	esac
-	case "$asset_url" in
-		"https://github.com/qoli/localclash-luci/releases/download/$asset_version/dnsqualify-linux-$arch") ;;
-		*)
-			rm -rf "$tmpdir"
-			fail "dnsqualify_manifest_url_invalid" "dnsqualify Release 清单资产来源无效。"
-			return 1
-			;;
-	esac
+	if ! dnsqualify_asset_url_allowed "$asset_version" "$arch" "$asset_url"; then
+		rm -rf "$tmpdir"
+		fail "dnsqualify_manifest_url_invalid" "dnsqualify Release 清单资产来源无效。"
+		return 1
+	fi
 	case "$asset_sha" in
 		*[!0-9a-f]*|"")
 			rm -rf "$tmpdir"

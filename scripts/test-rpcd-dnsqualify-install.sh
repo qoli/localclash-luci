@@ -79,6 +79,40 @@ printf '%s\n' "$result" | grep -q '"changed":true' || fail_test "first install w
 result="$(dnsqualify_install)"
 printf '%s\n' "$result" | grep -q '"changed":false' || fail_test "equal checksum was not reported unchanged: $result"
 
+DNSQUALIFY_MANIFEST_OVERRIDE="http://198.18.0.2:28480/candidate/dnsqualify-release-manifest.json"
+DNSQUALIFY_MANIFEST_URL="$DNSQUALIFY_MANIFEST_OVERRIDE"
+fixture_url="http://198.18.0.2:28480/candidate/dnsqualify-linux-arm64"
+result="$(dnsqualify_install)"
+printf '%s\n' "$result" | grep -q '"changed":false' || fail_test "explicit same-directory candidate asset was rejected: $result"
+
+fixture_url="https://github.com/qoli/localclash-luci/releases/download/v0.1.0-41/dnsqualify-linux-arm64"
+set +e
+result="$(dnsqualify_install)"
+rc=$?
+set -e
+[ "$rc" -ne 0 ] || fail_test "mixed official asset with candidate manifest unexpectedly succeeded"
+printf '%s\n' "$result" | grep -q '"code":"dnsqualify_manifest_url_invalid"' || fail_test "mixed candidate source returned wrong error: $result"
+
+fixture_url="http://198.18.0.2:28480/other/dnsqualify-linux-arm64"
+set +e
+result="$(dnsqualify_install)"
+rc=$?
+set -e
+[ "$rc" -ne 0 ] || fail_test "different-directory candidate asset unexpectedly succeeded"
+printf '%s\n' "$result" | grep -q '"code":"dnsqualify_manifest_url_invalid"' || fail_test "different-directory candidate asset returned wrong error: $result"
+
+DNSQUALIFY_MANIFEST_OVERRIDE=""
+DNSQUALIFY_MANIFEST_URL="https://github.com/qoli/localclash-luci/releases/latest/download/dnsqualify-release-manifest.json"
+fixture_url="https://example.invalid/dnsqualify-linux-arm64"
+set +e
+result="$(dnsqualify_install)"
+rc=$?
+set -e
+[ "$rc" -ne 0 ] || fail_test "non-official default asset unexpectedly succeeded"
+printf '%s\n' "$result" | grep -q '"code":"dnsqualify_manifest_url_invalid"' || fail_test "non-official default asset returned wrong error: $result"
+
+fixture_url="https://github.com/qoli/localclash-luci/releases/download/v0.1.0-41/dnsqualify-linux-arm64"
+
 before_sha="$(shasum -a 256 "$DNSQUALIFY" | awk '{print $1}')"
 fixture_sha="$(printf '0%.0s' {1..64})"
 set +e
