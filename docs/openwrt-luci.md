@@ -1444,7 +1444,7 @@ the UI package should not require rebuilding router-specific Go binaries.
 发布功能验收统一遵循 Core 的
 [iStoreOS QEMU Release 测试 SOP](https://github.com/qoli/localClash/blob/main/docs/istoreos-release-test-sop.md)
 （相邻仓库路径：`../localClash/docs/istoreos-release-test-sop.md`）。iStoreOS QEMU
-是唯一功能发布门槛；下面的 CI 源码、构建与资产检查不替代该验收。Docker 测试
+按变更验证所选功能；下面的 CI 源码、构建与资产检查不替代交互证据。Docker 测试
 材料已退役，IPK/APK 的 Docker 构建与部署工具保留。ARM 真机不是强制门槛，
 x86 QEMU 通过不代表 ARM runtime 已验证。
 

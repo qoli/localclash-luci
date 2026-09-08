@@ -36,12 +36,13 @@ GitHub Release。已存在 Release、tag 与 Makefile 版本不一致、tag comm
 都会直接失败。
 
 上述 CI/Release 自动检查只覆盖源码测试、构建和资产完整性，不执行也不替代
-iStoreOS QEMU 功能验收。唯一功能发布门槛是 Core 维护的
+iStoreOS QEMU 交互测试。发布前按 Core 维护的
 [iStoreOS Release 测试 SOP](https://github.com/qoli/localClash/blob/main/docs/istoreos-release-test-sop.md)
-（相邻仓库路径：`../localClash/docs/istoreos-release-test-sop.md`）。
+（相邻仓库路径：`../localClash/docs/istoreos-release-test-sop.md`）执行。
 先维护 [功能测试表](https://github.com/qoli/localClash/blob/main/docs/istoreos-test-features.md)
 中的最后实际测试版本、结果和证据，再按本次改动选择必要回归；未受影响的功能
-经核对后沿用历史证据。发布不要求整张功能表都在本版重测。
+需要用于本轮结论时，经核对后沿用历史证据。按功能区分共用、核心整合与专属行为，
+不要求全表重测或所有功能双核心通过；目标是实际操作发现 Bug、修复并回验。
 Docker installer mock 测试已退役；Docker IPK/APK 构建与部署工具保留。
 ARM 真机不是强制发布门槛，x86 QEMU 通过也不代表 ARM runtime 已验证。
 
@@ -50,23 +51,11 @@ Release 页面顶部的普通用户下载指南由
 IPK、APK 及两个 iStoreOS 离线包的用途和下载链接；GitHub 自动生成的 changelog
 保留在指南下方。不要在 workflow 里手写版本化资产 URL。
 
-## 代理执行分工：独立 Kimi Reviewer 与 Luna High
+## 测试执行
 
-按 Core 的 [代理执行规范](https://github.com/qoli/localClash/blob/main/docs/istoreos-test-agent-workflow.md)
-执行：独立 Pi CLI Reviewer（`kimi-coding` / `k3-256k` / thinking `max`）根据变更、
-功能表及原始证据决定 test/reuse、必要子断言和真实依赖。保持独立空环境，停用工具、
-项目配置和历史会话；保留资料包 SHA、原始响应及完成事件。资料不足补审具体缺口，
-不能由主代理或 Luna 自审替代，也不因不确定而自动要求全表测试。
-
-测试及发布执行交给显式配置的 **Luna High** 子代理：`model: gpt-5.6-luna`、
-`reasoning_effort: high`。主代理协调授权、核对原始证据、整合功能表及本轮摘要。
-默认一个执行子代理，不得继续派发或共写 VM、端口、候选目录与现行报告。
-指定执行者不可用时报告相关执行缺口，不静默替换。沿用证据保留原版本及执行者。
-
-Reviewer ready 只允许派发测试，不代表产品 PASS 或发布授权。G99 审核本轮必要重验
-与仍适用的历史覆盖；不同功能最后测试版本不同不构成阻挡。只阻挡真正依赖缺失能力
-的分支，不能因排程中的前一项失败而停掉全部独立功能。
-推送、tag、Release、公告仍需用户授权及主代理最终审核；本节不改变 CI runner。
+按 Core 的 [测试 skill](https://github.com/qoli/localClash/blob/main/.codex/skills/localclash-istoreos-test/SKILL.md)
+执行：主代理按变更选测、核对证据并回写功能表，Luna High 子代理执行测试。
+发布摘要记录结果、修复回验及剩余风险；推送、tag、Release、公告仍需用户授权。
 
 ## 1. 准备版本提交
 
@@ -148,15 +137,16 @@ scripts/build-release-assets.sh "$tag"
 提交并推送源代码后，等待 `CI` workflow 成功。核对候选 artifact，而不是只看
 单个 build step。失败必须在源代码或脚本中修复；不得从本机手工上传替代产物。
 
-## 5. 人工通过 QEMU SOP，再创建并推送 Tag
+## 5. 完成发布前交互测试与风险评估，再创建并推送 Tag
 
 推送 release tag 前，Luna High 按选测计划完成受影响功能的必要 QEMU 重验，
-主代理核对本轮结果及未受影响功能的历史证据适用性，再由发布责任人按 G99 放行。
+主代理核对交互结果、修复回验及采用的历史证据，按 G99 提供剩余风险，再由发布责任人决定。
+共用操作选代表核心；差异涉及另一核心契约时才补相应回归，不复制整套流程。
 记录实际测试版本／源码 commit、候选资产校验值、执行者、沿用理由及证据位置。
 CI 绿色、成功构建或 Makeself 校验通过不能代替所选功能断言。源码或候选资产
 变化时重新判断受影响证据，只补必要重验，不自动重跑整张功能表。
 
-确认 QEMU SOP 已通过，再次核对 `main` commit、版本和 CI run 后创建 tag：
+确认所选交互测试结果、缺陷处置及发布风险已完成审核，再次核对 `main` commit、版本和 CI run 后创建 tag：
 
 ```sh
 tag="v<PKG_VERSION>-<PKG_RELEASE>"
@@ -168,7 +158,7 @@ git push origin "$tag"
 
 如需对已经存在但尚未公开 Release 的 tag 重跑，可从 Actions 手动运行
 `Release` 并输入该 tag。workflow 始终 checkout 该 tag，不会改用 `main`。
-手动重跑同样要求该 tag 对应的 QEMU SOP 验收已经通过。
+手动重跑同样要求已审核该 tag 对应的交互测试、缺陷处置及发布风险。
 
 ## 6. 发布后验证
 
