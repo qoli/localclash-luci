@@ -2362,6 +2362,37 @@ runtime_profile_body() {
 	printf '"runtime_profile":{"path":"%s","exists":%s,"mode":"%s","core":"%s","core_path":"%s","runtime_source":"%s","user_profile_path":"%s","user_profile_exists":%s}' "$(json_escape "$profile")" "$exists" "$(json_escape "$mode")" "$(json_escape "$core")" "$(json_escape "$core_path")" "$(json_escape "$runtime_source")" "$(json_escape "$user_profile_path")" "$user_profile_exists"
 }
 
+call_core_product_status() {
+	local workdir
+	if ! core_installed; then
+		fail "bootstrap_core_missing" "localClash 核心尚未安装。"
+		return 1
+	fi
+	workdir="$(resolve_state_dir)" || return 1
+	(cd / && LOCALCLASH_WORKDIR="$workdir" "$CORE" status --json)
+}
+
+status_required_bool() {
+	local path expression value
+	path="$1"
+	expression="$2"
+	value="$(jsonfilter -i "$path" -e "$expression" 2>/dev/null || true)"
+	case "$value" in
+		true|false)
+			printf '%s\n' "$value"
+			return 0
+			;;
+	esac
+	return 1
+}
+
+status_error_excerpt() {
+	local path
+	path="$1"
+	[ -s "$path" ] || return 0
+	sed -n '1,8p' "$path" 2>/dev/null | redact_diagnostic_stream | tr '\n\r\t' '   ' | cut -c1-480
+}
+
 mcp_help() {
 	endpoint="$(mcp_endpoint)"
 	if [ -f "$MCP_HELP" ]; then
@@ -2519,13 +2550,78 @@ service_start() {
 
 status() {
 	local core_ok mihomo_ok dashboard_ok subscription_ok runtime_ok summary runtime_profile base_assets boot_restore luci_package
+	local snapshot snapshot_error snapshot_rc snapshot_ok error_excerpt
+	local base_assets_ok base_assets_path base_assets_missing base_assets_policy base_assets_template base_assets_rule_source_dir base_assets_patch_count base_assets_patches_ok
+	local runtime_profile_path runtime_profile_exists runtime_profile_mode runtime_profile_core runtime_profile_core_path runtime_profile_source user_profile_path user_profile_exists
+	local subscription_configured_value subscription_merged_value
 	core_ok="$(core_installed && echo true || echo false)"
-	mihomo_ok="$(mihomo_core_installed && echo true || echo false)"
-	dashboard_ok="$(dashboard_installed && echo true || echo false)"
-	subscription_ok="$(subscription_configured && echo true || echo false)"
-	runtime_ok="$(runtime_running && echo true || echo false)"
-	runtime_profile="$(runtime_profile_body)"
-	base_assets="$(base_assets_body)"
+	if [ "$core_ok" = true ]; then
+		snapshot="/tmp/localclash-product-status.$$.json"
+		snapshot_error="${snapshot}.err"
+		call_core_product_status > "$snapshot" 2> "$snapshot_error"
+		snapshot_rc=$?
+		if [ "$snapshot_rc" -ne 0 ]; then
+			snapshot_ok="$(jsonfilter -i "$snapshot" -e '@.ok' 2>/dev/null || true)"
+			if [ "$snapshot_ok" = false ] && [ -n "$(jsonfilter -i "$snapshot" -e '@.code' 2>/dev/null || true)" ]; then
+				cat "$snapshot"
+				rm -f "$snapshot" "$snapshot_error"
+				return "$snapshot_rc"
+			fi
+			error_excerpt="$(status_error_excerpt "$snapshot_error")"
+			log_line "状态查询：localClash 核心无法执行 exit_code=$snapshot_rc error=$(printf '%s' "$error_excerpt" | cut -c1-160)"
+			rm -f "$snapshot" "$snapshot_error"
+			fail_with_details "core_status_unavailable" "localClash 核心存在但无法执行；配置、组件、订阅和运行时状态均未知。工作区未被判定为已重置，请勿执行完整重置。" '"core":{"installed":true,"path":"'"$(json_escape "$CORE")"'","state":"unavailable","exit_code":'"$snapshot_rc"',"error_excerpt":"'"$(json_escape "$error_excerpt")"'"}'
+			return 1
+		fi
+
+		snapshot_ok="$(status_required_bool "$snapshot" '@.ok')" || snapshot_ok=""
+		base_assets_ok="$(status_required_bool "$snapshot" '@.status.components.base_assets.installed')" || base_assets_ok=""
+		mihomo_ok="$(status_required_bool "$snapshot" '@.status.components.mihomo.installed')" || mihomo_ok=""
+		dashboard_ok="$(status_required_bool "$snapshot" '@.status.components.dashboard.installed')" || dashboard_ok=""
+		runtime_profile_exists="$(status_required_bool "$snapshot" '@.status.config.runtime_profile.exists')" || runtime_profile_exists=""
+		user_profile_exists="$(status_required_bool "$snapshot" '@.status.config.runtime_profile.user_profile_exists')" || user_profile_exists=""
+		subscription_configured_value="$(status_required_bool "$snapshot" '@.status.subscription.configured')" || subscription_configured_value=""
+		subscription_merged_value="$(status_required_bool "$snapshot" '@.status.subscription.merged.exists')" || subscription_merged_value=""
+		runtime_ok="$(status_required_bool "$snapshot" '@.status.runtime.running')" || runtime_ok=""
+		if [ "$snapshot_ok" != true ] || [ -z "$base_assets_ok" ] || [ -z "$mihomo_ok" ] || [ -z "$dashboard_ok" ] ||
+			[ -z "$runtime_profile_exists" ] || [ -z "$user_profile_exists" ] || [ -z "$subscription_configured_value" ] ||
+			[ -z "$subscription_merged_value" ] || [ -z "$runtime_ok" ]; then
+			rm -f "$snapshot" "$snapshot_error"
+			fail_with_details "core_status_invalid" "localClash 核心状态回复缺少必要字段；配置、组件、订阅和运行时状态均未知。工作区未被判定为已重置。" '"core":{"installed":true,"path":"'"$(json_escape "$CORE")"'","state":"unavailable"}'
+			return 1
+		fi
+
+		base_assets_path="$(jsonfilter -i "$snapshot" -e '@.status.components.base_assets.path' 2>/dev/null || printf '%s' "$STATE_DIR")"
+		base_assets_missing="$(jsonfilter -i "$snapshot" -e '@.status.components.base_assets.missing[*]' 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+		base_assets_policy="$(jsonfilter -i "$snapshot" -e '@.status.components.base_assets.policy' 2>/dev/null || true)"
+		base_assets_template="$(jsonfilter -i "$snapshot" -e '@.status.components.base_assets.default_template' 2>/dev/null || true)"
+		base_assets_rule_source_dir="$(jsonfilter -i "$snapshot" -e '@.status.components.base_assets.rule_source_dir' 2>/dev/null || true)"
+		base_assets_patch_count="$(jsonfilter -i "$snapshot" -e '@.status.components.base_assets.default_patch_count' 2>/dev/null || printf 0)"
+		case "$base_assets_patch_count" in ''|*[!0-9]*) base_assets_patch_count=0 ;; esac
+		base_assets_patches_ok="$(jsonfilter -i "$snapshot" -e '@.status.components.base_assets.default_patches_installed' 2>/dev/null || printf false)"
+		case "$base_assets_patches_ok" in true|false) ;; *) base_assets_patches_ok=false ;; esac
+		if [ "$base_assets_patch_count" -gt 0 ]; then
+			base_assets_template="patch_set"
+		fi
+		base_assets='"base_assets":{"installed":'"$base_assets_ok"',"path":"'"$(json_escape "$base_assets_path")"'","source":"localclash-core","missing":"'"$(json_escape "$base_assets_missing")"'","policy":"'"$(json_escape "$base_assets_policy")"'","default_template":"'"$(json_escape "$base_assets_template")"'","rule_source_dir":"'"$(json_escape "$base_assets_rule_source_dir")"'","default_patch_count":'"$base_assets_patch_count"',"default_patches_installed":'"$base_assets_patches_ok"'}'
+
+		runtime_profile_path="$(jsonfilter -i "$snapshot" -e '@.status.config.runtime_profile.path' 2>/dev/null || true)"
+		runtime_profile_mode="$(jsonfilter -i "$snapshot" -e '@.status.config.runtime_profile.mode' 2>/dev/null || true)"
+		runtime_profile_core="$(jsonfilter -i "$snapshot" -e '@.status.config.runtime_profile.core' 2>/dev/null || true)"
+		runtime_profile_core_path="$(jsonfilter -i "$snapshot" -e '@.status.config.runtime_profile.core_path' 2>/dev/null || true)"
+		runtime_profile_source="$(jsonfilter -i "$snapshot" -e '@.status.config.runtime_profile.runtime_source' 2>/dev/null || true)"
+		user_profile_path="$(jsonfilter -i "$snapshot" -e '@.status.config.runtime_profile.user_profile_path' 2>/dev/null || true)"
+		runtime_profile='"runtime_profile":{"path":"'"$(json_escape "$runtime_profile_path")"'","exists":'"$runtime_profile_exists"',"mode":"'"$(json_escape "$runtime_profile_mode")"'","core":"'"$(json_escape "$runtime_profile_core")"'","core_path":"'"$(json_escape "$runtime_profile_core_path")"'","runtime_source":"'"$(json_escape "$runtime_profile_source")"'","user_profile_path":"'"$(json_escape "$user_profile_path")"'","user_profile_exists":'"$user_profile_exists"'}'
+		if [ "$subscription_configured_value" = true ] && [ "$subscription_merged_value" = true ]; then subscription_ok=true; else subscription_ok=false; fi
+		rm -f "$snapshot" "$snapshot_error"
+	else
+		mihomo_ok=false
+		dashboard_ok=false
+		subscription_ok=false
+		runtime_ok=false
+		runtime_profile="$(runtime_profile_body)"
+		base_assets="$(base_assets_body)"
+	fi
 	boot_restore="$(boot_restore_json)"
 	luci_package="$(luci_package_json)"
 	summary='"components":{"mihomo":{"installed":'"$mihomo_ok"'},"dashboard":{"installed":'"$dashboard_ok"'}},"subscription":{"configured":'"$subscription_ok"'},"runtime":{"running":'"$runtime_ok"'}'

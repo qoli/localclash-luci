@@ -998,6 +998,22 @@ function updateStatePanelTakeoverAppearance(text, failed) {
 		tableBadge.classList.add('localclash-status-' + tone);
 }
 
+function statusFailureMessage(data) {
+	var message = (data && (data.error || data.message || data.code)) || _('未知错误');
+	var core = data && data.details && data.details.core;
+	var details = [];
+
+	if (!core)
+		return message;
+	if (core.state)
+		details.push('state=' + core.state);
+	if (core.exit_code !== null && core.exit_code !== undefined)
+		details.push('exit=' + core.exit_code);
+	if (core.error_excerpt)
+		details.push(core.error_excerpt);
+	return details.length ? message + ' · ' + details.join(' · ') : message;
+}
+
 function refreshOverviewStatus() {
 	var takeover = { pending: true };
 
@@ -1013,11 +1029,11 @@ function refreshOverviewStatus() {
 		var task = results[1] || {};
 		var state;
 
-		if (data.ok === false && data.error) {
+		if (data.ok === false) {
 			state = {
 				id: 'status_failed',
 				title: _('状态读取失败'),
-				message: data.error
+				message: statusFailureMessage(data)
 			};
 		}
 		else {
@@ -1027,8 +1043,8 @@ function refreshOverviewStatus() {
 		replaceContent('localclash-overview-state', statePanel(state));
 		replaceContent('localclash-overview-actions', primaryActions(state));
 		updateBootstrapStartButton();
-		lastOverviewStatusData = data.ok === false && data.error ? null : data;
-		replaceContent('localclash-overview-summary-body', data.ok === false && data.error ? summaryErrorTable(data.error) : summaryTable(data, takeover, task, state));
+		lastOverviewStatusData = data.ok === false ? null : data;
+		replaceContent('localclash-overview-summary-body', data.ok === false ? summaryErrorTable(statusFailureMessage(data)) : summaryTable(data, takeover, task, state));
 		return refreshTakeoverStatus().then(function() {
 			return refreshOneClickUpdateCheck(lastOverviewStatusData, task);
 		});
