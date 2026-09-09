@@ -73,7 +73,7 @@ run_apply() {
 	MOCK_NORESOLV="${MOCK_NORESOLV:-}" \
 	MOCK_SERVERS="${MOCK_SERVERS:-}" \
 	MOCK_SERVERSFILE="${MOCK_SERVERSFILE:-}" \
-	"$apply_impl"
+	bash "$apply_impl"
 }
 
 MOCK_NORESOLV=1
