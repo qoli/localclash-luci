@@ -3,12 +3,9 @@ set -u
 
 STATE_DIR="${LOCALCLASH_TAKEOVER_STATE_DIR:-/tmp/localclash/router-takeover}"
 NFT="${LOCALCLASH_NFT:-nft}"
-DNS_PROBE="${LOCALCLASH_DNS_PROBE:-/usr/libexec/localclash/dns-probe}"
 RESOLV_FILES="${LOCALCLASH_WAN_RESOLV_FILES:-/tmp/resolv.conf.d/resolv.conf.auto /tmp/resolv.conf.auto}"
 INTERVAL_SECONDS="${LOCALCLASH_DNS_GUARD_INTERVAL_SECONDS:-5}"
 LEASE_SECONDS="${LOCALCLASH_DNS_LEASE_SECONDS:-15}"
-PROBE_TIMEOUT_SECONDS="${LOCALCLASH_DNS_PROBE_TIMEOUT_SECONDS:-3}"
-PROBE_SUFFIX="${LOCALCLASH_DNS_PROBE_SUFFIX:-cloudflare.com}"
 STATUS_FILE="${LOCALCLASH_DNS_GUARD_STATUS_FILE:-$STATE_DIR/dns-guard-status.json}"
 
 json_escape() {
@@ -51,9 +48,7 @@ valid_positive_integer() {
 validate_settings() {
 	valid_positive_integer "$INTERVAL_SECONDS" || return 1
 	valid_positive_integer "$LEASE_SECONDS" || return 1
-	valid_positive_integer "$PROBE_TIMEOUT_SECONDS" || return 1
 	[ "$LEASE_SECONDS" -gt "$INTERVAL_SECONDS" ] || return 1
-	case "$PROBE_SUFFIX" in ''|*[!A-Za-z0-9.-]*|.*|*..*|*.) return 1 ;; esac
 }
 
 takeover_generation() {
@@ -69,11 +64,21 @@ lease_rules_ready() {
 	"$NFT" list set inet fw4 localclash_dns_proxy_lease6 >/dev/null 2>&1 || return 1
 }
 
-run_probe() {
-	transport="$1"
-	name="$2"
-	case "$transport" in udp|tcp) ;; *) return 1 ;; esac
-	"$DNS_PROBE" 127.0.0.1 "$DNS_PORT" "$name" "$transport" "$PROBE_TIMEOUT_SECONDS" >/dev/null 2>&1
+runtime_lifecycle_active() {
+	# This lease follows only the managed Mihomo lifecycle. DNS answers can vary
+	# while proxy exits change, and periodic synthetic queries are not lifecycle
+	# evidence.
+	runtime_state_file="$(cat "$STATE_DIR/runtime-state-file" 2>/dev/null || true)"
+	[ -f "$runtime_state_file" ] || return 1
+	[ "$(jsonfilter -i "$runtime_state_file" -e '@.state' 2>/dev/null || true)" = running ] || return 1
+	runtime_boot_id="$(jsonfilter -i "$runtime_state_file" -e '@.boot_id' 2>/dev/null || true)"
+	[ -n "$runtime_boot_id" ] && [ "$runtime_boot_id" = "$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)" ] || return 1
+	runtime_pid="$(jsonfilter -i "$runtime_state_file" -e '@.pid' 2>/dev/null || true)"
+	valid_positive_integer "$runtime_pid" || return 1
+	runtime_launcher="$(jsonfilter -i "$runtime_state_file" -e '@.launcher_path' 2>/dev/null || true)"
+	[ -n "$runtime_launcher" ] || return 1
+	[ "$(readlink "/proc/$runtime_pid/exe" 2>/dev/null || true)" = "$runtime_launcher" ] || return 1
+	kill -0 "$runtime_pid" 2>/dev/null
 }
 
 collect_wan_dns() {
@@ -107,25 +112,18 @@ renew_once() {
 		write_status "$generation_before" inactive takeover_rules_missing wan
 		return 0
 	fi
-	DNS_PORT="$(cat "$STATE_DIR/dns-port" 2>/dev/null || true)"
-	valid_positive_integer "$DNS_PORT" || {
-		write_status "$generation_before" failure invalid_dns_port wan
-		return 1
-	}
 	DNS_FAILURE_POLICY="$(cat "$STATE_DIR/dns-failure-policy" 2>/dev/null || true)"
-	nonce="$(date +%s)-$$"
-	probe_name="${nonce}.${PROBE_SUFFIX}"
-	if ! run_probe udp "udp-${probe_name}" || ! run_probe tcp "tcp-${probe_name}"; then
+	if ! runtime_lifecycle_active; then
 		case "$DNS_FAILURE_POLICY" in
-			fail_closed) write_status "$generation_before" failure mihomo_dns_probe_failed mihomo ;;
-			fail_open) write_status "$generation_before" failure mihomo_dns_probe_failed lease_expiring ;;
+			fail_closed) write_status "$generation_before" failure mihomo_runtime_inactive mihomo ;;
+			fail_open) write_status "$generation_before" failure mihomo_runtime_inactive lease_expiring ;;
 			*) write_status "$generation_before" failure invalid_dns_failure_policy unknown ;;
 		esac
 		return 1
 	fi
 	case "$DNS_FAILURE_POLICY" in
 		fail_closed)
-			write_status "$generation_before" success direct_mihomo mihomo
+			write_status "$generation_before" success runtime_active mihomo
 			return 0
 			;;
 		fail_open) ;;
@@ -167,7 +165,7 @@ renew_once() {
 		return 1
 	fi
 	rm -rf "$tmp_dir"
-	write_status "$generation_before" success lease_refreshed mihomo
+	write_status "$generation_before" success runtime_lease_refreshed mihomo
 }
 
 run_loop() {

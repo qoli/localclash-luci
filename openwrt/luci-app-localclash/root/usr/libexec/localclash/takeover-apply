@@ -4,6 +4,7 @@ set -eu
 : "${DNS_PORT:?DNS_PORT is required}"
 : "${REDIR_PORT:?REDIR_PORT is required}"
 : "${TUN_DEVICE:?TUN_DEVICE is required}"
+: "${RUNTIME_STATE_FILE:?RUNTIME_STATE_FILE is required}"
 FWMARK="${FWMARK:-0x6c63}"
 ROUTE_TABLE="${ROUTE_TABLE:-27747}"
 RULE_PREF="${RULE_PREF:-1890}"
@@ -49,7 +50,7 @@ cleanup_localclash_state() {
   ip route del default table "$ROUTE_TABLE" >/dev/null 2>&1 || true
   while ip -6 rule del fwmark "$FWMARK" table "$ROUTE_TABLE" >/dev/null 2>&1; do :; done
   ip -6 route del default table "$ROUTE_TABLE" >/dev/null 2>&1 || true
-  rm -f "$STATE_DIR/status" "$STATE_DIR/generation" "$STATE_DIR/dns-port" "$STATE_DIR/dnsmasq-uid" "$STATE_DIR/dns-failure-policy" "$STATE_DIR/dns-guard-status.json" "$STATE_DIR/local_dns4" "$STATE_DIR/local_dns6" "$STATE_DIR/local_domains" "$STATE_DIR/local_dns4.tmp" "$STATE_DIR/local_dns6.tmp" "$STATE_DIR/local_domains.tmp" >/dev/null 2>&1 || true
+  rm -f "$STATE_DIR/status" "$STATE_DIR/generation" "$STATE_DIR/dns-port" "$STATE_DIR/dnsmasq-uid" "$STATE_DIR/dns-failure-policy" "$STATE_DIR/runtime-state-file" "$STATE_DIR/dns-guard-status.json" "$STATE_DIR/local_dns4" "$STATE_DIR/local_dns6" "$STATE_DIR/local_domains" "$STATE_DIR/local_dns4.tmp" "$STATE_DIR/local_dns6.tmp" "$STATE_DIR/local_domains.tmp" >/dev/null 2>&1 || true
 }
 
 discover_dnsmasq_uid() {
@@ -91,7 +92,7 @@ select_dns_failure_policy() {
           esac
           address=${server%%#*}
           if [ "$address" != "$server" ] && [ "${server##*#}" != 53 ]; then
-            echo "dnsmasq noresolv WAN baseline uses an upstream port that the DNS health lease cannot intercept: $server" >&2
+            echo "dnsmasq noresolv WAN baseline uses an upstream port that the DNS lifecycle lease cannot intercept: $server" >&2
             return 1
           fi
           matched=false
@@ -323,6 +324,7 @@ add_dynamic_localdns6() {
 check_fw4_ready
 wait_tun_ready
 discover_dnsmasq_uid
+[ -f "$RUNTIME_STATE_FILE" ] || { echo "Mihomo runtime supervision state is unavailable before takeover apply: $RUNTIME_STATE_FILE" >&2; exit 1; }
 select_dns_failure_policy
 cleanup_legacy_localclash_route_identity
 trap 'cleanup_localclash_state' ERR
@@ -406,6 +408,7 @@ generation="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || printf '%s-%s' "$(
 printf '%s\n' "$DNS_PORT" > "$STATE_DIR/dns-port"
 printf '%s\n' "$DNSMASQ_UID" > "$STATE_DIR/dnsmasq-uid"
 printf '%s\n' "$DNS_FAILURE_POLICY" > "$STATE_DIR/dns-failure-policy"
+printf '%s\n' "$RUNTIME_STATE_FILE" > "$STATE_DIR/runtime-state-file"
 printf '%s\n' "$generation" > "$STATE_DIR/generation"
 printf 'applied\n' > "$STATE_DIR/status"
 trap - ERR
