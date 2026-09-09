@@ -113,6 +113,7 @@ done
 sh -n openwrt/luci-app-localclash/root/usr/libexec/rpcd/localclash
 sh -n packaging/istore/install.sh
 
+# Host-only contract checks; these do not count as iStoreOS functional acceptance.
 for test_script in scripts/test-rpcd-*.sh scripts/test-hotplug-takeover-restore.sh; do
   bash "$test_script"
 done

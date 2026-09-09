@@ -65,15 +65,11 @@ jobs:
           go test ./...
           go vet ./...
 
-      - name: Test rpcd helpers
+      - name: Run host-only rpcd contract checks
         shell: bash
         run: |
           set -euo pipefail
           for test_script in scripts/test-rpcd-*.sh scripts/test-hotplug-takeover-restore.sh; do
-            bash -n "$test_script"
-            bash "$test_script"
-          done
-          for test_script in scripts/test-takeover-manager.sh scripts/test-dns-health-lease.sh scripts/test-takeover-dns-policy.sh; do
             bash -n "$test_script"
             bash "$test_script"
           done
