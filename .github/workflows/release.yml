@@ -18,7 +18,7 @@ concurrency:
   group: localclash-luci-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
-# 发布者须按功能表完成影响选测与历史证据核对，再按 G99 放行；不要求每次全表重测。
+# 发布前按影响做交互测试与修复回验，以 G99 汇总风险；不要求全表或共用功能双核心重测。
 # 本 workflow 不执行 QEMU 或自动核验功能表。
 # https://github.com/qoli/localClash/blob/main/docs/istoreos-release-test-sop.md
 jobs:
