@@ -16,7 +16,7 @@ cd "$script_dir"
 command -v id >/dev/null 2>&1 || die "缺少必要命令：id"
 [ "$(id -u)" = 0 ] || die "必须以 root 身份安装。"
 
-for command_name in opkg sha256sum tar uname cp mv chmod mkdir rm find dirname; do
+for command_name in opkg sha256sum tar uname cp mv chmod mkdir rm find dirname grep; do
 	need_command "$command_name"
 done
 
@@ -40,9 +40,6 @@ case "$(uname -m)" in
 esac
 [ "$router_arch" = "$BUNDLE_ARCH" ] || die "架构不匹配：本机为 $router_arch，安装包为 $BUNDLE_ARCH。"
 [ -f "packages/$LUCI_IPK" ] || die "LuCI IPK 不存在：$LUCI_IPK"
-[ -f bin/localclash ] || die "localClash Core 不存在。"
-[ -f bin/dnsqualify ] || die "dnsqualify 不存在。"
-[ -f assets/localclash-base-assets.tar.gz ] || die "基础文件包不存在。"
 
 install_tmp="/tmp/localclash-istore-install.$$"
 state_dir=/root/localclash
@@ -50,6 +47,16 @@ cleanup() {
 	rm -rf "$install_tmp"
 }
 trap cleanup EXIT HUP INT TERM
+mkdir -p "$install_tmp/ipk-control"
+tar -xzf "packages/$LUCI_IPK" -C "$install_tmp/ipk-control" ./control.tar.gz || die "LuCI IPK 格式无效：无法读取 control.tar.gz。"
+tar -xzf "$install_tmp/ipk-control/control.tar.gz" -C "$install_tmp/ipk-control" ./control || die "LuCI IPK 格式无效：无法读取 control。"
+grep -qx 'Package: luci-app-localclash' "$install_tmp/ipk-control/control" || die "LuCI IPK 套件名称不匹配。"
+grep -qx 'Architecture: all' "$install_tmp/ipk-control/control" || die "LuCI IPK 架构不兼容：仅接受 Architecture: all；已在调用 opkg 前拒绝。"
+
+[ -f bin/localclash ] || die "localClash Core 不存在。"
+[ -f bin/dnsqualify ] || die "dnsqualify 不存在。"
+[ -f assets/localclash-base-assets.tar.gz ] || die "基础文件包不存在。"
+
 mkdir -p "$install_tmp/assets"
 tar -xzf assets/localclash-base-assets.tar.gz -C "$install_tmp/assets" || die "无法解压基础文件。"
 

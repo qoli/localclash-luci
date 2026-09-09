@@ -945,9 +945,6 @@ function commandButton(label, handler, extraClass, options) {
 			var progressTimer;
 			if (button.disabled)
 				return null;
-			if (options && options.confirm && !window.confirm(options.confirm))
-				return null;
-
 			function openProgressModal() {
 				modal = showTaskModal(label, false, options);
 				modal.logOutput.textContent = _('命令已发送，正在等待路由器返回结果…');
@@ -997,13 +994,40 @@ function commandButton(label, handler, extraClass, options) {
 				modal.statusLine.textContent = formatText(_('命令失败：%s'), err.message || String(err));
 				modal.resultOutput.textContent = JSON.stringify({ ok: false, message: err.message || String(err) }, null, 2);
 			}).finally(function() {
-				button.disabled = false;
+				button.disabled = options && typeof options.enabledWhen === 'function' ? !options.enabledWhen() : false;
 				button.removeAttribute('aria-busy');
 				button.classList.remove('localclash-busy');
 				button.textContent = label;
 			});
 		}
 	}, [ label ]);
+}
+
+function workspaceResetControls() {
+	var button;
+	var checkbox = E('input', {
+		'type': 'checkbox',
+		'id': 'localclash-workspace-reset-confirmed',
+		'name': 'localclash-workspace-reset-confirmed',
+		'change': function(ev) {
+			button.disabled = ev.currentTarget.checked !== true;
+		}
+	});
+	button = commandButton(_('完整重置 localClash'), callReset, 'localclash-danger', {
+		enabledWhen: function() { return checkbox.checked === true; }
+	});
+	button.disabled = true;
+
+	return E('div', {}, [
+		E('p', { 'class': 'localclash-muted' }, [
+			_('完整重置会删除 localClash 工作目录，包括运行状态、订阅、配置、生成文件和已下载资源。此操作无法撤销。')
+		]),
+		E('label', { 'class': 'localclash-reset-confirmation', 'for': 'localclash-workspace-reset-confirmed' }, [
+			checkbox,
+			E('span', {}, [ _('我已了解以上内容，并确认执行完整重置。') ])
+		]),
+		actionRow([ button ])
+	]);
 }
 
 function loadDashboardURL() {
@@ -1068,6 +1092,8 @@ return view.extend({
 				'.localclash-view .localclash-button:active{transform:translateY(1px)}',
 				'.localclash-view .localclash-button.localclash-busy{cursor:wait;opacity:.72}',
 				'.localclash-view .localclash-danger{border-color:#c44;background:#d94b4b;color:#fff}',
+				'.localclash-view .localclash-reset-confirmation{display:flex;gap:.5rem;align-items:flex-start;margin:.875rem 1rem 0;line-height:1.45;cursor:pointer}',
+				'.localclash-view .localclash-reset-confirmation input{flex:none;margin-top:.2rem}',
 				'.localclash-view + .cbi-page-actions,.localclash-view ~ .cbi-page-actions,.cbi-page-actions{display:none!important}',
 				'.localclash-view .localclash-muted{color:inherit;line-height:1.55}',
 				'.localclash-view .localclash-status-table{width:100%;max-width:100%}',
@@ -1120,11 +1146,7 @@ return view.extend({
 				commandButton(_('查看接管日志'), callTakeoverLogs, null, { keepOpen: true, copyResult: true, privacyConfirm: true })
 			])),
 			section(_('开机自动恢复'), bootRestoreControls()),
-			section(_('维护'), actionRow([
-				commandButton(_('完整重置 localClash'), callReset, 'localclash-danger', {
-					confirm: _('完整重置会删除 localClash 工作目录，包括运行状态、订阅、配置、生成文件和已下载资源。继续？')
-				})
-			]))
+			section(_('维护'), workspaceResetControls())
 		]);
 	}
 });

@@ -433,6 +433,44 @@ luci_install_log_excerpt() {
 	fi
 }
 
+luci_validate_ipk_package() {
+	local package workdir
+	package="$1"
+	workdir="$2"
+	mkdir -p "$workdir" || {
+		printf '无法建立 LuCI IPK 检查目录。\n'
+		return 1
+	}
+	if ! tar -xzf "$package" -C "$workdir" ./control.tar.gz; then
+		printf 'LuCI IPK 格式无效：无法读取 control.tar.gz。\n'
+		return 1
+	fi
+	if ! tar -xzf "$workdir/control.tar.gz" -C "$workdir" ./control; then
+		printf 'LuCI IPK 格式无效：无法读取 control。\n'
+		return 1
+	fi
+	if ! grep -qx 'Package: luci-app-localclash' "$workdir/control"; then
+		printf 'LuCI IPK 套件名称不匹配。\n'
+		return 1
+	fi
+	if ! grep -qx 'Architecture: all' "$workdir/control"; then
+		printf 'LuCI IPK 架构不兼容：仅接受 Architecture: all；已在调用 opkg 前拒绝。\n'
+		return 1
+	fi
+}
+
+luci_update_validate_package() {
+	local manager package workdir
+	manager="$1"
+	package="$2"
+	workdir="$3"
+	case "$manager" in
+		opkg) luci_validate_ipk_package "$package" "$workdir" ;;
+		apk) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
 luci_update_install_package() {
 	local manager package output rc
 	manager="$1"
@@ -754,6 +792,13 @@ luci_update() {
 	if [ -z "$actual" ] || [ "$expected" != "$actual" ]; then
 		rm -rf "$tmpdir"
 		fail_with_details "luci_package_checksum_failed" "LuCI 安装包 sha256 校验失败。" '"expected_sha":"'"$(json_escape "$expected")"'","actual_sha":"'"$(json_escape "$actual")"'","target_version":"'"$(json_escape "$asset_version")"'"'
+		return 1
+	fi
+	if ! luci_update_validate_package "$manager" "$package" "$tmpdir/package-control" > "$install_log" 2>&1; then
+		install_excerpt="$(luci_install_log_excerpt "$install_log")"
+		log_line "LuCI 更新：安装包元数据检查失败，未调用包管理器"
+		rm -rf "$tmpdir"
+		fail_with_details "luci_package_metadata_invalid" "LuCI 安装包的套件名称或架构不兼容，已在调用包管理器前拒绝。" '"install_output":"'"$install_excerpt"'","package_manager":"'"$(json_escape "$manager")"'","target_version":"'"$(json_escape "$asset_version")"'"'
 		return 1
 	fi
 	log_line "LuCI 更新：sha256 校验通过，正在安装"
