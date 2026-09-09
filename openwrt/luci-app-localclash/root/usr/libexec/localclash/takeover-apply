@@ -28,7 +28,7 @@ cleanup_localclash_nft() {
     nft flush chain inet fw4 "$chain" >/dev/null 2>&1 || true
     nft delete chain inet fw4 "$chain" >/dev/null 2>&1 || true
   done
-  for set_name in localclash_localnetwork localclash_localnetwork6 localclash_localdns4 localclash_localdns6 localclash_bypass_iif localclash_dns_proxy_lease4 localclash_dns_proxy_lease6; do
+  for set_name in localclash_localnetwork localclash_localnetwork6 localclash_localdns4 localclash_localdns6 localclash_bypass_iif localclash_dns_active4 localclash_dns_active6 localclash_dns_proxy_lease4 localclash_dns_proxy_lease6; do
     nft flush set inet fw4 "$set_name" >/dev/null 2>&1 || true
     nft delete set inet fw4 "$set_name" >/dev/null 2>&1 || true
   done
@@ -53,28 +53,10 @@ cleanup_localclash_state() {
   rm -f "$STATE_DIR/status" "$STATE_DIR/generation" "$STATE_DIR/dns-port" "$STATE_DIR/dnsmasq-uid" "$STATE_DIR/dns-failure-policy" "$STATE_DIR/runtime-state-file" "$STATE_DIR/dns-guard-status.json" "$STATE_DIR/local_dns4" "$STATE_DIR/local_dns6" "$STATE_DIR/local_domains" "$STATE_DIR/local_dns4.tmp" "$STATE_DIR/local_dns6.tmp" "$STATE_DIR/local_domains.tmp" >/dev/null 2>&1 || true
 }
 
-discover_dnsmasq_uid() {
-  if [ -n "${LOCALCLASH_DNSMASQ_UID:-}" ]; then
-    uid="$LOCALCLASH_DNSMASQ_UID"
-  else
-    uid="$(for status_file in /proc/[0-9]*/status; do
-      executable="$(readlink "${status_file%/status}/exe" 2>/dev/null || true)"
-      [ "${executable##*/}" = dnsmasq ] || continue
-      awk '/^Uid:/ { if ($3 == $5) print $3; else print $3 ":" $5 }' "$status_file"
-    done | sort -u)"
-  fi
-  case "$uid" in
-    ''|0|*[!0-9]*|*' '*) echo "dnsmasq worker must have one non-root effective UID before takeover apply" >&2; return 1 ;;
-  esac
-  DNSMASQ_UID="$uid"
-}
-
-select_dns_failure_policy() {
-  DNS_FAILURE_POLICY=fail_open
+require_dnsmasq_wan_baseline() {
   if command -v uci >/dev/null 2>&1 && [ "$(uci -q get dhcp.@dnsmasq[0].noresolv 2>/dev/null || printf '0')" = 1 ]; then
     servers="$(uci -q get dhcp.@dnsmasq[0].server 2>/dev/null || true)"
     serversfile="$(uci -q get dhcp.@dnsmasq[0].serversfile 2>/dev/null || true)"
-    managed_server=false
     wan_server=false
     [ -z "$serversfile" ] || {
       echo "dnsmasq noresolv mode has a servers-file outside localClash ownership; refusing to infer the DNS path" >&2
@@ -82,57 +64,19 @@ select_dns_failure_policy() {
     }
     for server in $servers; do
       case "$server" in
-        "127.0.0.1#$DNS_PORT"|"::1#$DNS_PORT") managed_server=true ;;
-        *)
-          case "$server" in
-            /*)
-              echo "dnsmasq noresolv mode contains a domain-scoped upstream; refusing to infer a catch-all DNS path: $server" >&2
-              return 1
-              ;;
-          esac
-          address=${server%%#*}
-          if [ "$address" != "$server" ] && [ "${server##*#}" != 53 ]; then
-            echo "dnsmasq noresolv WAN baseline uses an upstream port that the DNS lifecycle lease cannot intercept: $server" >&2
-            return 1
-          fi
-          matched=false
-          for resolv_file in $WAN_RESOLV_FILES; do
-            [ -f "$resolv_file" ] || continue
-            if awk -v address="$address" '$1 == "nameserver" { candidate=$2; sub(/%.*/, "", candidate); if (candidate == address) found=1 } END { exit !found }' "$resolv_file"; then
-              matched=true
-              break
-            fi
-          done
-          [ "$matched" = true ] || {
-            echo "dnsmasq noresolv mode contains a catch-all upstream that is not present in the current WAN resolver set: $server" >&2
-            return 1
-          }
-          wan_server=true
-          ;;
+        /*) echo "dnsmasq noresolv mode contains a domain-scoped upstream instead of a catch-all WAN baseline: $server" >&2; return 1 ;;
+        ''|'#'*|127.*|0.0.0.0|0.0.0.0#*|::|::#*|::1|::1#*|'[::]'|'[::]'#*|'[::1]'|'[::1]'#*) ;;
+        *) wan_server=true ;;
       esac
     done
-    if [ "$managed_server" = true ] && [ "$wan_server" = false ]; then
-      DNS_FAILURE_POLICY=fail_closed
-      return 0
-    fi
-    if [ "$managed_server" = false ] && [ "$wan_server" = true ]; then
-      DNS_FAILURE_POLICY=fail_open
-      return 0
-    fi
-    if [ "$managed_server" = true ] && [ "$wan_server" = true ]; then
-      echo "dnsmasq noresolv mode mixes managed Mihomo and WAN catch-all upstreams; refusing to infer one DNS failure policy" >&2
-      return 1
-    fi
-    {
-      echo "dnsmasq noresolv mode requires the managed Mihomo DNS endpoint 127.0.0.1#$DNS_PORT" >&2
-      return 1
-    }
+    [ "$wan_server" = true ] || { echo "dnsmasq noresolv mode has no non-loopback catch-all WAN upstream for DNS fail-safe" >&2; return 1; }
+    return 0
   fi
   for resolv_file in $WAN_RESOLV_FILES; do
     [ -f "$resolv_file" ] || continue
     awk '$1 == "nameserver" && $2 !~ /^(127\.|0\.0\.0\.0$|::$|::1$)/ { found=1 } END { exit !found }' "$resolv_file" && return 0
   done
-  echo "no non-loopback WAN DNS server is available for fail-open takeover" >&2
+  echo "no non-loopback WAN DNS server is available to dnsmasq for DNS fail-safe" >&2
   return 1
 }
 
@@ -323,9 +267,8 @@ add_dynamic_localdns6() {
 }
 check_fw4_ready
 wait_tun_ready
-discover_dnsmasq_uid
 [ -f "$RUNTIME_STATE_FILE" ] || { echo "Mihomo runtime supervision state is unavailable before takeover apply: $RUNTIME_STATE_FILE" >&2; exit 1; }
-select_dns_failure_policy
+require_dnsmasq_wan_baseline
 cleanup_legacy_localclash_route_identity
 trap 'cleanup_localclash_state' ERR
 cleanup_localclash_state
@@ -343,8 +286,8 @@ add element inet fw4 localclash_localnetwork { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0
 add set inet fw4 localclash_localdns4 { type ipv4_addr; flags interval; auto-merge; }
 add set inet fw4 localclash_localdns6 { type ipv6_addr; flags interval; auto-merge; }
 add set inet fw4 localclash_bypass_iif { type ifname; }
-add set inet fw4 localclash_dns_proxy_lease4 { type ipv4_addr; flags timeout; gc-interval 1s; }
-add set inet fw4 localclash_dns_proxy_lease6 { type ipv6_addr; flags timeout; gc-interval 1s; }
+add set inet fw4 localclash_dns_active4 { type ipv4_addr; flags interval,timeout; gc-interval 1s; }
+add set inet fw4 localclash_dns_active6 { type ipv6_addr; flags interval,timeout; gc-interval 1s; }
 EOF_NFT
 add_dynamic_localdns4
 add_dynamic_localdns6
@@ -368,6 +311,8 @@ add chain inet fw4 localclash_dns_redirect
 add rule inet fw4 localclash_dns_redirect iifname @localclash_bypass_iif counter return comment "localClash ingress bypass"
 add rule inet fw4 localclash_dns_redirect ip daddr @localclash_localdns4 counter return comment "localClash local DNS bypass"
 add rule inet fw4 localclash_dns_redirect ip6 daddr @localclash_localdns6 counter return comment "localClash local DNS bypass"
+add rule inet fw4 localclash_dns_redirect ip daddr @localclash_dns_active4 meta l4proto { tcp, udp } th dport 53 counter redirect to $DNS_PORT comment "localClash active DNS redirect"
+add rule inet fw4 localclash_dns_redirect ip6 daddr @localclash_dns_active6 meta l4proto { tcp, udp } th dport 53 counter redirect to $DNS_PORT comment "localClash active DNS redirect"
 add rule inet fw4 localclash_dns_redirect meta l4proto { tcp, udp } th dport 53 counter redirect to 53 comment "localClash DNS hijack to dnsmasq"
 insert rule inet fw4 dstnat position 0 meta l4proto { tcp, udp } th dport 53 counter jump localclash_dns_redirect comment "localClash DNS hijack"
 insert rule inet fw4 forward position 0 meta nfproto ipv4 oifname "$TUN_DEVICE" counter accept comment "localClash TUN forward"
@@ -381,8 +326,8 @@ nft 'add set inet fw4 localclash_localnetwork6 { type ipv6_addr; flags interval;
 nft 'add element inet fw4 localclash_localnetwork6 { ::/128, ::1/128, ::ffff:0:0/96, 64:ff9b::/96, 100::/64, 2001:db8::/32, fe80::/10, ff00::/8 }' >/dev/null 2>&1 || true
 add_dynamic_localnetwork6
 nft 'add chain inet fw4 nat_output { type nat hook output priority -1; }' >/dev/null 2>&1 || true
-nft "insert rule inet fw4 nat_output position 0 meta skuid $DNSMASQ_UID ip daddr @localclash_dns_proxy_lease4 meta l4proto { tcp, udp } th dport 53 counter redirect to $DNS_PORT comment \"localClash DNS lease redirect\""
-nft "insert rule inet fw4 nat_output position 0 meta skuid $DNSMASQ_UID ip6 daddr @localclash_dns_proxy_lease6 meta l4proto { tcp, udp } th dport 53 counter redirect to $DNS_PORT comment \"localClash DNS lease redirect\""
+nft "insert rule inet fw4 nat_output position 0 ip daddr 127.0.0.1 ip daddr @localclash_dns_active4 meta l4proto { tcp, udp } th dport 53 counter redirect to $DNS_PORT comment \"localClash active local DNS redirect\""
+nft "insert rule inet fw4 nat_output position 0 ip6 daddr ::1 ip6 daddr @localclash_dns_active6 meta l4proto { tcp, udp } th dport 53 counter redirect to $DNS_PORT comment \"localClash active local DNS redirect\""
 
 nft 'add chain inet fw4 localclash_v6' >/dev/null 2>&1 || true
 nft 'add rule inet fw4 localclash_v6 iifname @localclash_bypass_iif counter return comment "localClash ingress bypass"' >/dev/null 2>&1 || true
@@ -406,8 +351,6 @@ nft "insert rule inet fw4 srcnat position 0 meta nfproto ipv6 oifname \"$TUN_DEV
 
 generation="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || printf '%s-%s' "$(date +%s)" "$$")"
 printf '%s\n' "$DNS_PORT" > "$STATE_DIR/dns-port"
-printf '%s\n' "$DNSMASQ_UID" > "$STATE_DIR/dnsmasq-uid"
-printf '%s\n' "$DNS_FAILURE_POLICY" > "$STATE_DIR/dns-failure-policy"
 printf '%s\n' "$RUNTIME_STATE_FILE" > "$STATE_DIR/runtime-state-file"
 printf '%s\n' "$generation" > "$STATE_DIR/generation"
 printf 'applied\n' > "$STATE_DIR/status"

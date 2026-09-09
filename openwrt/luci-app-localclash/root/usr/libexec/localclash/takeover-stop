@@ -35,7 +35,7 @@ for chain in localclash localclash_output localclash_mangle localclash_mangle_ou
 	nft flush chain inet fw4 "$chain" >/dev/null 2>&1 || true
 	nft delete chain inet fw4 "$chain" >/dev/null 2>&1 || true
 done
-for set_name in localclash_localnetwork localclash_localnetwork6 localclash_localdns4 localclash_localdns6 localclash_bypass_iif localclash_dns_proxy_lease4 localclash_dns_proxy_lease6; do
+for set_name in localclash_localnetwork localclash_localnetwork6 localclash_localdns4 localclash_localdns6 localclash_bypass_iif localclash_dns_active4 localclash_dns_active6 localclash_dns_proxy_lease4 localclash_dns_proxy_lease6; do
 	nft flush set inet fw4 "$set_name" >/dev/null 2>&1 || true
 	nft delete set inet fw4 "$set_name" >/dev/null 2>&1 || true
 done

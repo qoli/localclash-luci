@@ -3,7 +3,6 @@ set -u
 
 STATE_DIR="${LOCALCLASH_TAKEOVER_STATE_DIR:-/tmp/localclash/router-takeover}"
 NFT="${LOCALCLASH_NFT:-nft}"
-RESOLV_FILES="${LOCALCLASH_WAN_RESOLV_FILES:-/tmp/resolv.conf.d/resolv.conf.auto /tmp/resolv.conf.auto}"
 INTERVAL_SECONDS="${LOCALCLASH_DNS_GUARD_INTERVAL_SECONDS:-5}"
 LEASE_SECONDS="${LOCALCLASH_DNS_LEASE_SECONDS:-15}"
 STATUS_FILE="${LOCALCLASH_DNS_GUARD_STATUS_FILE:-$STATE_DIR/dns-guard-status.json}"
@@ -59,15 +58,16 @@ takeover_generation() {
 
 lease_rules_ready() {
 	"$NFT" list chain inet fw4 localclash_dns_redirect 2>/dev/null | grep -q 'localClash DNS hijack to dnsmasq' || return 1
-	"$NFT" list chain inet fw4 nat_output 2>/dev/null | grep -q 'localClash DNS lease redirect' || return 1
-	"$NFT" list set inet fw4 localclash_dns_proxy_lease4 >/dev/null 2>&1 || return 1
-	"$NFT" list set inet fw4 localclash_dns_proxy_lease6 >/dev/null 2>&1 || return 1
+	"$NFT" list chain inet fw4 localclash_dns_redirect 2>/dev/null | grep -q 'localClash active DNS redirect' || return 1
+	"$NFT" list chain inet fw4 nat_output 2>/dev/null | grep -q 'localClash active local DNS redirect' || return 1
+	"$NFT" list set inet fw4 localclash_dns_active4 >/dev/null 2>&1 || return 1
+	"$NFT" list set inet fw4 localclash_dns_active6 >/dev/null 2>&1 || return 1
 }
 
 runtime_lifecycle_active() {
-	# This lease follows only the managed Mihomo lifecycle. DNS answers can vary
-	# while proxy exits change, and periodic synthetic queries are not lifecycle
-	# evidence.
+	# The token follows only the critical managed Mihomo lifecycle. DNS answers
+	# can vary while proxy exits change, so synthetic WAN queries are not used as
+	# lifecycle evidence.
 	runtime_state_file="$(cat "$STATE_DIR/runtime-state-file" 2>/dev/null || true)"
 	[ -f "$runtime_state_file" ] || return 1
 	[ "$(jsonfilter -i "$runtime_state_file" -e '@.state' 2>/dev/null || true)" = running ] || return 1
@@ -81,27 +81,6 @@ runtime_lifecycle_active() {
 	kill -0 "$runtime_pid" 2>/dev/null
 }
 
-collect_wan_dns() {
-	: > "$WAN4_FILE"
-	: > "$WAN6_FILE"
-	for resolv_file in $RESOLV_FILES; do
-		[ -f "$resolv_file" ] || continue
-		awk '$1 == "nameserver" { print $2 }' "$resolv_file" 2>/dev/null | while read -r address; do
-			address=${address%%\%*}
-			case "$address" in
-				''|127.*|0.0.0.0|::|::1) ;;
-				*[!0-9.]*)
-					case "$address" in *[!0-9A-Fa-f:]*) ;; *) printf '%s\n' "$address" >> "$WAN6_FILE" ;; esac
-					;;
-				*) printf '%s\n' "$address" >> "$WAN4_FILE" ;;
-			esac
-		done
-	done
-	sort -u "$WAN4_FILE" -o "$WAN4_FILE"
-	sort -u "$WAN6_FILE" -o "$WAN6_FILE"
-	[ -s "$WAN4_FILE" ] || [ -s "$WAN6_FILE" ]
-}
-
 renew_once() {
 	generation_before="$(takeover_generation 2>/dev/null || true)"
 	if [ -z "$generation_before" ]; then
@@ -109,62 +88,34 @@ renew_once() {
 		return 0
 	fi
 	if ! lease_rules_ready; then
-		write_status "$generation_before" inactive takeover_rules_missing wan
+		write_status "$generation_before" inactive takeover_rules_missing dnsmasq
 		return 0
 	fi
-	DNS_FAILURE_POLICY="$(cat "$STATE_DIR/dns-failure-policy" 2>/dev/null || true)"
 	if ! runtime_lifecycle_active; then
-		case "$DNS_FAILURE_POLICY" in
-			fail_closed) write_status "$generation_before" failure mihomo_runtime_inactive mihomo ;;
-			fail_open) write_status "$generation_before" failure mihomo_runtime_inactive lease_expiring ;;
-			*) write_status "$generation_before" failure invalid_dns_failure_policy unknown ;;
-		esac
+		write_status "$generation_before" failure mihomo_runtime_inactive lease_expiring
 		return 1
 	fi
-	case "$DNS_FAILURE_POLICY" in
-		fail_closed)
-			write_status "$generation_before" success runtime_active mihomo
-			return 0
-			;;
-		fail_open) ;;
-		*)
-			write_status "$generation_before" failure invalid_dns_failure_policy unknown
-			return 1
-			;;
-	esac
-	tmp_dir="$(mktemp -d /tmp/localclash-dns-lease.XXXXXX)" || {
-		write_status "$generation_before" failure temporary_directory_failed wan
+	batch="$(mktemp /tmp/localclash-dns-lease.XXXXXX)" || {
+		write_status "$generation_before" failure temporary_file_failed dnsmasq
 		return 1
 	}
-	WAN4_FILE="$tmp_dir/wan4"
-	WAN6_FILE="$tmp_dir/wan6"
-	batch="$tmp_dir/lease.nft"
-	if ! collect_wan_dns; then
-		rm -rf "$tmp_dir"
-		write_status "$generation_before" failure wan_dns_unavailable lease_expiring
-		return 1
-	fi
 	generation_after="$(takeover_generation 2>/dev/null || true)"
 	if [ "$generation_after" != "$generation_before" ]; then
-		rm -rf "$tmp_dir"
+		rm -f "$batch"
 		return 0
 	fi
 	{
-		printf 'flush set inet fw4 localclash_dns_proxy_lease4\n'
-		printf 'flush set inet fw4 localclash_dns_proxy_lease6\n'
-		while read -r address; do
-			[ -n "$address" ] && printf 'add element inet fw4 localclash_dns_proxy_lease4 { %s timeout %ss }\n' "$address" "$LEASE_SECONDS"
-		done < "$WAN4_FILE"
-		while read -r address; do
-			[ -n "$address" ] && printf 'add element inet fw4 localclash_dns_proxy_lease6 { %s timeout %ss }\n' "$address" "$LEASE_SECONDS"
-		done < "$WAN6_FILE"
+		printf 'flush set inet fw4 localclash_dns_active4\n'
+		printf 'flush set inet fw4 localclash_dns_active6\n'
+		printf 'add element inet fw4 localclash_dns_active4 { 0.0.0.0/0 timeout %ss }\n' "$LEASE_SECONDS"
+		printf 'add element inet fw4 localclash_dns_active6 { ::/0 timeout %ss }\n' "$LEASE_SECONDS"
 	} > "$batch"
 	if ! "$NFT" -f "$batch"; then
-		rm -rf "$tmp_dir"
+		rm -f "$batch"
 		write_status "$generation_before" failure lease_refresh_failed lease_expiring
 		return 1
 	fi
-	rm -rf "$tmp_dir"
+	rm -f "$batch"
 	write_status "$generation_before" success runtime_lease_refreshed mihomo
 }
 
@@ -177,7 +128,7 @@ run_loop() {
 
 validate_settings || {
 	generation="$(takeover_generation 2>/dev/null || true)"
-	write_status "$generation" failure invalid_guard_settings wan || true
+	write_status "$generation" failure invalid_guard_settings dnsmasq || true
 	exit 1
 }
 command_name="${1:-run}"

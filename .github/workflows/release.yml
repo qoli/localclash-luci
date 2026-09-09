@@ -93,6 +93,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          scripts/test-dns-guard-deadman.sh
           for test_script in scripts/test-rpcd-*.sh scripts/test-hotplug-takeover-restore.sh; do
             bash -n "$test_script"
             bash "$test_script"
