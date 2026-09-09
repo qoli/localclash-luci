@@ -43,4 +43,4 @@ while ip rule del fwmark "$FWMARK" table "$ROUTE_TABLE" >/dev/null 2>&1; do :; d
 ip route del default table "$ROUTE_TABLE" >/dev/null 2>&1 || true
 while ip -6 rule del fwmark "$FWMARK" table "$ROUTE_TABLE" >/dev/null 2>&1; do :; done
 ip -6 route del default table "$ROUTE_TABLE" >/dev/null 2>&1 || true
-rm -f "$STATE_DIR/status" "$STATE_DIR/dns-port" "$STATE_DIR/dnsmasq-uid" "$STATE_DIR/dns-guard-status.json" "$STATE_DIR/local_dns4" "$STATE_DIR/local_dns6" "$STATE_DIR/local_domains" "$STATE_DIR/local_dns4.tmp" "$STATE_DIR/local_dns6.tmp" "$STATE_DIR/local_domains.tmp" >/dev/null 2>&1 || true
+rm -f "$STATE_DIR/status" "$STATE_DIR/dns-port" "$STATE_DIR/dnsmasq-uid" "$STATE_DIR/dns-failure-policy" "$STATE_DIR/dns-guard-status.json" "$STATE_DIR/local_dns4" "$STATE_DIR/local_dns6" "$STATE_DIR/local_domains" "$STATE_DIR/local_dns4.tmp" "$STATE_DIR/local_dns6.tmp" "$STATE_DIR/local_domains.tmp" >/dev/null 2>&1 || true

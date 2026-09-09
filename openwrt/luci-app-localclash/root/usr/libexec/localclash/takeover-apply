@@ -10,6 +10,7 @@ RULE_PREF="${RULE_PREF:-1890}"
 LEGACY_FWMARK="${LEGACY_FWMARK:-0x162}"
 LEGACY_ROUTE_TABLE="${LEGACY_ROUTE_TABLE:-0x162}"
 TUN_WAIT_SECONDS="${TUN_WAIT_SECONDS:-30}"
+WAN_RESOLV_FILES="${LOCALCLASH_WAN_RESOLV_FILES:-/tmp/resolv.conf.d/resolv.conf.auto /tmp/resolv.conf.auto}"
 command -v fw4 >/dev/null 2>&1
 command -v nft >/dev/null 2>&1
 mkdir -p "$STATE_DIR"
@@ -48,7 +49,7 @@ cleanup_localclash_state() {
   ip route del default table "$ROUTE_TABLE" >/dev/null 2>&1 || true
   while ip -6 rule del fwmark "$FWMARK" table "$ROUTE_TABLE" >/dev/null 2>&1; do :; done
   ip -6 route del default table "$ROUTE_TABLE" >/dev/null 2>&1 || true
-  rm -f "$STATE_DIR/status" "$STATE_DIR/generation" "$STATE_DIR/dns-port" "$STATE_DIR/dnsmasq-uid" "$STATE_DIR/dns-guard-status.json" "$STATE_DIR/local_dns4" "$STATE_DIR/local_dns6" "$STATE_DIR/local_domains" "$STATE_DIR/local_dns4.tmp" "$STATE_DIR/local_dns6.tmp" "$STATE_DIR/local_domains.tmp" >/dev/null 2>&1 || true
+  rm -f "$STATE_DIR/status" "$STATE_DIR/generation" "$STATE_DIR/dns-port" "$STATE_DIR/dnsmasq-uid" "$STATE_DIR/dns-failure-policy" "$STATE_DIR/dns-guard-status.json" "$STATE_DIR/local_dns4" "$STATE_DIR/local_dns6" "$STATE_DIR/local_domains" "$STATE_DIR/local_dns4.tmp" "$STATE_DIR/local_dns6.tmp" "$STATE_DIR/local_domains.tmp" >/dev/null 2>&1 || true
 }
 
 discover_dnsmasq_uid() {
@@ -67,12 +68,66 @@ discover_dnsmasq_uid() {
   DNSMASQ_UID="$uid"
 }
 
-check_wan_dns_baseline() {
+select_dns_failure_policy() {
+  DNS_FAILURE_POLICY=fail_open
   if command -v uci >/dev/null 2>&1 && [ "$(uci -q get dhcp.@dnsmasq[0].noresolv 2>/dev/null || printf '0')" = 1 ]; then
-    echo "dnsmasq noresolv is enabled; WAN DNS cannot act as the fail-open baseline" >&2
-    return 1
+    servers="$(uci -q get dhcp.@dnsmasq[0].server 2>/dev/null || true)"
+    serversfile="$(uci -q get dhcp.@dnsmasq[0].serversfile 2>/dev/null || true)"
+    managed_server=false
+    wan_server=false
+    [ -z "$serversfile" ] || {
+      echo "dnsmasq noresolv mode has a servers-file outside localClash ownership; refusing to infer the DNS path" >&2
+      return 1
+    }
+    for server in $servers; do
+      case "$server" in
+        "127.0.0.1#$DNS_PORT"|"::1#$DNS_PORT") managed_server=true ;;
+        *)
+          case "$server" in
+            /*)
+              echo "dnsmasq noresolv mode contains a domain-scoped upstream; refusing to infer a catch-all DNS path: $server" >&2
+              return 1
+              ;;
+          esac
+          address=${server%%#*}
+          if [ "$address" != "$server" ] && [ "${server##*#}" != 53 ]; then
+            echo "dnsmasq noresolv WAN baseline uses an upstream port that the DNS health lease cannot intercept: $server" >&2
+            return 1
+          fi
+          matched=false
+          for resolv_file in $WAN_RESOLV_FILES; do
+            [ -f "$resolv_file" ] || continue
+            if awk -v address="$address" '$1 == "nameserver" { candidate=$2; sub(/%.*/, "", candidate); if (candidate == address) found=1 } END { exit !found }' "$resolv_file"; then
+              matched=true
+              break
+            fi
+          done
+          [ "$matched" = true ] || {
+            echo "dnsmasq noresolv mode contains a catch-all upstream that is not present in the current WAN resolver set: $server" >&2
+            return 1
+          }
+          wan_server=true
+          ;;
+      esac
+    done
+    if [ "$managed_server" = true ] && [ "$wan_server" = false ]; then
+      DNS_FAILURE_POLICY=fail_closed
+      return 0
+    fi
+    if [ "$managed_server" = false ] && [ "$wan_server" = true ]; then
+      DNS_FAILURE_POLICY=fail_open
+      return 0
+    fi
+    if [ "$managed_server" = true ] && [ "$wan_server" = true ]; then
+      echo "dnsmasq noresolv mode mixes managed Mihomo and WAN catch-all upstreams; refusing to infer one DNS failure policy" >&2
+      return 1
+    fi
+    {
+      echo "dnsmasq noresolv mode requires the managed Mihomo DNS endpoint 127.0.0.1#$DNS_PORT" >&2
+      return 1
+    }
   fi
-  for resolv_file in /tmp/resolv.conf.d/resolv.conf.auto /tmp/resolv.conf.auto; do
+  for resolv_file in $WAN_RESOLV_FILES; do
     [ -f "$resolv_file" ] || continue
     awk '$1 == "nameserver" && $2 !~ /^(127\.|0\.0\.0\.0$|::$|::1$)/ { found=1 } END { exit !found }' "$resolv_file" && return 0
   done
@@ -266,13 +321,13 @@ add_dynamic_localdns6() {
   sort -u "$STATE_DIR/local_dns6" > "$STATE_DIR/local_dns6.tmp" 2>/dev/null && mv "$STATE_DIR/local_dns6.tmp" "$STATE_DIR/local_dns6" || true
 }
 check_fw4_ready
+wait_tun_ready
+discover_dnsmasq_uid
+select_dns_failure_policy
 cleanup_legacy_localclash_route_identity
 trap 'cleanup_localclash_state' ERR
 cleanup_localclash_state
-wait_tun_ready
 discover_lan_domains
-discover_dnsmasq_uid
-check_wan_dns_baseline
 
 while ip rule del fwmark "$FWMARK" table "$ROUTE_TABLE" >/dev/null 2>&1; do :; done
 ip rule add fwmark "$FWMARK" table "$ROUTE_TABLE" pref "$RULE_PREF"
@@ -350,6 +405,7 @@ nft "insert rule inet fw4 srcnat position 0 meta nfproto ipv6 oifname \"$TUN_DEV
 generation="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || printf '%s-%s' "$(date +%s)" "$$")"
 printf '%s\n' "$DNS_PORT" > "$STATE_DIR/dns-port"
 printf '%s\n' "$DNSMASQ_UID" > "$STATE_DIR/dnsmasq-uid"
+printf '%s\n' "$DNS_FAILURE_POLICY" > "$STATE_DIR/dns-failure-policy"
 printf '%s\n' "$generation" > "$STATE_DIR/generation"
 printf 'applied\n' > "$STATE_DIR/status"
 trap - ERR

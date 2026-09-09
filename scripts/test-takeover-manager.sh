@@ -83,12 +83,13 @@ set -eu
 mkdir -p "$STATE_DIR"
 : > "$MOCK_RULES_FILE"
 printf 'applied\n' > "$STATE_DIR/status"
+printf 'fail_open\n' > "$STATE_DIR/dns-failure-policy"
 EOF
 
 cat > "${tmp_dir}/fake-stop" <<'EOF'
 #!/bin/sh
 set -eu
-rm -f "$MOCK_RULES_FILE" "$STATE_DIR/status"
+rm -f "$MOCK_RULES_FILE" "$STATE_DIR/status" "$STATE_DIR/dns-failure-policy"
 EOF
 chmod 755 "${tmp_dir}/bin/"* "${tmp_dir}/fake-apply" "${tmp_dir}/fake-stop"
 
@@ -131,6 +132,16 @@ output="$(run_manager status --json)" || fail_test "status failed with active le
 printf '%s\n' "$output" | grep -q '"dns":{"failure_policy":"fail_open","path":"mihomo","lease_active":true' || fail_test "active DNS lease was not reported as Mihomo: ${output}"
 rm -f "${tmp_dir}/lease"
 
+printf 'fail_closed\n' > "${tmp_dir}/state/dns-failure-policy"
+output="$(run_manager status --json)" || fail_test "status failed in configured direct mode: ${output}"
+printf '%s\n' "$output" | grep -q '"dns":{"failure_policy":"fail_closed","path":"mihomo","lease_active":false' || fail_test "configured direct DNS mode was not reported: ${output}"
+
+rm -f "${tmp_dir}/state/dns-failure-policy"
+output="$(run_manager status --json)" || fail_test "status failed with missing DNS policy state: ${output}"
+printf '%s\n' "$output" | grep -q '"effective":false' || fail_test "missing DNS policy state was treated as effective: ${output}"
+printf '%s\n' "$output" | grep -q '"dns":{"failure_policy":"unknown","path":"unknown"' || fail_test "missing DNS policy state was not explicit: ${output}"
+printf 'fail_open\n' > "${tmp_dir}/state/dns-failure-policy"
+
 rm -f "${tmp_dir}/state/status"
 if output="$(run_manager stop --json)"; then
 	fail_test "stop accepted takeover rules without ownership state: ${output}"
@@ -159,6 +170,7 @@ grep -q 'localclash_dns_proxy_lease4' "$apply_impl" || fail_test "apply implemen
 grep -q 'localclash_dns_proxy_lease6' "$apply_impl" || fail_test "apply implementation missing IPv6 DNS health lease"
 grep -q 'meta skuid.*localClash DNS lease redirect' "$apply_impl" || fail_test "dnsmasq lease redirect is not UID-scoped"
 grep -q 'readlink.*status_file%/status.*/exe' "$apply_impl" || fail_test "dnsmasq UID discovery does not distinguish the real worker from ujail"
+grep -q 'select_dns_failure_policy' "$apply_impl" || fail_test "apply implementation does not classify the configured dnsmasq path"
 grep -q '^#!/usr/bin/lua$' "$dns_probe" || fail_test "LuCI-owned DNS probe is not executable through Lua"
 grep -q 'discover_lan_networks' "$apply_impl" || fail_test "apply implementation missing OpenWrt LAN discovery"
 grep -q "localclash_bypass='1'" "$apply_impl" || fail_test "apply implementation missing explicit ingress-bypass discovery"

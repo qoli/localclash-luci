@@ -36,6 +36,7 @@ chmod 755 "${tmp_dir}/bin/dns-probe" "${tmp_dir}/bin/nft" "$guard"
 printf 'applied\n' > "${tmp_dir}/state/status"
 printf 'generation-1\n' > "${tmp_dir}/state/generation"
 printf '7874\n' > "${tmp_dir}/state/dns-port"
+printf 'fail_open\n' > "${tmp_dir}/state/dns-failure-policy"
 cat > "${tmp_dir}/resolv.auto" <<'EOF'
 nameserver 202.96.134.133
 nameserver 2001:4860:4860::8888
@@ -67,6 +68,18 @@ grep -q '202.96.134.133 timeout 15s' "${tmp_dir}/nft.log" || fail_test "WAN IPv4
 grep -q '2001:4860:4860::8888 timeout 15s' "${tmp_dir}/nft.log" || fail_test "WAN IPv6 resolver was not leased"
 ! grep -q '127.0.0.1 timeout' "${tmp_dir}/nft.log" || fail_test "loopback resolver entered the WAN lease"
 grep -q '"result":"success"' "${tmp_dir}/state/guard.json" || fail_test "successful renewal status missing"
+
+printf 'fail_closed\n' > "${tmp_dir}/state/dns-failure-policy"
+rm -f "${tmp_dir}/nft.log" "${tmp_dir}/probe.log" "${tmp_dir}/state/guard.json"
+run_guard || fail_test "configured direct Mihomo guard check failed"
+[ "$(wc -l < "${tmp_dir}/probe.log" | tr -d ' ')" = 2 ] || fail_test "configured direct mode did not probe UDP and TCP"
+[ ! -e "${tmp_dir}/nft.log" ] || fail_test "configured direct mode created a WAN DNS lease"
+grep -q '"result":"success"' "${tmp_dir}/state/guard.json" || fail_test "configured direct mode success status missing"
+grep -q '"reason":"direct_mihomo"' "${tmp_dir}/state/guard.json" || fail_test "configured direct mode reason missing"
+grep -q '"dns_path":"mihomo"' "${tmp_dir}/state/guard.json" || fail_test "configured direct mode path missing"
+
+printf 'fail_open\n' > "${tmp_dir}/state/dns-failure-policy"
+rm -f "${tmp_dir}/probe.log" "${tmp_dir}/state/guard.json"
 
 rm -f "${tmp_dir}/nft.log"
 MOCK_PROBE_FAIL=1

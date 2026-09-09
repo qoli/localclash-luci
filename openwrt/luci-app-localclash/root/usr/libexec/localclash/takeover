@@ -102,6 +102,7 @@ observe_rules() {
 	DNS_LEASE_SETS=false
 	DNS_LEASE_REDIRECT=false
 	DNS_LEASE_ACTIVE=false
+	DNS_FAILURE_POLICY="$(cat "$STATE_DIR/dns-failure-policy" 2>/dev/null || true)"
 	STATE_OWNED=false
 	command -v fw4 >/dev/null 2>&1 && FW4_AVAILABLE=true
 	command -v nft >/dev/null 2>&1 && NFT_AVAILABLE=true
@@ -138,6 +139,7 @@ observe_rules() {
 }
 
 rules_effective() {
+	case "$DNS_FAILURE_POLICY" in fail_open|fail_closed) ;; *) return 1 ;; esac
 	[ "$FW4_AVAILABLE" = true ] && [ "$NFT_AVAILABLE" = true ] && [ "$FW4_TABLE" = true ] && \
 	[ "$FW4_BASE_CHAINS" = true ] && [ "$TUN_INTERFACE" = true ] && [ "$FWMARK_ROUTE_V4" = true ] && \
 	[ "$NFT_CHAINS" = true ] && [ "$TCP_REDIRECT" = true ] && [ "$UDP_TUN_MARK" = true ] && \
@@ -158,15 +160,21 @@ status_json() {
 	if [ "$PROFILE_MODE" = router ] && [ "$RUNTIME_RUNNING" = true ] && [ "$CONTROLLER_READY" = true ] && rules_effective; then
 		EFFECTIVE=true
 	fi
-	DNS_PATH="wan"
-	[ "$DNS_LEASE_ACTIVE" = true ] && DNS_PATH="mihomo"
+	case "$DNS_FAILURE_POLICY" in
+		fail_closed) DNS_PATH="mihomo" ;;
+		fail_open)
+			DNS_PATH="wan"
+			[ "$DNS_LEASE_ACTIVE" = true ] && DNS_PATH="mihomo"
+			;;
+		*) DNS_FAILURE_POLICY="unknown"; DNS_PATH="unknown" ;;
+	esac
 	GUARD_RESULT="$(jsonfilter -i "$STATE_DIR/dns-guard-status.json" -e '@.result' 2>/dev/null || true)"
 	GUARD_REASON="$(jsonfilter -i "$STATE_DIR/dns-guard-status.json" -e '@.reason' 2>/dev/null || true)"
 	GUARD_UPDATED="$(jsonfilter -i "$STATE_DIR/dns-guard-status.json" -e '@.updated_at_epoch' 2>/dev/null || true)"
 	case "$GUARD_UPDATED" in ''|*[!0-9]*) GUARD_UPDATED_JSON=null ;; *) GUARD_UPDATED_JSON="$GUARD_UPDATED" ;; esac
-	printf '{"ok":true,"changed":false,"summary":"OpenWrt takeover status read.","status":{"schema_version":1,"profile_mode":"%s","runtime_running":%s,"controller_ready":%s,"effective":%s,"state_owned":%s,"config_sha256":"%s","dns_port":%s,"redir_port":%s,"tproxy_port":%s,"tun_device":"%s","ipv6":%s,"dns":{"failure_policy":"fail_open","path":"%s","lease_active":%s,"guard_result":"%s","guard_reason":"%s","guard_updated_at_epoch":%s},"checks":{"fw4_available":%s,"nft_available":%s,"fw4_table":%s,"fw4_base_chains":%s,"tun_interface":%s,"fwmark_route_v4":%s,"nft_chains":%s,"tcp_redirect":%s,"udp_tun_mark":%s,"dns_hijack":%s,"local_dns_bypass":%s,"dns_lease_sets":%s,"dns_lease_redirect":%s}},"changes":[],"warnings":[],"next_actions":[]}\n' \
+	printf '{"ok":true,"changed":false,"summary":"OpenWrt takeover status read.","status":{"schema_version":1,"profile_mode":"%s","runtime_running":%s,"controller_ready":%s,"effective":%s,"state_owned":%s,"config_sha256":"%s","dns_port":%s,"redir_port":%s,"tproxy_port":%s,"tun_device":"%s","ipv6":%s,"dns":{"failure_policy":"%s","path":"%s","lease_active":%s,"guard_result":"%s","guard_reason":"%s","guard_updated_at_epoch":%s},"checks":{"fw4_available":%s,"nft_available":%s,"fw4_table":%s,"fw4_base_chains":%s,"tun_interface":%s,"fwmark_route_v4":%s,"nft_chains":%s,"tcp_redirect":%s,"udp_tun_mark":%s,"dns_hijack":%s,"local_dns_bypass":%s,"dns_lease_sets":%s,"dns_lease_redirect":%s}},"changes":[],"warnings":[],"next_actions":[]}\n' \
 		"$(json_escape "$PROFILE_MODE")" "$RUNTIME_RUNNING" "$CONTROLLER_READY" "$EFFECTIVE" "$STATE_OWNED" \
-		"$(json_escape "$CONFIG_SHA256")" "$DNS_PORT_JSON" "$REDIR_PORT_JSON" "$TPROXY_PORT_JSON" "$(json_escape "$TUN_DEVICE")" "$IPV6" "$DNS_PATH" "$DNS_LEASE_ACTIVE" "$(json_escape "$GUARD_RESULT")" "$(json_escape "$GUARD_REASON")" "$GUARD_UPDATED_JSON" \
+		"$(json_escape "$CONFIG_SHA256")" "$DNS_PORT_JSON" "$REDIR_PORT_JSON" "$TPROXY_PORT_JSON" "$(json_escape "$TUN_DEVICE")" "$IPV6" "$DNS_FAILURE_POLICY" "$DNS_PATH" "$DNS_LEASE_ACTIVE" "$(json_escape "$GUARD_RESULT")" "$(json_escape "$GUARD_REASON")" "$GUARD_UPDATED_JSON" \
 		"$FW4_AVAILABLE" "$NFT_AVAILABLE" "$FW4_TABLE" "$FW4_BASE_CHAINS" "$TUN_INTERFACE" "$FWMARK_ROUTE_V4" "$NFT_CHAINS" "$TCP_REDIRECT" "$UDP_TUN_MARK" "$DNS_HIJACK" "$LOCAL_DNS_BYPASS" "$DNS_LEASE_SETS" "$DNS_LEASE_REDIRECT"
 }
 
@@ -206,8 +214,20 @@ apply_takeover() {
 		fail "takeover_repair_state_write_failed" "OpenWrt takeover was applied but repair state could not be recorded." '{}'
 		return 1
 	}
-	printf '{"ok":true,"changed":true,"summary":"OpenWrt takeover applied and verified; DNS starts on the WAN baseline until the health guard grants a lease.","status":{"schema_version":1,"profile_mode":"router","runtime_running":true,"controller_ready":true,"effective":true,"state_owned":true,"config_sha256":"%s","dns_port":%s,"redir_port":%s,"tproxy_port":%s,"tun_device":"%s","ipv6":%s,"dns":{"failure_policy":"fail_open","path":"wan","lease_active":false}},"changes":["takeover_applied","dns_health_lease_initialized"],"warnings":[],"next_actions":[]}\n' \
-		"$(json_escape "$CONFIG_SHA256")" "$DNS_PORT" "$REDIR_PORT" "$TPROXY_PORT" "$(json_escape "$TUN_DEVICE")" "$IPV6"
+	case "$DNS_FAILURE_POLICY" in
+		fail_closed)
+			printf '{"ok":true,"changed":true,"summary":"OpenWrt takeover applied and verified with the configured direct Mihomo DNS path.","status":{"schema_version":1,"profile_mode":"router","runtime_running":true,"controller_ready":true,"effective":true,"state_owned":true,"config_sha256":"%s","dns_port":%s,"redir_port":%s,"tproxy_port":%s,"tun_device":"%s","ipv6":%s,"dns":{"failure_policy":"fail_closed","path":"mihomo","lease_active":false}},"changes":["takeover_applied"],"warnings":[],"next_actions":[]}\n' \
+				"$(json_escape "$CONFIG_SHA256")" "$DNS_PORT" "$REDIR_PORT" "$TPROXY_PORT" "$(json_escape "$TUN_DEVICE")" "$IPV6"
+			;;
+		fail_open)
+			printf '{"ok":true,"changed":true,"summary":"OpenWrt takeover applied and verified; DNS starts on the WAN baseline until the health guard grants a lease.","status":{"schema_version":1,"profile_mode":"router","runtime_running":true,"controller_ready":true,"effective":true,"state_owned":true,"config_sha256":"%s","dns_port":%s,"redir_port":%s,"tproxy_port":%s,"tun_device":"%s","ipv6":%s,"dns":{"failure_policy":"fail_open","path":"wan","lease_active":false}},"changes":["takeover_applied","dns_health_lease_initialized"],"warnings":[],"next_actions":[]}\n' \
+				"$(json_escape "$CONFIG_SHA256")" "$DNS_PORT" "$REDIR_PORT" "$TPROXY_PORT" "$(json_escape "$TUN_DEVICE")" "$IPV6"
+			;;
+		*)
+			fail "takeover_dns_policy_invalid" "OpenWrt takeover applied but its DNS failure policy state is invalid." '{}'
+			return 1
+			;;
+	esac
 }
 
 stop_takeover() {

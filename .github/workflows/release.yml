@@ -97,6 +97,10 @@ jobs:
             bash -n "$test_script"
             bash "$test_script"
           done
+          for test_script in scripts/test-takeover-manager.sh scripts/test-dns-health-lease.sh scripts/test-takeover-dns-policy.sh; do
+            bash -n "$test_script"
+            bash "$test_script"
+          done
 
       - name: Build and verify release assets
         shell: bash

@@ -112,12 +112,28 @@ renew_once() {
 		write_status "$generation_before" failure invalid_dns_port wan
 		return 1
 	}
+	DNS_FAILURE_POLICY="$(cat "$STATE_DIR/dns-failure-policy" 2>/dev/null || true)"
 	nonce="$(date +%s)-$$"
 	probe_name="${nonce}.${PROBE_SUFFIX}"
 	if ! run_probe udp "udp-${probe_name}" || ! run_probe tcp "tcp-${probe_name}"; then
-		write_status "$generation_before" failure mihomo_dns_probe_failed lease_expiring
+		case "$DNS_FAILURE_POLICY" in
+			fail_closed) write_status "$generation_before" failure mihomo_dns_probe_failed mihomo ;;
+			fail_open) write_status "$generation_before" failure mihomo_dns_probe_failed lease_expiring ;;
+			*) write_status "$generation_before" failure invalid_dns_failure_policy unknown ;;
+		esac
 		return 1
 	fi
+	case "$DNS_FAILURE_POLICY" in
+		fail_closed)
+			write_status "$generation_before" success direct_mihomo mihomo
+			return 0
+			;;
+		fail_open) ;;
+		*)
+			write_status "$generation_before" failure invalid_dns_failure_policy unknown
+			return 1
+			;;
+	esac
 	tmp_dir="$(mktemp -d /tmp/localclash-dns-lease.XXXXXX)" || {
 		write_status "$generation_before" failure temporary_directory_failed wan
 		return 1
