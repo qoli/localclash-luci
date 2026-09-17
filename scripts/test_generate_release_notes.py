@@ -32,6 +32,7 @@ class GenerateReleaseNotesTests(unittest.TestCase):
         self.assertIn("localclash-istore-v1.2.3-7-x86_64.run", notes)
         self.assertIn("localclash-istore-v1.2.3-7-aarch64.run", notes)
         self.assertIn("普通用户不需要下载", notes)
+        self.assertNotIn("dnsqualify", notes)
 
     def test_rejects_tag_that_does_not_match_package_metadata(self):
         repo = self.make_repo("PKG_VERSION:=1.2.3\nPKG_RELEASE:=7\n")

@@ -52,15 +52,6 @@ jobs:
             exit 1
           fi
 
-      - name: Prepare pinned dnsqualify source
-        run: python3 scripts/prepare-dnsqualify-source.py
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: .build/dnsqualify-source/go.mod
-          cache: false
-
       - name: Verify source
         shell: bash
         run: |
@@ -79,15 +70,8 @@ jobs:
           sh -n packaging/istore/install.sh
           python3 -m py_compile scripts/generate-release-notes.py
           python3 -m py_compile scripts/resolve-core-release.py
-          python3 -m py_compile scripts/prepare-dnsqualify-source.py
-          python3 -m unittest scripts/test_generate_release_notes.py scripts/test_resolve_core_release.py scripts/test_prepare_dnsqualify_source.py
+          python3 -m unittest scripts/test_generate_release_notes.py scripts/test_resolve_core_release.py
           git diff --check
-
-      - name: Test dnsqualify
-        working-directory: .build/dnsqualify-source
-        run: |
-          go test ./...
-          go vet ./...
 
       - name: Run host-only rpcd contract checks
         shell: bash
@@ -117,11 +101,6 @@ jobs:
           make_latest: true
           fail_on_unmatched_files: true
           files: |
-            dist/dnsqualify-linux-amd64
-            dist/dnsqualify-linux-amd64.sha256
-            dist/dnsqualify-linux-arm64
-            dist/dnsqualify-linux-arm64.sha256
-            dist/dnsqualify-release-manifest.json
             dist/luci-app-localclash-*.apk
             dist/luci-app-localclash-*.apk.sha256
             dist/luci-app-localclash_*.ipk

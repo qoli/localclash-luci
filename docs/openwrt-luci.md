@@ -1459,8 +1459,8 @@ x86 QEMU 通过不代表 ARM runtime 已验证。
 
 iStore `.run` 是面向 iStoreOS/opkg 的 Makeself 自解压 archive，与 OpenWrt 25
 的 APK 路径保持分离。每个架构的 bundle 包含 LuCI IPK、由
-`release/core-release.json` 固定的 Core Release、匹配的 `dnsqualify`、Core
-base assets、installer、bundle manifest 和 checksums。
+`release/core-release.json` 固定的 Core Release、Core base assets、installer、
+bundle manifest 和 checksums。
 
 离线 installer 不得运行 `opkg update`、读取 `latest`、使用 Release 镜像或下载
 替代文件。缺少命令、架构不匹配、checksum 无效、base assets 不完整或包管理器

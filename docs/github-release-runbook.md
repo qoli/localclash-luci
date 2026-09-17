@@ -5,20 +5,18 @@
 
 ## 发布产物
 
-每个 Release 必须包含以下 13 个仓库自有产物：
+每个 Release 必须包含以下 8 个仓库自有产物：
 
 - OpenWrt 24.10 及更早版本使用的 `.ipk` 和 SHA-256；
 - OpenWrt 25.12 及更新版本使用的 `.apk` 和 SHA-256；
-- Linux amd64、arm64 的 `dnsqualify`、SHA-256 和 Release manifest；
 - iStoreOS x86_64、aarch64 离线 `.run` 和 SHA-256。
 
 源码压缩包由 GitHub 自动生成，不计入上述 allow-list。
 
-LuCI、Core 和 dnsqualify 是三个独立源码与 Release channel。普通 LuCI 安装包
-不会内置 Core；iStore `.run` 是明确的离线 bundle，因此只使用
-`release/core-release.json` 固定的 Core tag。LuCI Release 构建的 dnsqualify
-二进制则只来自 `release/dnsqualify-source.json` 固定的公开仓库 commit。更新任一
-source lock 不代表必须发布 LuCI，发布决定仍以 LuCI 变更为准。
+LuCI 与 Core 是两个独立 Release channel。普通 LuCI 安装包不会内置 Core；
+iStore `.run` 是明确的离线 bundle，因此只使用 `release/core-release.json`
+固定的 Core tag。更新 Core source lock 不代表必须发布 LuCI，发布决定仍以 LuCI
+变更为准。
 
 ## CI 分工
 
@@ -26,10 +24,9 @@ source lock 不代表必须发布 LuCI，发布决定仍以 LuCI 变更为准。
 
 1. JavaScript、rpcd shell、installer 和 Python 语法检查；
 2. 全部 rpcd helper 测试；
-3. 按 source lock 获取并验证 dnsqualify 的精确 commit，再执行 test 和 vet；
-4. 构建 IPK、APK、dnsqualify 和两个 `.run`；
-5. 验证精确资产集合、全部 SHA-256 和 Makeself 内容；
-6. 上传保留 7 天的候选 Actions artifact，不创建 Release。
+3. 构建 IPK、APK 和两个 `.run`；
+4. 验证精确资产集合、全部 SHA-256 和 Makeself 内容；
+5. 上传保留 7 天的候选 Actions artifact，不创建 Release。
 
 `.github/workflows/release.yml` 对 tag 重新执行同一套检查，全部成功后才创建
 GitHub Release。已存在 Release、tag 与 Makefile 版本不一致、tag commit 不一致，
@@ -89,22 +86,12 @@ Core manifest 本身还必须严格声明相同 tag、官方仓库 URL、Linux a
 Makeself 同理由 `release/makeself-release.json` 固定版本、官方 Release URL 和
 SHA-256。升级时必须在单独变更中验证两个架构的 `.run`。
 
-## 2.1 更新 dnsqualify Source Pin
-
-只有需要让 LuCI CI 与下一版 Release 使用不同 dnsqualify 源码时，才修改
-`release/dnsqualify-source.json`。`repository` 和 `clone_url` 必须指向
-`qoli/dnsqualify`，`commit` 必须是完整的 40 字符小写 Git SHA；禁止使用
-`main`、tag、`latest` 或 LuCI 内嵌源码。
-
-`scripts/prepare-dnsqualify-source.py` 会获取该 commit，并验证 checkout 的
-origin、HEAD 与干净工作树。任何缺失或不一致都会直接失败。
-
 ## 3. 本地验证
 
 常规开发至少运行聚焦测试：
 
 ```sh
-python3 -m unittest scripts/test_generate_release_notes.py scripts/test_resolve_core_release.py scripts/test_prepare_dnsqualify_source.py
+python3 -m unittest scripts/test_generate_release_notes.py scripts/test_resolve_core_release.py
 
 for file in openwrt/luci-app-localclash/htdocs/luci-static/resources/view/localclash/*.js; do
   node --check "$file"
@@ -118,8 +105,6 @@ for test_script in scripts/test-rpcd-*.sh scripts/test-hotplug-takeover-restore.
   bash "$test_script"
 done
 
-python3 scripts/prepare-dnsqualify-source.py
-(cd .build/dnsqualify-source && go test ./... && go vet ./...)
 ```
 
 需要本地构建完整候选产物时：
@@ -188,8 +173,8 @@ git ls-remote --tags origin "$tag"
 ## iStore 离线安装边界
 
 iStore `.run` 是 Makeself 自解压 shell archive，只面向 iStoreOS/opkg，不替代
-OpenWrt 25 的 APK。bundle 包含 LuCI IPK、固定 Core、对应架构 dnsqualify、Core
-base assets、manifest 和 checksums。
+OpenWrt 25 的 APK。bundle 包含 LuCI IPK、固定 Core、Core base assets、manifest
+和 checksums。
 
 installer 不运行 `opkg update`，不访问网络，也不选择 `latest`。它会在安装前
 验证 root、必要系统命令、架构、全部 SHA-256 和基础文件完整性。任何条件不满足

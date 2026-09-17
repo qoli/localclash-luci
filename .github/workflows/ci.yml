@@ -23,15 +23,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Prepare pinned dnsqualify source
-        run: python3 scripts/prepare-dnsqualify-source.py
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: .build/dnsqualify-source/go.mod
-          cache: false
-
       - name: Verify source
         shell: bash
         run: |
@@ -53,17 +44,10 @@ jobs:
           scripts/test-istore-install-ipk-preflight.sh
           python3 -m py_compile scripts/generate-release-notes.py
           python3 -m py_compile scripts/resolve-core-release.py
-          python3 -m py_compile scripts/prepare-dnsqualify-source.py
-          python3 -m unittest scripts/test_generate_release_notes.py scripts/test_resolve_core_release.py scripts/test_prepare_dnsqualify_source.py
+          python3 -m unittest scripts/test_generate_release_notes.py scripts/test_resolve_core_release.py
           release_tag="$(awk -F':=' '/^PKG_VERSION:=/ { version=$2 } /^PKG_RELEASE:=/ { release=$2 } END { print "v" version "-" release }' openwrt/luci-app-localclash/Makefile)"
           scripts/generate-release-notes.py "$release_tag" /tmp/localclash-luci-release-notes.md
           git diff --check
-
-      - name: Test dnsqualify
-        working-directory: .build/dnsqualify-source
-        run: |
-          go test ./...
-          go vet ./...
 
       - name: Run host-only rpcd contract checks
         shell: bash

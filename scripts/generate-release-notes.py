@@ -58,7 +58,7 @@ def render(release_tag: str, repo_root: Path) -> str:
 
 ### 这些文件普通用户不需要下载
 
-- `.sha256`、`dnsqualify-*` 和 `*-manifest.json`：用于完整性校验或由 localClash 自动使用。
+- `.sha256`：用于校验对应安装文件的完整性。
 - `Source code (zip)` / `Source code (tar.gz)`：项目源码，不是安装包。
 
 [查看完整安装教程](https://github.com/{REPOSITORY}#第-1-步下载安装包)

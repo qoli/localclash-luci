@@ -54,7 +54,6 @@ grep -qx 'Package: luci-app-localclash' "$install_tmp/ipk-control/control" || di
 grep -qx 'Architecture: all' "$install_tmp/ipk-control/control" || die "LuCI IPK 架构不兼容：仅接受 Architecture: all；已在调用 opkg 前拒绝。"
 
 [ -f bin/localclash ] || die "localClash Core 不存在。"
-[ -f bin/dnsqualify ] || die "dnsqualify 不存在。"
 [ -f assets/localclash-base-assets.tar.gz ] || die "基础文件包不存在。"
 
 mkdir -p "$install_tmp/assets"
@@ -80,8 +79,7 @@ done
 
 mkdir -p "$install_tmp/stage/usr/local/bin" "$install_tmp/stage/root/localclash/.runtime/mihomo"
 cp bin/localclash "$install_tmp/stage/usr/local/bin/localclash"
-cp bin/dnsqualify "$install_tmp/stage/usr/local/bin/dnsqualify"
-chmod 755 "$install_tmp/stage/usr/local/bin/localclash" "$install_tmp/stage/usr/local/bin/dnsqualify"
+chmod 755 "$install_tmp/stage/usr/local/bin/localclash"
 cp -R "$install_tmp/assets/policy-templates" "$install_tmp/stage/root/localclash/"
 cp -R "$install_tmp/assets/rule-sources" "$install_tmp/stage/root/localclash/"
 for geo_file in Country.mmdb geoip.dat geosite.dat ASN.mmdb; do
@@ -91,11 +89,9 @@ done
 opkg install "packages/$LUCI_IPK" || die "opkg 无法安装 LuCI IPK；不会联网下载替代包。"
 
 mkdir -p /usr/local/bin "$state_dir/.runtime/mihomo"
-for binary_name in localclash dnsqualify; do
-	cp "$install_tmp/stage/usr/local/bin/$binary_name" "/usr/local/bin/$binary_name.new.$$"
-	chmod 755 "/usr/local/bin/$binary_name.new.$$"
-	mv "/usr/local/bin/$binary_name.new.$$" "/usr/local/bin/$binary_name" || die "无法安装 $binary_name。"
-done
+cp "$install_tmp/stage/usr/local/bin/localclash" "/usr/local/bin/localclash.new.$$"
+chmod 755 "/usr/local/bin/localclash.new.$$"
+mv "/usr/local/bin/localclash.new.$$" "/usr/local/bin/localclash" || die "无法安装 localclash。"
 
 for asset_dir in policy-templates rule-sources; do
 	if ! (

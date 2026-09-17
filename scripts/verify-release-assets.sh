@@ -25,11 +25,6 @@ cleanup() { rm -f "$expected_assets" "$actual_assets"; }
 trap cleanup EXIT HUP INT TERM
 
 cat > "$expected_assets" <<EOF
-dnsqualify-linux-amd64
-dnsqualify-linux-amd64.sha256
-dnsqualify-linux-arm64
-dnsqualify-linux-arm64.sha256
-dnsqualify-release-manifest.json
 ${pkg_name}-${pkg_version}-r${pkg_release}.apk
 ${pkg_name}-${pkg_version}-r${pkg_release}.apk.sha256
 ${pkg_name}_${pkg_version}-${pkg_release}_all.ipk
@@ -45,29 +40,6 @@ if ! diff -u "$expected_assets" "$actual_assets"; then
 	printf 'release asset set does not match the exact allow-list\n' >&2
 	exit 1
 fi
-
-python3 - \
-	"$dist_dir/dnsqualify-release-manifest.json" \
-	"$repo_root/release/dnsqualify-source.json" \
-	"$release_tag" <<'PY'
-import json
-import pathlib
-import sys
-
-manifest = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
-source_lock = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
-release_tag = sys.argv[3]
-if manifest.get("schema_version") != 1:
-    raise SystemExit("dnsqualify release manifest schema_version must be 1")
-if manifest.get("version") != release_tag:
-    raise SystemExit("dnsqualify release manifest version does not match the release tag")
-expected_source = {
-    "repository": source_lock.get("repository"),
-    "commit": source_lock.get("commit"),
-}
-if manifest.get("source") != expected_source:
-    raise SystemExit("dnsqualify release manifest source does not match the pinned lock")
-PY
 
 (
 	cd "$dist_dir"
@@ -94,7 +66,6 @@ for bundle_arch in x86_64 aarch64; do
 		./bundle-manifest.json \
 		./checksums.sha256 \
 		./bin/localclash \
-		./bin/dnsqualify \
 		./assets/localclash-base-assets.tar.gz \
 		"$ipk_path"; do
 		printf '%s\n' "$listing" | grep -F "$required_path" >/dev/null || {

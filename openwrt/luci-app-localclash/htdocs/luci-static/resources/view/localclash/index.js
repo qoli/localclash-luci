@@ -140,24 +140,6 @@ var callReset = rpc.declare({
 	expect: { '': {} }
 });
 
-var callDNSOptimizationStatus = rpc.declare({
-	object: 'localclash',
-	method: 'dnsqualify_status',
-	expect: { '': {} }
-});
-
-var callDNSOptimizationRunAsync = rpc.declare({
-	object: 'localclash',
-	method: 'dnsqualify_run_async',
-	expect: { '': {} }
-});
-
-var callDNSOptimizationResetAsync = rpc.declare({
-	object: 'localclash',
-	method: 'dnsqualify_reset_async',
-	expect: { '': {} }
-});
-
 function statusText(value) {
 	if (value === null || value === undefined || value === '')
 		return '-';
@@ -535,45 +517,6 @@ function refreshStatus() {
 	});
 }
 
-function dnsOptimizationBody(data) {
-	var status = (data && data.status) || {};
-	var resolver = status.resolver || {};
-	var ecs = status.ecs || {};
-
-	return E('div', {}, [
-		E('table', { 'class': 'table cbi-section-table localclash-status-table' }, [
-			E('tbody', {}, [
-				statusRow(_('当前模式'), status.enabled === true ? _('已验证 ECS 最佳化') : _('Core 加密 DNS 基线')),
-				statusRow(_('作用范围'), status.scope || 'default'),
-				statusRow(_('独立程序'), data && data.binary_installed === true ? formatText(_('已安装（%s）'), data.binary_version || _('版本未知')) : _('未安装（运行时将从 LuCI Release 安装）')),
-				statusRow(_('配置 DNS'), status.enabled === true ? formatText(_('%s（%s / %s）'), resolver.endpoint || '-', resolver.source || '-', resolver.transport || '-') : '-'),
-				statusRow(_('候选 ID'), resolver.candidate_id || '-'),
-				statusRow(_('ECS 前缀'), ecs.prefix || '-'),
-				statusRow(_('公网地址观测'), ecs.source || '-'),
-				statusRow(_('公网观测端点'), ecs.server ? formatText(_('%s（%s）'), ecs.server, ecs.server_ip || '-') : '-'),
-				statusRow(_('国家代码'), ecs.country_code || '-'),
-				statusRow(_('WAN 接口'), ecs.interface || '-'),
-				statusRow(_('配置生成时间'), status.generated_at || '-')
-			])
-		]),
-		E('p', { 'class': 'localclash-muted' }, [
-			_('dnsqualify 由 LuCI 按需运行。它依次尝试绑定 WAN 设备的中国大陆 STUN 和 ipapi.is JSON；JSON 结果必须明确返回国家代码 CN。Google ECS 查询通过 Mihomo 的 DNSProxy 专用本地入口测量，与实际配置使用相同出口；该入口不可用时任务会明确失败，不会改为直连。结果截断为 /24，并只应用于通过测试的窄域名集合。')
-		]),
-		actionRow([
-			liveTaskButton(status.enabled === true ? _('重新运行 dnsqualify') : _('运行 dnsqualify'), callDNSOptimizationRunAsync, 'cbi-button-apply'),
-			liveTaskButton(_('删除 dnsqualify 配置'), callDNSOptimizationResetAsync, 'cbi-button-reset')
-		])
-	]);
-}
-
-function refreshDNSOptimization() {
-	return callDNSOptimizationStatus().then(function(data) {
-		replaceContent('localclash-dns-optimization-body', dnsOptimizationBody(data));
-	}).catch(function(err) {
-		replaceContent('localclash-dns-optimization-body', advancedStatusErrorTable(err.message || String(err)));
-	});
-}
-
 function section(title, body) {
 	return E('div', { 'class': 'cbi-section localclash-section' }, [
 		E('h3', {}, [ title ]),
@@ -777,8 +720,6 @@ function taskLabel(task) {
 		return _('订阅设置');
 	case 'bootstrap_default':
 		return _('初始化');
-	case 'dnsqualify':
-		return _('dnsqualify 按需任务');
 	default:
 		return _('任务');
 	}
@@ -1095,7 +1036,6 @@ return view.extend({
 		dashboardURL = url;
 		deferAfterPaint(function() {
 			refreshStatus();
-			refreshDNSOptimization();
 			resumeTaskIfNeeded();
 		}, 600);
 
@@ -1147,9 +1087,6 @@ return view.extend({
 				recentTaskButton(),
 				commandButton(_('停止'), callRuntimeStop, 'cbi-button-reset')
 			]))),
-			section(_('DNS 默认选择与最佳化'), E('div', { 'id': 'localclash-dns-optimization-body' }, [
-				advancedStatusLoadingTable()
-			])),
 			section(_('高级组件维护'), actionRow([
 				liveTaskButton(_('更新 localClash'), function() { return callComponentUpdateAsync('localclash'); }),
 				liveTaskButton(_('更新 Mihomo'), function() { return callComponentUpdateAsync('mihomo'); }),

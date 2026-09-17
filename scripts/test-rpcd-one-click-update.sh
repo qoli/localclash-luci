@@ -243,17 +243,12 @@ bootstrap_core() {
 	printf '{"ok":true,"changed":true,"summary":"core updated"}\n'
 }
 
-dnsqualify_install() {
-	trace "dnsqualify_install"
-	if [ "${MOCK_DNSQUALIFY_FAIL:-0}" = "1" ]; then
-		printf '{"ok":false,"code":"dnsqualify_manifest_download_failed","message":"manifest unavailable"}\n'
-		return 1
-	fi
-	printf '{"ok":true,"changed":true,"summary":"dnsqualify updated"}\n'
-}
-
 service_status() {
 	trace "service_status"
+	if [ "${MOCK_SERVICE_STATUS_FAIL:-0}" = "1" ]; then
+		printf '{"ok":false,"code":"service_status_failed","message":"service unavailable"}\n'
+		return 1
+	fi
 	printf '{"ok":true,"mcp":{"healthy":true},"summary":"service running"}\n'
 }
 
@@ -432,7 +427,7 @@ printf '%s\n' "$result" | grep -q '"ok":true' || fail_test "one_click_update_run
 printf '%s\n' "$result" | grep -q '"checkpoints":{"software":' || fail_test "software checkpoint missing: ${result}"
 printf '%s\n' "$result" | grep -q '"material":' || fail_test "material checkpoint missing: ${result}"
 printf '%s\n' "$result" | grep -q '"takeover":{"desired_enabled":true,"recovered":true}' || fail_test "takeover was not recovered: ${result}"
-printf '%s\n' "$result" | grep -q '"dnsqualify":{"ok":true,"changed":true' || fail_test "dnsqualify update result missing: ${result}"
+printf '%s\n' "$result" | grep -q 'dnsqualify' && fail_test "retired dnsqualify result remained: ${result}"
 one_click_update_luci_changed "$result" || fail_test "LuCI changed marker was not detected for service reload"
 [ ! -e "$LOCK_DIR" ] || fail_test "successful handoff did not clean the task lock"
 [ ! -e "$state_handoff_dir" ] || fail_test "successful handoff did not clean the state directory"
@@ -444,7 +439,6 @@ call_takeover status --json
 luci_update
 one_click_update_reexec
 bootstrap_core
-dnsqualify_install
 service_status
 call_core component update mihomo --json
 call_core mihomo config-test --json
@@ -469,6 +463,7 @@ EOF
 if ! diff -u "$expected" "${tmp_dir}/trace"; then
 	fail_test "one-click update order mismatch"
 fi
+grep -q 'dnsqualify' "${tmp_dir}/trace" && fail_test "retired dnsqualify step remained in one-click trace"
 grep -q 'custom-sites list' "${tmp_dir}/trace" && fail_test "unchecked policy sync must not read custom-site preservation snapshots"
 
 : > "${tmp_dir}/trace"
@@ -575,7 +570,6 @@ call_takeover status --json
 luci_update
 one_click_update_reexec
 bootstrap_core
-dnsqualify_install
 service_status
 call_core component update mihomo --json
 call_core mihomo config-test --json
@@ -597,16 +591,16 @@ fi
 : > "${tmp_dir}/trace"
 rm -f "${tmp_dir}/takeover-status-count" "${tmp_dir}/takeover-recovered"
 set_task_input '{"version":1,"sync_default_policy":false}'
-MOCK_DNSQUALIFY_FAIL=1
+MOCK_SERVICE_STATUS_FAIL=1
 MOCK_TAKEOVER_LOST_AFTER_FAILURE=1
-export MOCK_DNSQUALIFY_FAIL MOCK_TAKEOVER_LOST_AFTER_FAILURE
+export MOCK_SERVICE_STATUS_FAIL MOCK_TAKEOVER_LOST_AFTER_FAILURE
 capture_one_click_update
 clear_task_input
-unset MOCK_DNSQUALIFY_FAIL MOCK_TAKEOVER_LOST_AFTER_FAILURE
+unset MOCK_SERVICE_STATUS_FAIL MOCK_TAKEOVER_LOST_AFTER_FAILURE
 assert_json "$result"
-[ "$result_rc" -ne 0 ] || fail_test "dnsqualify failure with takeover loss returned success"
+[ "$result_rc" -ne 0 ] || fail_test "service status failure with takeover loss returned success"
 printf '%s\n' "$result" | grep -q '"outcome":"failed_recovered"' || fail_test "recovered failure outcome missing: ${result}"
-printf '%s\n' "$result" | grep -q '"code":"dnsqualify_manifest_download_failed"' || fail_test "original dnsqualify failure was not preserved: ${result}"
+printf '%s\n' "$result" | grep -q '"code":"service_status_failed"' || fail_test "original service failure was not preserved: ${result}"
 printf '%s\n' "$result" | grep -q '"action":"takeover_applied"' || fail_test "takeover recovery evidence missing: ${result}"
 cat > "$expected" <<EOF
 call_core runtime status --json
@@ -614,40 +608,40 @@ call_takeover status --json
 luci_update
 one_click_update_reexec
 bootstrap_core
-dnsqualify_install
+service_status
 call_takeover status --json
 takeover_apply
 call_takeover status --json
 EOF
 if ! diff -u "$expected" "${tmp_dir}/trace"; then
-	fail_test "dnsqualify failure recovery order mismatch"
+	fail_test "service failure recovery order mismatch"
 fi
 
 : > "${tmp_dir}/trace"
 rm -f "${tmp_dir}/takeover-status-count" "${tmp_dir}/takeover-recovered"
 set_task_input '{"version":1,"sync_default_policy":false}'
-MOCK_DNSQUALIFY_FAIL=1
+MOCK_SERVICE_STATUS_FAIL=1
 MOCK_TAKEOVER_LOST_AFTER_FAILURE=1
 MOCK_TAKEOVER_APPLY_FAIL=1
-export MOCK_DNSQUALIFY_FAIL MOCK_TAKEOVER_LOST_AFTER_FAILURE MOCK_TAKEOVER_APPLY_FAIL
+export MOCK_SERVICE_STATUS_FAIL MOCK_TAKEOVER_LOST_AFTER_FAILURE MOCK_TAKEOVER_APPLY_FAIL
 capture_one_click_update
 clear_task_input
-unset MOCK_DNSQUALIFY_FAIL MOCK_TAKEOVER_LOST_AFTER_FAILURE MOCK_TAKEOVER_APPLY_FAIL
+unset MOCK_SERVICE_STATUS_FAIL MOCK_TAKEOVER_LOST_AFTER_FAILURE MOCK_TAKEOVER_APPLY_FAIL
 assert_json "$result"
 [ "$result_rc" -ne 0 ] || fail_test "failed takeover recovery returned success"
 printf '%s\n' "$result" | grep -q '"outcome":"attention_required"' || fail_test "attention-required outcome missing: ${result}"
 printf '%s\n' "$result" | grep -q '"code":"one_click_update_recovery_failed"' || fail_test "recovery failure code missing: ${result}"
-printf '%s\n' "$result" | grep -q '"cause":{"ok":false,"code":"dnsqualify_manifest_download_failed"' || fail_test "nested original error missing: ${result}"
+printf '%s\n' "$result" | grep -q '"cause":{"ok":false,"code":"service_status_failed"' || fail_test "nested original error missing: ${result}"
 
 : > "${tmp_dir}/trace"
 rm -f "${tmp_dir}/takeover-status-count" "${tmp_dir}/takeover-recovered"
 set_task_input '{"version":1,"sync_default_policy":false}'
-MOCK_DNSQUALIFY_FAIL=1
+MOCK_SERVICE_STATUS_FAIL=1
 MOCK_RUNTIME_NOT_RECOVERED=1
-export MOCK_DNSQUALIFY_FAIL MOCK_RUNTIME_NOT_RECOVERED
+export MOCK_SERVICE_STATUS_FAIL MOCK_RUNTIME_NOT_RECOVERED
 capture_one_click_update
 clear_task_input
-unset MOCK_DNSQUALIFY_FAIL MOCK_RUNTIME_NOT_RECOVERED
+unset MOCK_SERVICE_STATUS_FAIL MOCK_RUNTIME_NOT_RECOVERED
 assert_json "$result"
 [ "$result_rc" -ne 0 ] || fail_test "missing runtime recovery returned success"
 printf '%s\n' "$result" | grep -q '"outcome":"attention_required"' || fail_test "runtime recovery failure should require attention: ${result}"
@@ -657,28 +651,28 @@ printf '%s\n' "$result" | grep -q '"attempts":6' || fail_test "runtime recovery 
 : > "${tmp_dir}/trace"
 rm -f "${tmp_dir}/takeover-status-count" "${tmp_dir}/takeover-recovered" "$TAKEOVER_REPAIR_TICKET" "$TAKEOVER_STATE_STATUS"
 set_task_input '{"version":1,"sync_default_policy":false}'
-MOCK_DNSQUALIFY_FAIL=1
+MOCK_SERVICE_STATUS_FAIL=1
 MOCK_TAKEOVER_INITIAL_INACTIVE=1
-export MOCK_DNSQUALIFY_FAIL MOCK_TAKEOVER_INITIAL_INACTIVE
+export MOCK_SERVICE_STATUS_FAIL MOCK_TAKEOVER_INITIAL_INACTIVE
 capture_one_click_update
 clear_task_input
-unset MOCK_DNSQUALIFY_FAIL MOCK_TAKEOVER_INITIAL_INACTIVE
+unset MOCK_SERVICE_STATUS_FAIL MOCK_TAKEOVER_INITIAL_INACTIVE
 assert_json "$result"
-[ "$result_rc" -ne 0 ] || fail_test "inactive takeover dnsqualify failure returned success"
+[ "$result_rc" -ne 0 ] || fail_test "inactive takeover service failure returned success"
 printf '%s\n' "$result" | grep -q '"action":"not_required"' || fail_test "inactive takeover recovery should be unnecessary: ${result}"
 grep -q '^takeover_apply$' "${tmp_dir}/trace" && fail_test "inactive takeover failure unexpectedly applied takeover"
 
 : > "${tmp_dir}/trace"
 rm -f "${tmp_dir}/takeover-status-count" "${tmp_dir}/takeover-recovered"
 set_task_input '{"version":1,"sync_default_policy":false}'
-MOCK_DNSQUALIFY_FAIL=1
+MOCK_SERVICE_STATUS_FAIL=1
 MOCK_INITIAL_RUNTIME_STOPPED=1
-export MOCK_DNSQUALIFY_FAIL MOCK_INITIAL_RUNTIME_STOPPED
+export MOCK_SERVICE_STATUS_FAIL MOCK_INITIAL_RUNTIME_STOPPED
 capture_one_click_update
 clear_task_input
-unset MOCK_DNSQUALIFY_FAIL MOCK_INITIAL_RUNTIME_STOPPED
+unset MOCK_SERVICE_STATUS_FAIL MOCK_INITIAL_RUNTIME_STOPPED
 assert_json "$result"
-[ "$result_rc" -ne 0 ] || fail_test "stopped-runtime dnsqualify failure returned success"
+[ "$result_rc" -ne 0 ] || fail_test "stopped-runtime service failure returned success"
 printf '%s\n' "$result" | grep -q '"outcome":"failed_recovered"' || fail_test "stopped-runtime failure should need no recovery: ${result}"
 printf '%s\n' "$result" | grep -q '"action":"not_required"' || fail_test "stopped-runtime failure unexpectedly required takeover recovery: ${result}"
 grep -q '^call_takeover status --json$' "${tmp_dir}/trace" && fail_test "stopped runtime unexpectedly requested takeover facts"
@@ -720,7 +714,6 @@ call_takeover status --json
 luci_update
 one_click_update_reexec
 bootstrap_core
-dnsqualify_install
 service_status
 call_core component update mihomo --json
 call_core mihomo config-test --json

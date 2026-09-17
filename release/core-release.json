@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "repository": "qoli/localClash",
-  "tag": "v0.1.84",
-  "manifest_url": "https://github.com/qoli/localClash/releases/download/v0.1.84/localclash-release-manifest.json",
-  "manifest_sha256": "f9f98a8c87c6040b54965317bb824a3df305f36e811a4b5a5d099a3a939a4323"
+  "tag": "v0.1.89",
+  "manifest_url": "https://github.com/qoli/localClash/releases/download/v0.1.89/localclash-release-manifest.json",
+  "manifest_sha256": "9489ad23b44a636251e2fd9777af25d4e1d01ce5ca5fc1be8fe16d79fd63a820"
 }

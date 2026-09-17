@@ -7,7 +7,7 @@
       },
       "ubus": {
         "file": [ "read" ],
-        "localclash": [ "status", "subscription_get", "custom_sites_get", "service_status", "bootstrap_logs", "task_status", "bootstrap_task_status", "boot_restore_status", "takeover_status", "takeover_logs", "core_update_check", "luci_update_check", "mcp_help", "one_click_update_preferences", "dnsqualify_status" ]
+        "localclash": [ "status", "subscription_get", "custom_sites_get", "service_status", "bootstrap_logs", "task_status", "bootstrap_task_status", "boot_restore_status", "takeover_status", "takeover_logs", "core_update_check", "luci_update_check", "mcp_help", "one_click_update_preferences" ]
       }
     },
     "write": {
@@ -26,8 +26,6 @@
           "luci_update_async",
           "apply",
           "config_render",
-          "dnsqualify_run_async",
-          "dnsqualify_reset_async",
           "runtime_start",
           "runtime_start_takeover",
           "runtime_restart",

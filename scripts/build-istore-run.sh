@@ -139,36 +139,23 @@ if not rule_source_json_found:
     raise SystemExit("base-assets archive is incomplete: rule-sources/*.json")
 PY
 
-case "$bundle_arch" in
-	x86_64) dns_arch=amd64 ;;
-	aarch64) dns_arch=arm64 ;;
-esac
-dns_name="dnsqualify-linux-${dns_arch}"
-[ -s "$dist_dir/$dns_name" ] || {
-	printf 'missing dnsqualify build input: %s\n' "$dist_dir/$dns_name" >&2
-	exit 1
-}
-cp "$dist_dir/$dns_name" "$build_dir/payload/bin/dnsqualify"
-chmod 755 "$build_dir/payload/bin/dnsqualify"
-
-python3 - "$build_dir/payload/bin/localclash" "$build_dir/payload/bin/dnsqualify" "$bundle_arch" <<'PY'
+python3 - "$build_dir/payload/bin/localclash" "$bundle_arch" <<'PY'
 import pathlib
 import struct
 import sys
 
-expected = {"x86_64": 62, "aarch64": 183}[sys.argv[3]]
-for value in sys.argv[1:3]:
-    path = pathlib.Path(value)
-    header = path.read_bytes()[:20]
-    if len(header) < 20 or header[:4] != b"\x7fELF":
-        raise SystemExit(f"bundle binary is not ELF: {path}")
-    if header[4] != 2 or header[5] != 1:
-        raise SystemExit(f"bundle binary is not 64-bit little-endian ELF: {path}")
-    machine = struct.unpack_from("<H", header, 18)[0]
-    if machine != expected:
-        raise SystemExit(
-            f"bundle binary architecture mismatch for {path}: expected e_machine {expected}, got {machine}"
-        )
+expected = {"x86_64": 62, "aarch64": 183}[sys.argv[2]]
+path = pathlib.Path(sys.argv[1])
+header = path.read_bytes()[:20]
+if len(header) < 20 or header[:4] != b"\x7fELF":
+    raise SystemExit(f"bundle binary is not ELF: {path}")
+if header[4] != 2 or header[5] != 1:
+    raise SystemExit(f"bundle binary is not 64-bit little-endian ELF: {path}")
+machine = struct.unpack_from("<H", header, 18)[0]
+if machine != expected:
+    raise SystemExit(
+        f"bundle binary architecture mismatch for {path}: expected e_machine {expected}, got {machine}"
+    )
 PY
 
 ipk_name="${pkg_name}_${pkg_version}-${pkg_release}_all.ipk"
@@ -197,7 +184,6 @@ import sys
 root = pathlib.Path(sys.argv[1])
 paths = [
     "assets/localclash-base-assets.tar.gz",
-    "bin/dnsqualify",
     "bin/localclash",
     f"packages/{sys.argv[5]}",
 ]
@@ -226,7 +212,6 @@ PY
 	cd "$build_dir/payload"
 	shasum -a 256 \
 		assets/localclash-base-assets.tar.gz \
-		bin/dnsqualify \
 		bin/localclash \
 		bundle.env \
 		bundle-manifest.json \
