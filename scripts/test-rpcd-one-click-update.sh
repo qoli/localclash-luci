@@ -428,7 +428,7 @@ printf '%s\n' "$result" | grep -q '"checkpoints":{"software":' || fail_test "sof
 printf '%s\n' "$result" | grep -q '"material":' || fail_test "material checkpoint missing: ${result}"
 printf '%s\n' "$result" | grep -q '"takeover":{"desired_enabled":true,"recovered":true}' || fail_test "takeover was not recovered: ${result}"
 printf '%s\n' "$result" | grep -q 'dnsqualify' && fail_test "retired dnsqualify result remained: ${result}"
-one_click_update_luci_changed "$result" || fail_test "LuCI changed marker was not detected for service reload"
+printf '%s\n' "$result" | grep -q '"luci":{"ok":true,"changed":true' || fail_test "LuCI package change was not retained in the result"
 [ ! -e "$LOCK_DIR" ] || fail_test "successful handoff did not clean the task lock"
 [ ! -e "$state_handoff_dir" ] || fail_test "successful handoff did not clean the state directory"
 

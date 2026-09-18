@@ -5,6 +5,8 @@ TAKEOVER_MANAGER="${LOCALCLASH_TAKEOVER_MANAGER:-/usr/libexec/localclash/takeove
 DNS_GUARD="${LOCALCLASH_DNS_GUARD:-/usr/libexec/localclash/dns-guard}"
 STATE_DIR="${LOCALCLASH_STATE_DIR:-/root/localclash}"
 SERVICE="/etc/init.d/localclash-mcp"
+RPCD_SERVICE="${LOCALCLASH_RPCD_SERVICE:-/etc/init.d/rpcd}"
+LUCI_RPCD_RELOAD_REQUIRED="${LOCALCLASH_LUCI_RPCD_RELOAD_REQUIRED:-/tmp/localclash-update/rpcd-reload-required}"
 LOG="/tmp/localclash-helper.log"
 TAKEOVER_LOG="${LOCALCLASH_TAKEOVER_LOG:-$STATE_DIR/logs/takeover-events.jsonl}"
 TAKEOVER_LOG_MAX_BYTES="${LOCALCLASH_TAKEOVER_LOG_MAX_BYTES:-262144}"
@@ -486,20 +488,30 @@ luci_clear_cache() {
 	rm -rf /tmp/luci-modulecache /tmp/luci-templatecache 2>/dev/null || true
 }
 
-luci_schedule_service_reload() {
+luci_schedule_rpcd_reload() {
+	if [ -L "$LUCI_RPCD_RELOAD_REQUIRED" ]; then
+		log_line "LuCI 更新：rpcd 重新加载标记类型无效，拒绝继续"
+		return 1
+	fi
+	[ -f "$LUCI_RPCD_RELOAD_REQUIRED" ] || return 0
 	(
 		sleep 2
-		/etc/init.d/rpcd restart >/dev/null 2>&1 || true
-		/etc/init.d/uhttpd restart >/dev/null 2>&1 || true
+		if [ ! -x "$RPCD_SERVICE" ]; then
+			log_line "LuCI 更新：rpcd 服务脚本不可用，无法重新加载 RPC 方法和权限"
+			exit 1
+		fi
+		log_line "LuCI 更新：正在重新加载 rpcd 以刷新 RPC 方法和权限"
+		if "$RPCD_SERVICE" reload >/dev/null 2>&1; then
+			log_line "LuCI 更新：rpcd 已重新加载"
+			if ! rm -f "$LUCI_RPCD_RELOAD_REQUIRED"; then
+				log_line "LuCI 更新：无法清除 rpcd 重新加载标记"
+				exit 1
+			fi
+		else
+			log_line "LuCI 更新：rpcd 重新加载失败，请检查系统日志"
+			exit 1
+		fi
 	) >/dev/null 2>&1 &
-}
-
-luci_update_changed() {
-	[ "$(jsonfilter -s "$1" -e '@.changed' 2>/dev/null)" = "true" ]
-}
-
-one_click_update_luci_changed() {
-	[ "$(jsonfilter -s "$1" -e '@.luci.changed' 2>/dev/null)" = "true" ]
 }
 
 json_bool_required() {
@@ -2811,9 +2823,7 @@ start_one_click_update() {
 		printf '%s\n' "$result" > "$TASK_RESULT"
 		write_task_done "$rc" "$result"
 		rm -f "$TASK_INPUT" "$TASK_PID"
-		if [ "$rc" -eq 0 ] && one_click_update_luci_changed "$result"; then
-			luci_schedule_service_reload
-		fi
+		luci_schedule_rpcd_reload
 	) >/dev/null 2>&1 &
 	bg_pid="$!"
 	write_task_pid "$bg_pid"
@@ -3549,9 +3559,7 @@ start_luci_update() {
 		printf '%s\n' "$result" > "$TASK_RESULT"
 		write_task_done "$rc" "$result"
 		rm -f "$TASK_PID"
-		if [ "$rc" -eq 0 ] && luci_update_changed "$result"; then
-			luci_schedule_service_reload
-		fi
+		luci_schedule_rpcd_reload
 	) >/dev/null 2>&1 &
 	bg_pid="$!"
 	write_task_pid "$bg_pid"

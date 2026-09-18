@@ -94,10 +94,10 @@ jsonfilter -i /usr/share/luci/menu.d/luci-app-localclash.json -e '@["admin/servi
 jsonfilter -i /usr/share/luci/menu.d/luci-app-localclash.json -e '@["admin/services/localclash/advanced"].title' >/dev/null
 jsonfilter -i /usr/share/rpcd/acl.d/luci-app-localclash.json -e '@["luci-app-localclash"].description' >/dev/null
 
-if [ -x /etc/init.d/rpcd ]; then
-	/etc/init.d/rpcd restart >/dev/null 2>&1 || true
-	sleep 1
-fi
+test -x /etc/init.d/rpcd
+/etc/init.d/rpcd reload >/dev/null
+rm -f /tmp/localclash-update/rpcd-reload-required
+sleep 1
 
 if command -v ubus >/dev/null 2>&1; then
 	ubus -S list localclash >/dev/null

@@ -37,10 +37,33 @@ EOF
 
 cat > "${build_dir}/pkg/CONTROL/postinst" <<'EOF'
 #!/bin/sh
+[ -z "${IPKG_INSTROOT:-}" ] || exit 0
 rm -f /tmp/luci-indexcache.*.json 2>/dev/null || true
 rm -rf /tmp/luci-modulecache /tmp/luci-templatecache 2>/dev/null || true
-if [ -x /etc/init.d/rpcd ]; then
-	/etc/init.d/rpcd restart >/dev/null 2>&1 || true
+reload_state_dir=/tmp/localclash-update
+reload_required="$reload_state_dir/rpcd-reload-required"
+task_status=/tmp/localclash-task-status.json
+task_running=false
+if [ -f "$task_status" ]; then
+	command -v jsonfilter >/dev/null 2>&1 || exit 1
+	task_running="$(jsonfilter -i "$task_status" -e '@.running' 2>/dev/null)" || exit 1
+	case "$task_running" in
+		true|false) ;;
+		*) exit 1 ;;
+	esac
+fi
+if [ "$task_running" = true ]; then
+	if [ -L "$reload_state_dir" ] || { [ -e "$reload_state_dir" ] && [ ! -d "$reload_state_dir" ]; }; then
+		exit 1
+	fi
+	mkdir -p "$reload_state_dir" || exit 1
+	chmod 700 "$reload_state_dir" || exit 1
+	[ ! -L "$reload_required" ] || exit 1
+	printf 'required\n' > "$reload_required" || exit 1
+else
+	[ -x /etc/init.d/rpcd ] || exit 1
+	/etc/init.d/rpcd reload >/dev/null 2>&1 || exit 1
+	rm -f "$reload_required" || exit 1
 fi
 exit 0
 EOF

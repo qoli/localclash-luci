@@ -28,7 +28,78 @@ for package_builder in "${repo_root}/scripts/build-openwrt-ipk.sh" "${repo_root}
 	if grep -q 'service_start' "$package_builder"; then
 		fail_test "package post-install must not own localclash-mcp restart: $package_builder"
 	fi
+	if grep -Eq '/etc/init[.]d/(rpcd|uhttpd) restart' "$package_builder"; then
+		fail_test "package post-install must not restart RPC or Web services: $package_builder"
+	fi
+	if grep -q '/etc/init.d/uhttpd' "$package_builder"; then
+		fail_test "package post-install must not assume that uhttpd owns the Web service: $package_builder"
+	fi
 done
+
+if grep -q '/etc/init.d/uhttpd' "$helper"; then
+	fail_test "LuCI update must not assume that uhttpd owns the Web service"
+fi
+
+cat > "${tmp_dir}/rpcd" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$TRACE"
+EOF
+chmod +x "${tmp_dir}/rpcd"
+RPCD_SERVICE="${tmp_dir}/rpcd"
+LUCI_RPCD_RELOAD_REQUIRED="${tmp_dir}/rpcd-reload-required"
+
+: > "$TRACE"
+: > "$LUCI_RPCD_RELOAD_REQUIRED"
+luci_schedule_rpcd_reload
+for _ in $(seq 1 40); do
+	[ -s "$TRACE" ] && break
+	/bin/sleep 0.05
+done
+grep -qx 'reload' "$TRACE" || fail_test "LuCI update did not use rpcd reload exactly once"
+grep -q 'rpcd 已重新加载' "$LOG" || fail_test "successful rpcd reload was not logged"
+[ ! -e "$LUCI_RPCD_RELOAD_REQUIRED" ] || fail_test "successful rpcd reload did not clear its required marker"
+
+cat > "$RPCD_SERVICE" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "$RPCD_SERVICE"
+: > "$LOG"
+: > "$LUCI_RPCD_RELOAD_REQUIRED"
+luci_schedule_rpcd_reload
+for _ in $(seq 1 40); do
+	grep -q 'rpcd 重新加载失败' "$LOG" 2>/dev/null && break
+	/bin/sleep 0.05
+done
+grep -q 'rpcd 重新加载失败' "$LOG" || fail_test "failed rpcd reload was not logged"
+[ -f "$LUCI_RPCD_RELOAD_REQUIRED" ] || fail_test "failed rpcd reload discarded its required marker"
+
+rm -f "$LUCI_RPCD_RELOAD_REQUIRED"
+: > "${tmp_dir}/marker-target"
+ln -s "${tmp_dir}/marker-target" "$LUCI_RPCD_RELOAD_REQUIRED"
+set +e
+luci_schedule_rpcd_reload
+reload_rc=$?
+set -e
+[ "$reload_rc" -ne 0 ] || fail_test "symlinked rpcd reload marker was accepted"
+grep -q 'rpcd 重新加载标记类型无效' "$LOG" || fail_test "invalid rpcd reload marker was not logged"
+rm -f "$LUCI_RPCD_RELOAD_REQUIRED"
+
+python3 - "$helper" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+source = Path(sys.argv[1]).read_text()
+for name in ("start_one_click_update", "start_luci_update"):
+    match = re.search(rf"^{name}\(\) \{{\n(.*?)(?=^\}}\n)", source, re.M | re.S)
+    if not match:
+        raise SystemExit(f"missing function: {name}")
+    body = match.group(1)
+    if body.find("write_task_done") > body.find("luci_schedule_rpcd_reload"):
+        raise SystemExit(f"{name} schedules rpcd reload before durable task completion")
+PY
 
 jsonfilter() {
 	local payload="" expr=""
