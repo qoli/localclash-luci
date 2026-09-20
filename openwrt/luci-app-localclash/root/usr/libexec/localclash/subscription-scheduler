@@ -1,0 +1,60 @@
+#!/bin/sh
+
+HELPER="${LOCALCLASH_HELPER:-/usr/libexec/rpcd/localclash}"
+UCI_BIN="${LOCALCLASH_UCI_BIN:-uci}"
+RUNTIME_STATE="${LOCALCLASH_SUBSCRIPTION_SCHEDULE_RUNTIME:-/tmp/localclash-subscription-schedule-runtime.json}"
+
+fail_scheduler() {
+	logger -t localclash-subscription-scheduler "$1"
+	printf '%s\n' "$1" >&2
+	exit 1
+}
+
+run_scheduler() {
+	local enabled update_hour now clock_hour clock_minute clock_second current_seconds target_seconds wait_seconds next_run runtime_tmp
+	trap 'rm -f "$RUNTIME_STATE"' EXIT INT TERM
+	command -v "$UCI_BIN" >/dev/null 2>&1 || fail_scheduler "缺少 uci，无法读取订阅定时更新配置。"
+	[ -x "$HELPER" ] || fail_scheduler "localClash rpcd helper 不可执行：$HELPER"
+
+	enabled="$($UCI_BIN -q get localclash.subscription_schedule.enabled 2>/dev/null)" || fail_scheduler "订阅定时更新 enabled 配置缺失。"
+	update_hour="$($UCI_BIN -q get localclash.subscription_schedule.update_hour 2>/dev/null)" || fail_scheduler "订阅定时更新 update_hour 配置缺失。"
+	[ "$enabled" = 1 ] || fail_scheduler "订阅定时更新 worker 在功能未启用时被启动。"
+	case "$update_hour" in
+		[0-9]|1[0-9]|2[0-3]) ;;
+		*) fail_scheduler "订阅定时更新 update_hour 必须是 0 到 23 的整数。" ;;
+	esac
+	target_seconds=$((update_hour * 3600))
+
+	while :; do
+		now="$(date +%s)" || fail_scheduler "无法读取系统时间。"
+		clock_hour="$(date +%H)" || fail_scheduler "无法读取系统小时。"
+		clock_minute="$(date +%M)" || fail_scheduler "无法读取系统分钟。"
+		clock_second="$(date +%S)" || fail_scheduler "无法读取系统秒数。"
+		case "$clock_hour:$clock_minute:$clock_second" in
+			0[0-9]:[0-5][0-9]:[0-5][0-9]|1[0-9]:[0-5][0-9]:[0-5][0-9]|2[0-3]:[0-5][0-9]:[0-5][0-9]) ;;
+			*) fail_scheduler "系统时间格式无效，无法计算下次订阅更新时间。" ;;
+		esac
+		clock_hour="${clock_hour#0}"; [ -n "$clock_hour" ] || clock_hour=0
+		clock_minute="${clock_minute#0}"; [ -n "$clock_minute" ] || clock_minute=0
+		clock_second="${clock_second#0}"; [ -n "$clock_second" ] || clock_second=0
+		current_seconds=$((clock_hour * 3600 + clock_minute * 60 + clock_second))
+		wait_seconds=$((target_seconds - current_seconds))
+		[ "$wait_seconds" -gt 0 ] || wait_seconds=$((wait_seconds + 86400))
+		next_run=$((now + wait_seconds))
+		runtime_tmp="${RUNTIME_STATE}.tmp.$$"
+		printf '{"version":1,"running":true,"pid":%s,"update_hour":%s,"next_run_at":%s}\n' "$$" "$update_hour" "$next_run" > "$runtime_tmp" && mv "$runtime_tmp" "$RUNTIME_STATE" || fail_scheduler "无法记录订阅定时更新的下次运行时间。"
+		if [ "$wait_seconds" -gt 60 ]; then
+			sleep 60 || exit 0
+			continue
+		fi
+		sleep "$wait_seconds" || exit 0
+		if ! "$HELPER" call subscription_schedule_tick >/dev/null 2>&1; then
+			logger -t localclash-subscription-scheduler "订阅定时更新执行失败；结果状态由 localClash helper 记录。"
+		fi
+	done
+}
+
+case "${1:-}" in
+	run) run_scheduler ;;
+	*) fail_scheduler "用法：subscription-scheduler run" ;;
+esac

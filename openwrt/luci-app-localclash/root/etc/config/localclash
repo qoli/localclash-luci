@@ -1,0 +1,3 @@
+config subscription_schedule 'subscription_schedule'
+	option enabled '0'
+	option update_hour '0'

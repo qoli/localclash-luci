@@ -146,6 +146,23 @@ primary action:
 Subscription URLs are secrets. The status page may show source IDs and refresh
 state, but must not render full URLs after save.
 
+The subscription page also owns the OpenWrt-side automatic refresh schedule.
+Its scheduler is a separate LuCI package service and stores only enablement and
+the selected local-clock hour (`0` through `23`) in UCI. It runs once per day at
+the selected whole hour and recalculates the next wall-clock occurrence while
+waiting so system clock corrections do not turn it into a fixed 24-hour drift.
+A scheduled run uses the local Core MCP in this
+order: inspect `runtime_status`, call synchronous `subscriptions_refresh`, require
+`localclash_config.hot_reload_ready=true`, and call synchronous
+`restart_runtime` with `strategy=hot_reload` only when the runtime was already
+running. It then reads back `runtime_status`, `/proxies`, and the LuCI takeover
+state. A stopped runtime remains stopped. An indeterminate transport result is
+accepted only when the read-back proves a discriminating node change, the same
+runtime PID, and unchanged takeover state; otherwise it is an explicit
+`attention_required` result. The scheduler never falls back to process restart
+or a product CLI refresh/render chain. Scheduled ticks use the shared LuCI task
+lock and record `skipped_busy` instead of queueing behind an interactive task.
+
 ### 1a. Simple Website Routing
 
 The `网站分流` page sits between `订阅` and `进阶`. It accepts one host pattern at
@@ -897,7 +914,7 @@ PKG_RELEASE:=1
 PKGARCH:=all
 
 LUCI_TITLE:=LuCI support for localClash
-LUCI_DEPENDS:=+luci-base +rpcd +uclient-fetch +ca-bundle
+LUCI_DEPENDS:=+luci-base +rpcd +uclient-fetch +curl +ca-bundle +jsonfilter
 ```
 
 The exact dependency list should be verified against the helper implementation.
@@ -922,6 +939,9 @@ Methods:
 status
 subscription_set
 subscription_refresh
+subscription_schedule_get
+subscription_schedule_set
+subscription_schedule_run_now
 custom_sites_get
 custom_sites_transact
 component_update
@@ -955,6 +975,17 @@ Method contracts:
   file.
 - `subscription_refresh`: no input. Calls
   `localclash subscription refresh --json`.
+- `subscription_schedule_get`: no input. Reads the LuCI-owned UCI schedule plus
+  the current scheduler timing and last bounded, redacted run result.
+- `subscription_schedule_set`: input
+  `{ "enabled": true|false, "update_hour": <integer 0..23> }`. Saves the
+  UCI schedule and enables/restarts or stops/disables the separate
+  `localclash-subscription-scheduler` procd service. Enabling requires a healthy
+  local MCP service. Save or service failures restore the prior schedule and
+  report any incomplete rollback explicitly.
+- `subscription_schedule_run_now`: no input. Starts one non-cancellable shared
+  background task using the same MCP transaction as a scheduled tick. It does
+  not bypass an active localClash task.
 - `subscription_setup_async`: input `{ "uris": ["https://...", "vless://..."] }`.
   在共享后台任务中依序保存来源、刷新订阅、生成配置，再复用
   `runtime_restart_continuity_run process_restart` 重启运行时并验证最终运行状态与

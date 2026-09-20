@@ -7,7 +7,7 @@
       },
       "ubus": {
         "file": [ "read" ],
-        "localclash": [ "status", "subscription_get", "custom_sites_get", "service_status", "bootstrap_logs", "task_status", "bootstrap_task_status", "boot_restore_status", "takeover_status", "takeover_logs", "core_update_check", "luci_update_check", "mcp_help", "one_click_update_preferences" ]
+        "localclash": [ "status", "subscription_get", "subscription_schedule_get", "custom_sites_get", "service_status", "bootstrap_logs", "task_status", "bootstrap_task_status", "boot_restore_status", "takeover_status", "takeover_logs", "core_update_check", "luci_update_check", "mcp_help", "one_click_update_preferences" ]
       }
     },
     "write": {
@@ -17,6 +17,8 @@
           "subscription_setup",
           "subscription_setup_async",
           "subscription_refresh",
+          "subscription_schedule_set",
+          "subscription_schedule_run_now",
           "custom_sites_transact",
           "custom_sites_transact_async",
           "component_update",

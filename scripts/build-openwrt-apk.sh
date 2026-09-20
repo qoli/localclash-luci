@@ -21,7 +21,7 @@ cp -a "${package_dir}/root/." "${build_dir}/pkg/"
 mkdir -p "${build_dir}/pkg/www"
 cp -a "${package_dir}/htdocs/." "${build_dir}/pkg/www/"
 chmod 755 "${build_dir}/pkg/usr/libexec/rpcd/localclash"
-chmod 755 "${build_dir}/pkg/usr/libexec/localclash/takeover" "${build_dir}/pkg/usr/libexec/localclash/takeover-apply" "${build_dir}/pkg/usr/libexec/localclash/takeover-stop" "${build_dir}/pkg/usr/libexec/localclash/dns-guard" "${build_dir}/pkg/usr/libexec/localclash/dns-probe"
+chmod 755 "${build_dir}/pkg/usr/libexec/localclash/takeover" "${build_dir}/pkg/usr/libexec/localclash/takeover-apply" "${build_dir}/pkg/usr/libexec/localclash/takeover-stop" "${build_dir}/pkg/usr/libexec/localclash/dns-guard" "${build_dir}/pkg/usr/libexec/localclash/dns-probe" "${build_dir}/pkg/usr/libexec/localclash/subscription-scheduler" "${build_dir}/pkg/etc/init.d/localclash-subscription-scheduler"
 
 cat > "${build_dir}/scripts/post-install" <<'EOF'
 #!/bin/sh
@@ -30,6 +30,7 @@ rm -f /tmp/luci-indexcache.*.json 2>/dev/null || true
 rm -rf /tmp/luci-modulecache /tmp/luci-templatecache 2>/dev/null || true
 reload_state_dir=/tmp/localclash-update
 reload_required="$reload_state_dir/rpcd-reload-required"
+scheduler_restart_required="$reload_state_dir/subscription-scheduler-restart-required"
 task_status=/tmp/localclash-task-status.json
 task_running=false
 if [ -f "$task_status" ]; then
@@ -47,11 +48,27 @@ if [ "$task_running" = true ]; then
 	mkdir -p "$reload_state_dir" || exit 1
 	chmod 700 "$reload_state_dir" || exit 1
 	[ ! -L "$reload_required" ] || exit 1
+	[ ! -L "$scheduler_restart_required" ] || exit 1
 	printf 'required\n' > "$reload_required" || exit 1
+	printf 'required\n' > "$scheduler_restart_required" || exit 1
 else
 	[ -x /etc/init.d/rpcd ] || exit 1
 	/etc/init.d/rpcd reload >/dev/null 2>&1 || exit 1
-	rm -f "$reload_required" || exit 1
+	[ -x /etc/init.d/localclash-subscription-scheduler ] || exit 1
+	command -v uci >/dev/null 2>&1 || exit 1
+	scheduler_enabled="$(uci -q get localclash.subscription_schedule.enabled 2>/dev/null)" || exit 1
+	case "$scheduler_enabled" in
+		1)
+			/etc/init.d/localclash-subscription-scheduler enable >/dev/null 2>&1 || exit 1
+			/etc/init.d/localclash-subscription-scheduler restart >/dev/null 2>&1 || exit 1
+			;;
+		0)
+			/etc/init.d/localclash-subscription-scheduler stop >/dev/null 2>&1 || exit 1
+			/etc/init.d/localclash-subscription-scheduler disable >/dev/null 2>&1 || exit 1
+			;;
+		*) exit 1 ;;
+	esac
+	rm -f "$reload_required" "$scheduler_restart_required" || exit 1
 fi
 exit 0
 EOF
@@ -73,7 +90,7 @@ docker run --rm \
 			--info 'origin:localclash-luci' \
 			--info 'url:https://github.com/qoli/localclash-luci' \
 			--info 'maintainer:qoli' \
-		--info 'depends:luci-base luci-lib-nixio rpcd uclient-fetch ca-bundle jsonfilter firewall4 nftables ip-full kmod-tun kmod-nft-tproxy' \
+		--info 'depends:luci-base luci-lib-nixio rpcd uclient-fetch curl ca-bundle jsonfilter firewall4 nftables ip-full kmod-tun kmod-nft-tproxy' \
 			--files '/work/.build/apk/pkg' \
 			--script 'post-install:/work/.build/apk/scripts/post-install' \
 			--script 'post-upgrade:/work/.build/apk/scripts/post-upgrade' \

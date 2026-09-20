@@ -16,6 +16,25 @@ var callSubscriptionSetupAsync = rpc.declare({
 	expect: { '': {} }
 });
 
+var callSubscriptionScheduleGet = rpc.declare({
+	object: 'localclash',
+	method: 'subscription_schedule_get',
+	expect: { '': {} }
+});
+
+var callSubscriptionScheduleSet = rpc.declare({
+	object: 'localclash',
+	method: 'subscription_schedule_set',
+	params: [ 'enabled', 'update_hour' ],
+	expect: { '': {} }
+});
+
+var callSubscriptionScheduleRunNow = rpc.declare({
+	object: 'localclash',
+	method: 'subscription_schedule_run_now',
+	expect: { '': {} }
+});
+
 var callTaskStatus = rpc.declare({
 	object: 'localclash',
 	method: 'task_status',
@@ -300,12 +319,58 @@ function refreshSubscriptionInput() {
 	});
 }
 
+function formatEpoch(value) {
+	var number = Number(value);
+	if (!Number.isFinite(number) || number <= 0)
+		return _('未记录');
+	return new Date(number * 1000).toLocaleString();
+}
+
+function scheduleStatusText(result) {
+	var lastRun = result && result.last_run;
+	var runtime = result && result.runtime;
+	var lines = [];
+
+	if (lastRun) {
+		lines.push(formatText(_('上次结果：%s'), lastRun.message || lastRun.outcome || _('未知')));
+		lines.push(formatText(_('上次完成：%s'), formatEpoch(lastRun.completed_at)));
+	}
+	else
+		lines.push(_('尚未执行订阅定时更新。'));
+
+	if (runtime && runtime.running)
+		lines.push(formatText(_('下次执行：%s'), formatEpoch(runtime.next_run_at)));
+	return lines.join('\n');
+}
+
 return view.extend({
 	load: function() {
-		return {};
+		return callSubscriptionScheduleGet();
 	},
 
-	render: function(subscription) {
+	render: function(scheduleResult) {
+		var schedule = scheduleResult && scheduleResult.schedule || {};
+		var selectedHour = Number(schedule.update_hour);
+		var hourOptions = [];
+		for (var hour = 0; hour < 24; hour++) {
+			hourOptions.push(E('option', {
+				'value': String(hour),
+				'selected': selectedHour === hour ? '' : null
+			}, [ (hour < 10 ? '0' : '') + String(hour) + ':00' ]));
+		}
+		var scheduleEnabled = E('input', {
+			'id': 'localclash-subscription-schedule-enabled',
+			'type': 'checkbox',
+			'checked': schedule.enabled === true ? '' : null
+		});
+		var scheduleHour = E('select', {
+			'id': 'localclash-subscription-schedule-hour',
+			'class': 'cbi-input-select'
+		}, hourOptions);
+		var scheduleStatus = E('pre', {
+			'id': 'localclash-subscription-schedule-status',
+			'class': 'localclash-schedule-status'
+		}, [ scheduleStatusText(scheduleResult) ]);
 		deferAfterPaint(refreshSubscriptionInput, 600);
 
 		return E('div', { 'class': 'cbi-map localclash-view' }, [
@@ -319,12 +384,14 @@ return view.extend({
 				'.localclash-view .localclash-textarea{box-sizing:border-box;width:calc(100% - 2rem);min-height:12rem;margin:1rem;padding:1rem;font-family:monospace;line-height:1.45;resize:vertical}',
 				'.localclash-view .localclash-subscription-status{margin:.25rem 1rem 0 1rem;color:inherit;line-height:1.45}',
 				'.localclash-view .localclash-subscription-status.localclash-error{color:#b42318}',
+				'.localclash-view .localclash-schedule-grid{display:grid;grid-template-columns:minmax(10rem,16rem) minmax(12rem,24rem);gap:.75rem 1rem;align-items:center;margin:1rem}',
+				'.localclash-view .localclash-schedule-status{margin:1rem;padding:1rem;white-space:pre-wrap;line-height:1.5}',
 				'.localclash-view + .cbi-page-actions,.localclash-view ~ .cbi-page-actions,.cbi-page-actions{display:none!important}',
 				'.localclash-result{box-sizing:border-box;width:100%;min-width:0;max-width:100%;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word}',
 				'.localclash-task-status{margin:.25rem 0 1rem 0;line-height:1.45}',
 				'.localclash-task-log{box-sizing:border-box;width:100%;min-width:0;max-width:100%;max-height:48vh;overflow:auto;margin:0 0 1rem 0;padding:1rem;background:#111827;color:#d1d5db;border-radius:6px;white-space:pre-wrap;word-break:break-word}',
 				'.localclash-task-result:empty{display:none}',
-				'@media (max-width: 700px){.localclash-view .localclash-button{width:100%;min-width:0}.localclash-task-log{min-width:0;max-width:100%;max-height:42vh;font-size:12px}.localclash-result{max-width:100%}}'
+				'@media (max-width: 700px){.localclash-view .localclash-button{width:100%;min-width:0}.localclash-view .localclash-schedule-grid{grid-template-columns:1fr}.localclash-task-log{min-width:0;max-width:100%;max-height:42vh;font-size:12px}.localclash-result{max-width:100%}}'
 			].join('\n') ]),
 			E('h2', {}, [ _('localClash') ]),
 			E('div', { 'class': 'cbi-section localclash-section' }, [
@@ -347,7 +414,45 @@ return view.extend({
 						return callSubscriptionSetupAsync(requireSubscriptionUrls());
 					}, 'cbi-button-apply')
 				])
-			])
-		]);
+				]),
+				E('div', { 'class': 'cbi-section localclash-section' }, [
+					E('h3', {}, [ _('自动更新') ]),
+					E('p', {}, [ _('每天在所选时间通过本机 MCP 刷新订阅、验证候选配置，并在 Mihomo 正在运行时执行热加载。') ]),
+					E('div', { 'class': 'localclash-schedule-grid' }, [
+						E('label', { 'for': 'localclash-subscription-schedule-enabled' }, [ _('启用定时更新') ]),
+						scheduleEnabled,
+						E('label', { 'for': 'localclash-subscription-schedule-hour' }, [ _('每天更新时间（路由器本地时间）') ]),
+						scheduleHour
+					]),
+					scheduleStatus,
+					actionRow([
+						E('button', {
+							'type': 'button',
+							'class': 'btn cbi-button cbi-button-save localclash-button',
+							'click': function(ev) {
+								var button = ev.currentTarget;
+								var updateHour = Number(scheduleHour.value);
+								if (!Number.isInteger(updateHour) || updateHour < 0 || updateHour > 23) {
+									scheduleStatus.textContent = _('每天更新时间必须是 00:00 到 23:00 的整点。');
+									return;
+								}
+								button.disabled = true;
+								callSubscriptionScheduleSet(scheduleEnabled.checked, updateHour).then(function() {
+									return callSubscriptionScheduleGet();
+								}).then(function(updated) {
+									scheduleStatus.textContent = scheduleStatusText(updated);
+								}).catch(function(err) {
+									scheduleStatus.textContent = formatText(_('保存定时更新设置失败：%s'), err.message || String(err));
+								}).finally(function() {
+									button.disabled = false;
+								});
+							}
+						}, [ _('保存定时设置') ]),
+						liveTaskButton(_('立即更新并热加载'), function() {
+							return callSubscriptionScheduleRunNow();
+						}, 'cbi-button-apply')
+					])
+				])
+			]);
 	}
 });

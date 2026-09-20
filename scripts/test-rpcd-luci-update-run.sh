@@ -48,6 +48,24 @@ EOF
 chmod +x "${tmp_dir}/rpcd"
 RPCD_SERVICE="${tmp_dir}/rpcd"
 LUCI_RPCD_RELOAD_REQUIRED="${tmp_dir}/rpcd-reload-required"
+LUCI_SUBSCRIPTION_SCHEDULER_RESTART_REQUIRED="${tmp_dir}/subscription-scheduler-restart-required"
+
+cat > "${tmp_dir}/uci" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[ "$*" = '-q get localclash.subscription_schedule.enabled' ]
+printf '%s\n' "${MOCK_SCHEDULER_ENABLED}"
+EOF
+cat > "${tmp_dir}/scheduler-service" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'scheduler %s\n' "$*" >> "$TRACE"
+EOF
+chmod +x "${tmp_dir}/uci" "${tmp_dir}/scheduler-service"
+UCI_BIN="${tmp_dir}/uci"
+SUBSCRIPTION_SCHEDULER_SERVICE="${tmp_dir}/scheduler-service"
+MOCK_SCHEDULER_ENABLED=1
+export MOCK_SCHEDULER_ENABLED
 
 : > "$TRACE"
 : > "$LUCI_RPCD_RELOAD_REQUIRED"
@@ -59,6 +77,30 @@ done
 grep -qx 'reload' "$TRACE" || fail_test "LuCI update did not use rpcd reload exactly once"
 grep -q 'rpcd 已重新加载' "$LOG" || fail_test "successful rpcd reload was not logged"
 [ ! -e "$LUCI_RPCD_RELOAD_REQUIRED" ] || fail_test "successful rpcd reload did not clear its required marker"
+
+: > "$TRACE"
+: > "$LUCI_SUBSCRIPTION_SCHEDULER_RESTART_REQUIRED"
+luci_schedule_rpcd_reload
+for _ in $(seq 1 40); do
+	grep -q 'scheduler restart' "$TRACE" 2>/dev/null && break
+	/bin/sleep 0.05
+done
+grep -qx 'scheduler enable' "$TRACE" || fail_test "enabled subscription scheduler was not enabled after package update"
+grep -qx 'scheduler restart' "$TRACE" || fail_test "enabled subscription scheduler was not restarted after package update"
+[ ! -e "$LUCI_SUBSCRIPTION_SCHEDULER_RESTART_REQUIRED" ] || fail_test "successful scheduler restart did not clear its required marker"
+
+: > "$TRACE"
+MOCK_SCHEDULER_ENABLED=0
+export MOCK_SCHEDULER_ENABLED
+: > "$LUCI_SUBSCRIPTION_SCHEDULER_RESTART_REQUIRED"
+luci_schedule_rpcd_reload
+for _ in $(seq 1 40); do
+	grep -q 'scheduler disable' "$TRACE" 2>/dev/null && break
+	/bin/sleep 0.05
+done
+grep -qx 'scheduler stop' "$TRACE" || fail_test "disabled subscription scheduler was not stopped after package update"
+grep -qx 'scheduler disable' "$TRACE" || fail_test "disabled subscription scheduler was not disabled after package update"
+[ ! -e "$LUCI_SUBSCRIPTION_SCHEDULER_RESTART_REQUIRED" ] || fail_test "successful scheduler disable did not clear its required marker"
 
 cat > "$RPCD_SERVICE" <<'EOF'
 #!/usr/bin/env bash
@@ -83,7 +125,7 @@ luci_schedule_rpcd_reload
 reload_rc=$?
 set -e
 [ "$reload_rc" -ne 0 ] || fail_test "symlinked rpcd reload marker was accepted"
-grep -q 'rpcd 重新加载标记类型无效' "$LOG" || fail_test "invalid rpcd reload marker was not logged"
+grep -q '延后加载标记类型无效' "$LOG" || fail_test "invalid rpcd reload marker was not logged"
 rm -f "$LUCI_RPCD_RELOAD_REQUIRED"
 
 python3 - "$helper" <<'PY'

@@ -5,8 +5,10 @@ TAKEOVER_MANAGER="${LOCALCLASH_TAKEOVER_MANAGER:-/usr/libexec/localclash/takeove
 DNS_GUARD="${LOCALCLASH_DNS_GUARD:-/usr/libexec/localclash/dns-guard}"
 STATE_DIR="${LOCALCLASH_STATE_DIR:-/root/localclash}"
 SERVICE="/etc/init.d/localclash-mcp"
+SUBSCRIPTION_SCHEDULER_SERVICE="${LOCALCLASH_SUBSCRIPTION_SCHEDULER_SERVICE:-/etc/init.d/localclash-subscription-scheduler}"
 RPCD_SERVICE="${LOCALCLASH_RPCD_SERVICE:-/etc/init.d/rpcd}"
 LUCI_RPCD_RELOAD_REQUIRED="${LOCALCLASH_LUCI_RPCD_RELOAD_REQUIRED:-/tmp/localclash-update/rpcd-reload-required}"
+LUCI_SUBSCRIPTION_SCHEDULER_RESTART_REQUIRED="${LOCALCLASH_SUBSCRIPTION_SCHEDULER_RESTART_REQUIRED:-/tmp/localclash-update/subscription-scheduler-restart-required}"
 LOG="/tmp/localclash-helper.log"
 TAKEOVER_LOG="${LOCALCLASH_TAKEOVER_LOG:-$STATE_DIR/logs/takeover-events.jsonl}"
 TAKEOVER_LOG_MAX_BYTES="${LOCALCLASH_TAKEOVER_LOG_MAX_BYTES:-262144}"
@@ -19,6 +21,8 @@ TASK_STATUS="/tmp/localclash-task-status.json"
 TASK_RESULT="/tmp/localclash-task-result.json"
 TASK_INPUT="/tmp/localclash-task-input.json"
 TASK_PID="/tmp/localclash-task.pid"
+SUBSCRIPTION_SCHEDULE_STATUS="${LOCALCLASH_SUBSCRIPTION_SCHEDULE_STATUS:-/tmp/localclash-subscription-schedule-status.json}"
+SUBSCRIPTION_SCHEDULE_RUNTIME="${LOCALCLASH_SUBSCRIPTION_SCHEDULE_RUNTIME:-/tmp/localclash-subscription-schedule-runtime.json}"
 MIRROR_CACHE_DIR="/tmp/localclash-mirror-cache"
 MCP_ADDR="${LOCALCLASH_MCP_ADDR:-0.0.0.0:8765}"
 MCP_HELP="/usr/share/localclash/mcp-help.txt"
@@ -40,6 +44,7 @@ BOOT_RESTORE_MAX_UPTIME="${LOCALCLASH_BOOT_RESTORE_MAX_UPTIME:-300}"
 PROC_UPTIME="${LOCALCLASH_PROC_UPTIME:-/proc/uptime}"
 HELPER_SELF="${LOCALCLASH_HELPER_SELF:-$0}"
 MCP_HEALTH_ATTEMPTS="${LOCALCLASH_MCP_HEALTH_ATTEMPTS:-30}"
+UCI_BIN="${LOCALCLASH_UCI_BIN:-uci}"
 LUCI_UPDATE_MAX_ATTEMPTS=3
 LUCI_UPDATE_RETRY_DELAY=2
 TAKEOVER_ROUTE_TABLE="27747"
@@ -490,27 +495,48 @@ luci_clear_cache() {
 }
 
 luci_schedule_rpcd_reload() {
-	if [ -L "$LUCI_RPCD_RELOAD_REQUIRED" ]; then
-		log_line "LuCI 更新：rpcd 重新加载标记类型无效，拒绝继续"
+	local rpcd_required scheduler_required scheduler_enabled
+	rpcd_required=false
+	scheduler_required=false
+	if [ -L "$LUCI_RPCD_RELOAD_REQUIRED" ] || [ -L "$LUCI_SUBSCRIPTION_SCHEDULER_RESTART_REQUIRED" ]; then
+		log_line "LuCI 更新：延后加载标记类型无效，拒绝继续"
 		return 1
 	fi
-	[ -f "$LUCI_RPCD_RELOAD_REQUIRED" ] || return 0
+	[ ! -f "$LUCI_RPCD_RELOAD_REQUIRED" ] || rpcd_required=true
+	[ ! -f "$LUCI_SUBSCRIPTION_SCHEDULER_RESTART_REQUIRED" ] || scheduler_required=true
+	[ "$rpcd_required" = true ] || [ "$scheduler_required" = true ] || return 0
 	(
 		sleep 2
-		if [ ! -x "$RPCD_SERVICE" ]; then
-			log_line "LuCI 更新：rpcd 服务脚本不可用，无法重新加载 RPC 方法和权限"
-			exit 1
-		fi
-		log_line "LuCI 更新：正在重新加载 rpcd 以刷新 RPC 方法和权限"
-		if "$RPCD_SERVICE" reload >/dev/null 2>&1; then
-			log_line "LuCI 更新：rpcd 已重新加载"
-			if ! rm -f "$LUCI_RPCD_RELOAD_REQUIRED"; then
-				log_line "LuCI 更新：无法清除 rpcd 重新加载标记"
+		if [ "$rpcd_required" = true ]; then
+			if [ ! -x "$RPCD_SERVICE" ]; then
+				log_line "LuCI 更新：rpcd 服务脚本不可用，无法重新加载 RPC 方法和权限"
 				exit 1
 			fi
-		else
-			log_line "LuCI 更新：rpcd 重新加载失败，请检查系统日志"
-			exit 1
+			log_line "LuCI 更新：正在重新加载 rpcd 以刷新 RPC 方法和权限"
+			if "$RPCD_SERVICE" reload >/dev/null 2>&1; then
+				log_line "LuCI 更新：rpcd 已重新加载"
+				rm -f "$LUCI_RPCD_RELOAD_REQUIRED" || exit 1
+			else
+				log_line "LuCI 更新：rpcd 重新加载失败，请检查系统日志"
+				exit 1
+			fi
+		fi
+		if [ "$scheduler_required" = true ]; then
+			[ -x "$SUBSCRIPTION_SCHEDULER_SERVICE" ] || exit 1
+			scheduler_enabled="$("$UCI_BIN" -q get localclash.subscription_schedule.enabled 2>/dev/null)" || exit 1
+			case "$scheduler_enabled" in
+				1)
+					"$SUBSCRIPTION_SCHEDULER_SERVICE" enable >/dev/null 2>&1 || exit 1
+					"$SUBSCRIPTION_SCHEDULER_SERVICE" restart >/dev/null 2>&1 || exit 1
+					;;
+				0)
+					"$SUBSCRIPTION_SCHEDULER_SERVICE" stop >/dev/null 2>&1 || exit 1
+					"$SUBSCRIPTION_SCHEDULER_SERVICE" disable >/dev/null 2>&1 || exit 1
+					;;
+				*) exit 1 ;;
+			esac
+			rm -f "$LUCI_SUBSCRIPTION_SCHEDULER_RESTART_REQUIRED" || exit 1
+			log_line "LuCI 更新：订阅定时更新服务已加载新版本"
 		fi
 	) >/dev/null 2>&1 &
 }
@@ -856,21 +882,24 @@ write_task_running() {
 	summary="$1"
 	task="${2:-task}"
 	extra=""
-	if [ "$task" = runtime_restart ]; then
+	if [ "$task" = runtime_restart ] || [ "$task" = subscription_schedule ]; then
 		extra=',"cancellable":false,"task_id":"'"$(json_escape "$3")"'"'
 	fi
 	printf '{"ok":true,"running":true,"done":false,"started_at":%s,"task":"%s","summary":"%s"%s}\n' "$(now_epoch)" "$(json_escape "$task")" "$(json_escape "$summary")" "$extra" > "${TASK_STATUS}.tmp.$$" && mv "${TASK_STATUS}.tmp.$$" "$TASK_STATUS"
 }
 
 write_task_noncancellable() {
-	local summary task started
+	local summary task started task_id extra
 	summary="$1"
 	task="$(task_name)"
 	started="$(task_started_at)"
+	task_id="$(jsonfilter -i "$TASK_STATUS" -e '@.task_id' 2>/dev/null || true)"
+	extra=""
+	[ -z "$task_id" ] || extra=',"task_id":"'"$(json_escape "$task_id")"'"'
 	case "$started" in
 		""|*[!0-9]*) started=0 ;;
 	esac
-	printf '{"ok":true,"running":true,"done":false,"started_at":%s,"task":"%s","summary":"%s","cancellable":false}\n' "$started" "$(json_escape "$task")" "$(json_escape "$summary")" > "${TASK_STATUS}.tmp.$$" && mv "${TASK_STATUS}.tmp.$$" "$TASK_STATUS"
+	printf '{"ok":true,"running":true,"done":false,"started_at":%s,"task":"%s","summary":"%s","cancellable":false%s}\n' "$started" "$(json_escape "$task")" "$(json_escape "$summary")" "$extra" > "${TASK_STATUS}.tmp.$$" && mv "${TASK_STATUS}.tmp.$$" "$TASK_STATUS"
 }
 
 write_task_pid() {
@@ -907,7 +936,7 @@ write_task_done() {
 	completed="$(now_epoch)"
 	cancellable="$(jsonfilter -i "$TASK_STATUS" -e '@.cancellable' 2>/dev/null || true)"
 	extra=""
-	if [ "$task" = runtime_restart ]; then
+	if [ "$task" = runtime_restart ] || [ "$task" = subscription_schedule ]; then
 		extra=',"cancellable":false,"task_id":"'"$(json_escape "$(jsonfilter -i "$TASK_STATUS" -e '@.task_id')")"'"'
 	elif [ "$cancellable" = false ]; then
 		extra=',"cancellable":false'
@@ -945,7 +974,7 @@ clear_stale_task_pid() {
 write_task_stale_result() {
 	local result task message action
 	task="$(jsonfilter -i "$TASK_STATUS" -e '@.task' 2>/dev/null || true)"
-	case "$task" in
+		case "$task" in
 		runtime_restart)
 			message="重启任务已中断，无法确认运行时和网络接管的最终状态。"
 			action="先检查运行时及网络接管状态，再决定下一步操作。"
@@ -974,10 +1003,14 @@ write_task_stale_result() {
 			message="LuCI 界面更新任务已中断，请重试。"
 			action="点击检查 LuCI 更新重试。"
 			;;
-		subscription_set)
-			message="订阅设置任务已中断，请重试。"
-			action="重新保存订阅设置。"
-			;;
+			subscription_set)
+				message="订阅设置任务已中断，请重试。"
+				action="重新保存订阅设置。"
+				;;
+			subscription_schedule)
+				message="订阅更新和热加载任务已中断，无法确认最终运行状态。"
+				action="先检查定时更新结果和运行时状态，再决定是否重试。"
+				;;
 		custom_sites)
 			message="自訂網站保存任务已中断，请重试。"
 			action="重新保存自訂網站规则。"
@@ -1101,6 +1134,8 @@ task_cancel() {
 		if task_status_running; then
 			if [ "$task" = subscription_set ]; then
 				fail "task_not_cancellable" "订阅已进入运行时重启和网络接管验证阶段，不能中途取消；关闭页面不会停止任务。"
+			elif [ "$task" = subscription_schedule ]; then
+				fail "task_not_cancellable" "订阅更新和热加载任务不能中途取消；关闭页面不会停止任务。"
 			else
 				fail "task_not_cancellable" "重启正在恢复运行时和网络接管，不能中途取消；关闭页面不会停止任务。"
 			fi
@@ -2298,6 +2333,51 @@ mcp_local_health_endpoint() {
 		host="127.0.0.1"
 	fi
 	printf 'http://%s:%s/health\n' "$host" "$port"
+}
+
+mcp_local_endpoint() {
+	local host port
+	host="${MCP_ADDR%:*}"
+	port="${MCP_ADDR##*:}"
+	if [ "$host" = "0.0.0.0" ] || [ "$host" = "::" ] || [ -z "$host" ]; then
+		host="127.0.0.1"
+	fi
+	printf 'http://%s:%s/mcp\n' "$host" "$port"
+}
+
+mcp_tool_call() {
+	local tool arguments output request response rpc_version rpc_error tool_error
+	tool="$1"
+	arguments="$2"
+	output="$3"
+	request="${output}.request.$$"
+	response="${output}.response.$$"
+	command -v curl >/dev/null 2>&1 || {
+		printf '{"jsonrpc":"2.0","error":{"message":"curl is required for local MCP calls"}}\n' > "$output"
+		return 127
+	}
+	command -v jsonfilter >/dev/null 2>&1 || {
+		printf '{"jsonrpc":"2.0","error":{"message":"jsonfilter is required for local MCP calls"}}\n' > "$output"
+		return 127
+	}
+	printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"%s","arguments":%s}}\n' \
+		"$(json_escape "$tool")" "$arguments" > "$request" || return 1
+	if ! curl --fail --silent --show-error --noproxy '*' --header 'Content-Type: application/json' --request POST --data-binary "@$request" --output "$response" "$(mcp_local_endpoint)"; then
+		rm -f "$request" "$response"
+		printf '{"jsonrpc":"2.0","error":{"message":"local MCP HTTP request failed"}}\n' > "$output"
+		return 1
+	fi
+	rm -f "$request"
+	mv "$response" "$output" || return 1
+	rpc_version="$(jsonfilter -i "$output" -e '@.jsonrpc' 2>/dev/null || true)"
+	if [ "$rpc_version" != "2.0" ]; then
+		return 1
+	fi
+	rpc_error="$(jsonfilter -i "$output" -e '@.error.message' 2>/dev/null || true)"
+	[ -z "$rpc_error" ] || return 1
+	tool_error="$(jsonfilter -i "$output" -e '@.result.isError' 2>/dev/null || true)"
+	[ "$tool_error" != "true" ] || return 1
+	return 0
 }
 
 wait_for_mcp_ready() {
@@ -3796,6 +3876,492 @@ custom_sites_transact_run() {
 	custom_sites_transact < "$TASK_INPUT"
 }
 
+subscription_schedule_config() {
+	local enabled update_hour
+	command -v "$UCI_BIN" >/dev/null 2>&1 || {
+		fail "uci_missing" "缺少 uci，无法读取订阅定时更新配置。"
+		return 1
+	}
+	enabled="$($UCI_BIN -q get localclash.subscription_schedule.enabled 2>/dev/null)" || {
+		fail "subscription_schedule_config_missing" "订阅定时更新配置缺失。"
+		return 1
+	}
+	update_hour="$($UCI_BIN -q get localclash.subscription_schedule.update_hour 2>/dev/null)" || {
+		fail "subscription_schedule_config_missing" "订阅定时更新时间配置缺失。"
+		return 1
+	}
+	case "$enabled" in
+		0|1) ;;
+		*) fail "subscription_schedule_enabled_invalid" "订阅定时更新 enabled 必须是 0 或 1。"; return 1 ;;
+	esac
+	case "$update_hour" in
+		[0-9]|1[0-9]|2[0-3]) ;;
+		*) fail "subscription_schedule_hour_invalid" "订阅定时更新时间必须是 0 到 23 的整数小时。"; return 1 ;;
+	esac
+	if [ "$enabled" = 1 ]; then
+		enabled=true
+	else
+		enabled=false
+	fi
+	printf '{"enabled":%s,"update_hour":%s}' "$enabled" "$update_hour"
+}
+
+subscription_schedule_json_file() {
+	local path version
+	path="$1"
+	[ -f "$path" ] || {
+		printf 'null'
+		return 0
+	}
+	version="$(jsonfilter -i "$path" -e '@.version' 2>/dev/null || true)"
+	[ "$version" = 1 ] || {
+		fail_with_details "subscription_schedule_state_invalid" "订阅定时更新状态文件无效。" '"path":"'"$(json_escape "$path")"'"'
+		return 1
+	}
+	cat "$path"
+}
+
+subscription_schedule_get() {
+	local config last_run runtime runtime_pid
+	config="$(subscription_schedule_config)" || {
+		printf '%s\n' "$config"
+		return 1
+	}
+	last_run="$(subscription_schedule_json_file "$SUBSCRIPTION_SCHEDULE_STATUS")" || {
+		printf '%s\n' "$last_run"
+		return 1
+	}
+	runtime="$(subscription_schedule_json_file "$SUBSCRIPTION_SCHEDULE_RUNTIME")" || {
+		printf '%s\n' "$runtime"
+		return 1
+	}
+	if [ "$runtime" != null ]; then
+		runtime_pid="$(jsonfilter -i "$SUBSCRIPTION_SCHEDULE_RUNTIME" -e '@.pid' 2>/dev/null || true)"
+		case "$runtime_pid" in
+			''|*[!0-9]*|0) rm -f "$SUBSCRIPTION_SCHEDULE_RUNTIME"; runtime=null ;;
+			*) kill -0 "$runtime_pid" 2>/dev/null || { rm -f "$SUBSCRIPTION_SCHEDULE_RUNTIME"; runtime=null; } ;;
+		esac
+	fi
+	printf '{"ok":true,"schedule":%s,"last_run":%s,"runtime":%s}\n' "$config" "$last_run" "$runtime"
+}
+
+subscription_schedule_write_file() {
+	local path value tmp
+	path="$1"
+	value="$2"
+	tmp="${path}.tmp.$$"
+	printf '%s\n' "$value" > "$tmp" && mv "$tmp" "$path"
+}
+
+subscription_schedule_mcp_error() {
+	local path message
+	path="$1"
+	message="$(jsonfilter -i "$path" -e '@.error.message' 2>/dev/null || true)"
+	[ -n "$message" ] || message="$(jsonfilter -i "$path" -e '@.result.structuredContent.error' 2>/dev/null || true)"
+	[ -n "$message" ] || message="MCP 响应没有提供可用的错误原因。"
+	printf '%s\n' "$message" |
+		awk '{ gsub(/[[:alpha:]][[:alnum:]+.-]*:\/\/[^[:space:]]+/, "<uri>"); print }' |
+		redact_diagnostic_stream |
+		tr '\n\r\t' '   ' |
+		cut -c1-240
+}
+
+subscription_schedule_finish() {
+	local result
+	result="$1"
+	subscription_schedule_write_file "$SUBSCRIPTION_SCHEDULE_STATUS" "$result" || {
+		fail "subscription_schedule_state_write_failed" "无法记录订阅定时更新结果。"
+		return 1
+	}
+	printf '%s\n' "$result"
+}
+
+subscription_schedule_fail_result() {
+	local source started stage code message outcome completed result
+	source="$1"
+	started="$2"
+	stage="$3"
+	code="$4"
+	message="$5"
+	outcome="${6:-failed}"
+	completed="$(now_epoch)"
+	result='{"version":1,"ok":false,"source":"'"$(json_escape "$source")"'","outcome":"'"$(json_escape "$outcome")"'","stage":"'"$(json_escape "$stage")"'","code":"'"$(json_escape "$code")"'","message":"'"$(json_escape "$message")"'","started_at":'"$started"',"completed_at":'"$completed"'}'
+	subscription_schedule_finish "$result"
+}
+
+subscription_schedule_verify_loaded_proxies() {
+	local refresh_response proxies_response require_change workdir loaded expected_groups added removed value discriminating
+	refresh_response="$1"
+	proxies_response="$2"
+	require_change="$3"
+	workdir="$4"
+	loaded="$workdir/loaded-proxy-names"
+	expected_groups="$workdir/expected-proxy-groups"
+	added="$workdir/added-proxies"
+	removed="$workdir/removed-proxies"
+	jsonfilter -i "$proxies_response" -e '@.result.structuredContent.json.proxies[*].name' > "$loaded" 2>/dev/null || return 1
+	jsonfilter -i "$refresh_response" -e '@.result.structuredContent.localclash_config.proxy_groups[*].id' > "$expected_groups" 2>/dev/null || return 1
+	[ -s "$loaded" ] && [ -s "$expected_groups" ] || return 1
+	while IFS= read -r value; do
+		grep -F -x -- "$value" "$loaded" >/dev/null 2>&1 || return 1
+	done < "$expected_groups"
+	jsonfilter -i "$refresh_response" -e '@.result.structuredContent.node_diff.added[*]' > "$added" 2>/dev/null || : > "$added"
+	jsonfilter -i "$refresh_response" -e '@.result.structuredContent.node_diff.removed[*]' > "$removed" 2>/dev/null || : > "$removed"
+	discriminating=0
+	while IFS= read -r value; do
+		[ -n "$value" ] || continue
+		discriminating=$((discriminating + 1))
+		grep -F -x -- "$value" "$loaded" >/dev/null 2>&1 || return 1
+	done < "$added"
+	while IFS= read -r value; do
+		[ -n "$value" ] || continue
+		discriminating=$((discriminating + 1))
+		if grep -F -x -- "$value" "$loaded" >/dev/null 2>&1; then
+			return 1
+		fi
+	done < "$removed"
+	[ "$require_change" != true ] || [ "$discriminating" -gt 0 ]
+}
+
+subscription_schedule_readback() {
+	local tmpdir prefix require_change runtime_running controller_status proxies
+	tmpdir="$1"
+	prefix="$2"
+	require_change="${3:-false}"
+	if ! mcp_tool_call runtime_status '{}' "$tmpdir/${prefix}-runtime.json"; then
+		return 1
+	fi
+	runtime_running="$(jsonfilter -i "$tmpdir/${prefix}-runtime.json" -e '@.result.structuredContent.running' 2>/dev/null || true)"
+	[ "$runtime_running" = true ] || return 1
+	if ! mcp_tool_call mihomo_api_request '{"method":"GET","path":"/proxies","timeout_ms":5000,"max_bytes":2097152}' "$tmpdir/${prefix}-proxies.json"; then
+		return 1
+	fi
+	controller_status="$(jsonfilter -i "$tmpdir/${prefix}-proxies.json" -e '@.result.structuredContent.status_code' 2>/dev/null || true)"
+	proxies="$(jsonfilter -i "$tmpdir/${prefix}-proxies.json" -e '@.result.structuredContent.json.proxies' 2>/dev/null || true)"
+	[ "$controller_status" = 200 ] && [ -n "$proxies" ] || return 1
+	subscription_schedule_verify_loaded_proxies "$tmpdir/refresh.json" "$tmpdir/${prefix}-proxies.json" "$require_change" "$tmpdir"
+}
+
+subscription_schedule_takeover_readback() {
+	local output expected_effective expected_profile runtime_running effective profile
+	output="$1"
+	expected_effective="$2"
+	expected_profile="$3"
+	call_takeover status --json > "$output" || return 1
+	runtime_running="$(jsonfilter -i "$output" -e '@.status.runtime_running' 2>/dev/null || true)"
+	effective="$(jsonfilter -i "$output" -e '@.status.effective' 2>/dev/null || true)"
+	profile="$(jsonfilter -i "$output" -e '@.status.profile_mode' 2>/dev/null || true)"
+	[ "$runtime_running" = true ] && [ "$effective" = "$expected_effective" ] && [ "$profile" = "$expected_profile" ]
+}
+
+subscription_schedule_run_locked() {
+	local source tmpdir started runtime_before pid_before running takeover_before profile_before refresh_state hot_reload_ready config_sha restart_error reloaded strategy restart_sha pid_after completed result
+	source="$1"
+	started="$(now_epoch)"
+	tmpdir="$(mktemp -d /tmp/localclash-subscription-schedule.XXXXXX)" || {
+		subscription_schedule_fail_result "$source" "$started" preflight tmpdir_failed "无法创建订阅定时更新临时目录。"
+		return 1
+	}
+	log_line "订阅定时更新：开始 source=$source"
+	if ! mcp_tool_call runtime_status '{}' "$tmpdir/runtime-before.json"; then
+		runtime_before="$(subscription_schedule_mcp_error "$tmpdir/runtime-before.json")"
+		rm -rf "$tmpdir"
+		subscription_schedule_fail_result "$source" "$started" runtime_preflight mcp_runtime_status_failed "$runtime_before"
+		return 1
+	fi
+	running="$(jsonfilter -i "$tmpdir/runtime-before.json" -e '@.result.structuredContent.running' 2>/dev/null || true)"
+	pid_before="$(jsonfilter -i "$tmpdir/runtime-before.json" -e '@.result.structuredContent.pid' 2>/dev/null || true)"
+	case "$running" in true|false) ;; *)
+		rm -rf "$tmpdir"
+		subscription_schedule_fail_result "$source" "$started" runtime_preflight runtime_status_invalid "MCP runtime_status 缺少有效的 running 字段。"
+		return 1
+	;; esac
+	if [ "$running" = true ]; then
+		case "$pid_before" in
+			''|*[!0-9]*|0)
+				rm -rf "$tmpdir"
+				subscription_schedule_fail_result "$source" "$started" runtime_preflight runtime_status_invalid "MCP runtime_status 缺少有效的运行时 PID。"
+				return 1
+				;;
+		esac
+		if ! call_takeover status --json > "$tmpdir/takeover-before.json"; then
+			rm -rf "$tmpdir"
+			subscription_schedule_fail_result "$source" "$started" runtime_preflight takeover_status_failed "无法读取热加载前的网络接管状态。"
+			return 1
+		fi
+		takeover_before="$(jsonfilter -i "$tmpdir/takeover-before.json" -e '@.status.effective' 2>/dev/null || true)"
+		profile_before="$(jsonfilter -i "$tmpdir/takeover-before.json" -e '@.status.profile_mode' 2>/dev/null || true)"
+		if [ "$(jsonfilter -i "$tmpdir/takeover-before.json" -e '@.status.runtime_running' 2>/dev/null || true)" != true ]; then
+			rm -rf "$tmpdir"
+			subscription_schedule_fail_result "$source" "$started" runtime_preflight takeover_status_invalid "MCP 与网络接管状态对运行时是否运行的判断不一致。"
+			return 1
+		fi
+		case "$takeover_before:$profile_before" in
+			true:router|false:router|false:normal) ;;
+			*) rm -rf "$tmpdir"; subscription_schedule_fail_result "$source" "$started" runtime_preflight takeover_status_invalid "热加载前的网络接管状态无效。"; return 1 ;;
+		esac
+	fi
+
+	log_line "订阅定时更新：正在通过 MCP 刷新订阅并验证候选配置"
+	if ! run_with_heartbeat_until_complete "订阅定时更新：MCP subscriptions_refresh" "$tmpdir/refresh.json" \
+		mcp_tool_call subscriptions_refresh '{"force":true,"wait":true}' "$tmpdir/refresh-response.json"; then
+		refresh_state="$(subscription_schedule_mcp_error "$tmpdir/refresh-response.json")"
+		rm -rf "$tmpdir"
+		subscription_schedule_fail_result "$source" "$started" subscriptions_refresh subscriptions_refresh_failed "$refresh_state"
+		return 1
+	fi
+	mv "$tmpdir/refresh-response.json" "$tmpdir/refresh.json"
+	refresh_state="$(jsonfilter -i "$tmpdir/refresh.json" -e '@.result.structuredContent.localclash_config.state' 2>/dev/null || true)"
+	hot_reload_ready="$(jsonfilter -i "$tmpdir/refresh.json" -e '@.result.structuredContent.localclash_config.hot_reload_ready' 2>/dev/null || true)"
+	if [ "$hot_reload_ready" != true ]; then
+		[ -n "$refresh_state" ] || refresh_state="missing_localclash_impact"
+		rm -rf "$tmpdir"
+		subscription_schedule_fail_result "$source" "$started" subscriptions_refresh hot_reload_not_ready "MCP subscriptions_refresh 未产生可热加载的配置：$refresh_state"
+		return 1
+	fi
+	if ! mcp_tool_call runtime_facts '{}' "$tmpdir/runtime-facts.json"; then
+		refresh_state="$(subscription_schedule_mcp_error "$tmpdir/runtime-facts.json")"
+		rm -rf "$tmpdir"
+		subscription_schedule_fail_result "$source" "$started" material_readback runtime_facts_failed "$refresh_state"
+		return 1
+	fi
+	config_sha="$(jsonfilter -i "$tmpdir/runtime-facts.json" -e '@.result.structuredContent.config_sha256' 2>/dev/null || true)"
+	if [ "${#config_sha}" -ne 64 ]; then
+		rm -rf "$tmpdir"
+		subscription_schedule_fail_result "$source" "$started" material_readback config_sha256_invalid "MCP runtime_facts 缺少有效的 config_sha256。"
+		return 1
+	fi
+	case "$config_sha" in
+		*[!0-9a-f]*) rm -rf "$tmpdir"; subscription_schedule_fail_result "$source" "$started" material_readback config_sha256_invalid "MCP runtime_facts 返回的 config_sha256 格式无效。"; return 1 ;;
+	esac
+
+	if [ "$running" = false ]; then
+		completed="$(now_epoch)"
+		result='{"version":1,"ok":true,"source":"'"$(json_escape "$source")"'","outcome":"pending_next_start","stage":"complete","message":"订阅已刷新并通过配置验证；运行时原本未启动，未执行热加载。","started_at":'"$started"',"completed_at":'"$completed"',"runtime_was_running":false,"config_sha256":"'"$(json_escape "$config_sha")"'"}'
+		rm -rf "$tmpdir"
+		subscription_schedule_finish "$result"
+		return 0
+	fi
+
+	log_line "订阅定时更新：正在通过 MCP 执行 hot reload"
+	if ! run_with_heartbeat_until_complete "订阅定时更新：MCP restart_runtime hot_reload" "$tmpdir/restart-call.json" \
+		mcp_tool_call restart_runtime '{"strategy":"hot_reload","wait":true}' "$tmpdir/restart.json"; then
+		restart_error="$(subscription_schedule_mcp_error "$tmpdir/restart.json")"
+		if subscription_schedule_readback "$tmpdir" indeterminate true; then
+			pid_after="$(jsonfilter -i "$tmpdir/indeterminate-runtime.json" -e '@.result.structuredContent.pid' 2>/dev/null || true)"
+			if [ "$pid_after" = "$pid_before" ] && subscription_schedule_takeover_readback "$tmpdir/indeterminate-takeover.json" "$takeover_before" "$profile_before"; then
+				completed="$(now_epoch)"
+				result='{"version":1,"ok":true,"source":"'"$(json_escape "$source")"'","outcome":"reloaded_after_indeterminate_call","stage":"complete","message":"MCP 热加载调用结果不确定，但运行时语义读回已确认新订阅配置生效。","started_at":'"$started"',"completed_at":'"$completed"',"runtime_was_running":true,"pid":'"$pid_after"',"config_sha256":"'"$(json_escape "$config_sha")"'","takeover_effective":'"$takeover_before"',"profile_mode":"'"$(json_escape "$profile_before")"'","warning":"'"$(json_escape "$restart_error")"'"}'
+				rm -rf "$tmpdir"
+				subscription_schedule_finish "$result"
+				return 0
+			fi
+		fi
+		rm -rf "$tmpdir"
+		subscription_schedule_fail_result "$source" "$started" hot_reload hot_reload_indeterminate "$restart_error" attention_required
+		return 1
+	fi
+	reloaded="$(jsonfilter -i "$tmpdir/restart.json" -e '@.result.structuredContent.reloaded' 2>/dev/null || true)"
+	strategy="$(jsonfilter -i "$tmpdir/restart.json" -e '@.result.structuredContent.applied_strategy' 2>/dev/null || true)"
+	restart_sha="$(jsonfilter -i "$tmpdir/restart.json" -e '@.result.structuredContent.config_sha256' 2>/dev/null || true)"
+	restart_error="$(jsonfilter -i "$tmpdir/restart.json" -e '@.result.structuredContent.error' 2>/dev/null || true)"
+	if [ "$reloaded" != true ] || [ "$strategy" != hot_reload ] || [ "$restart_sha" != "$config_sha" ] || [ -n "$restart_error" ]; then
+		[ -n "$restart_error" ] || restart_error="MCP restart_runtime 未确认 hot reload 成功。"
+		subscription_schedule_readback "$tmpdir" failed >/dev/null 2>&1 || true
+		rm -rf "$tmpdir"
+		subscription_schedule_fail_result "$source" "$started" hot_reload hot_reload_failed "$restart_error" attention_required
+		return 1
+	fi
+	if ! subscription_schedule_readback "$tmpdir" after false; then
+		rm -rf "$tmpdir"
+		subscription_schedule_fail_result "$source" "$started" runtime_readback runtime_readback_failed "hot reload 已返回成功，但无法通过 MCP 读回运行时及 /proxies。" attention_required
+		return 1
+	fi
+	pid_after="$(jsonfilter -i "$tmpdir/after-runtime.json" -e '@.result.structuredContent.pid' 2>/dev/null || true)"
+	if [ -z "$pid_before" ] || [ "$pid_after" != "$pid_before" ]; then
+		rm -rf "$tmpdir"
+		subscription_schedule_fail_result "$source" "$started" runtime_readback runtime_pid_changed "hot reload 后的 Mihomo PID 与操作前不一致。" attention_required
+		return 1
+	fi
+	if ! subscription_schedule_takeover_readback "$tmpdir/takeover-after.json" "$takeover_before" "$profile_before"; then
+		rm -rf "$tmpdir"
+		subscription_schedule_fail_result "$source" "$started" takeover_readback takeover_state_changed "hot reload 后的网络接管状态与操作前不一致。" attention_required
+		return 1
+	fi
+	completed="$(now_epoch)"
+	result='{"version":1,"ok":true,"source":"'"$(json_escape "$source")"'","outcome":"reloaded","stage":"complete","message":"订阅已刷新、验证并热加载，运行时读回成功。","started_at":'"$started"',"completed_at":'"$completed"',"runtime_was_running":true,"pid":'"$pid_after"',"config_sha256":"'"$(json_escape "$config_sha")"'","refresh_state":"'"$(json_escape "$refresh_state")"'","takeover_effective":'"$takeover_before"',"profile_mode":"'"$(json_escape "$profile_before")"'"}'
+	rm -rf "$tmpdir"
+	subscription_schedule_finish "$result"
+}
+
+subscription_schedule_tick() {
+	local started result
+	started="$(now_epoch)"
+	clear_stale_lock
+	if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+		result='{"version":1,"ok":true,"source":"schedule","outcome":"skipped_busy","stage":"preflight","message":"另一个 localClash 任务正在运行，本次定时更新已跳过。","started_at":'"$started"',"completed_at":'"$(now_epoch)"'}'
+		subscription_schedule_finish "$result" >/dev/null
+		return 0
+	fi
+	printf '%s\n' "$$" > "$LOCK_DIR/pid"
+	trap 'rm -rf "$LOCK_DIR" 2>/dev/null || true' EXIT INT TERM
+	subscription_schedule_run_locked schedule
+	result="$?"
+	rm -rf "$LOCK_DIR" 2>/dev/null || true
+	trap - EXIT INT TERM
+	return "$result"
+}
+
+subscription_schedule_set() {
+	local payload enabled enabled_value update_hour previous_enabled previous_hour status_tmp rc rollback_rc
+	payload="$(strip_ubus_rpc_session "$(cat)")"
+	command -v "$UCI_BIN" >/dev/null 2>&1 || {
+		fail "uci_missing" "缺少 uci，无法保存订阅定时更新配置。"
+		return 1
+	}
+	enabled="$(jsonfilter -s "$payload" -e '@.enabled' 2>/dev/null || true)"
+	update_hour="$(jsonfilter -s "$payload" -e '@.update_hour' 2>/dev/null || true)"
+	case "$enabled" in true|false) ;; *) fail "subscription_schedule_enabled_invalid" "enabled 必须是布尔值。"; return 1 ;; esac
+	case "$update_hour" in
+		[0-9]|1[0-9]|2[0-3]) ;;
+		*) fail "subscription_schedule_hour_invalid" "update_hour 必须是 0 到 23 的整数。"; return 1 ;;
+	esac
+	[ -x "$SUBSCRIPTION_SCHEDULER_SERVICE" ] || {
+		fail "subscription_scheduler_service_missing" "订阅定时更新服务未安装。"
+		return 1
+	}
+	previous_enabled="$($UCI_BIN -q get localclash.subscription_schedule.enabled 2>/dev/null)" || {
+		fail "subscription_schedule_config_missing" "订阅定时更新配置缺失。"
+		return 1
+	}
+	previous_hour="$($UCI_BIN -q get localclash.subscription_schedule.update_hour 2>/dev/null)" || {
+		fail "subscription_schedule_config_missing" "订阅定时更新时间配置缺失。"
+		return 1
+	}
+	if [ "$enabled" = true ]; then
+		status_tmp="$(mktemp /tmp/localclash-subscription-schedule-service.XXXXXX)" || return 1
+		service_status > "$status_tmp" || {
+			cat "$status_tmp"
+			rm -f "$status_tmp"
+			return 1
+		}
+		[ "$(jsonfilter -i "$status_tmp" -e '@.mcp.healthy' 2>/dev/null || true)" = true ] || {
+			rm -f "$status_tmp"
+			fail "mcp_service_unhealthy" "启用订阅定时更新前，localClash MCP 服务必须健康。"
+			return 1
+		}
+		rm -f "$status_tmp"
+		enabled_value=1
+	else
+		enabled_value=0
+	fi
+	if ! $UCI_BIN -q set "localclash.subscription_schedule.enabled=$enabled_value" || \
+		! $UCI_BIN -q set "localclash.subscription_schedule.update_hour=$update_hour" || \
+		! $UCI_BIN -q commit localclash; then
+		rollback_rc=0
+		$UCI_BIN -q set "localclash.subscription_schedule.enabled=$previous_enabled" >/dev/null 2>&1 || rollback_rc=1
+		$UCI_BIN -q set "localclash.subscription_schedule.update_hour=$previous_hour" >/dev/null 2>&1 || rollback_rc=1
+		$UCI_BIN -q commit localclash >/dev/null 2>&1 || rollback_rc=1
+		if [ "$rollback_rc" -ne 0 ]; then
+			fail "subscription_schedule_save_rollback_failed" "保存订阅定时更新配置失败，且原配置未能完整恢复。"
+		else
+			fail "subscription_schedule_save_failed" "无法保存订阅定时更新配置；原配置已恢复。"
+		fi
+		return 1
+	fi
+	rc=0
+	if [ "$enabled" = true ]; then
+		"$SUBSCRIPTION_SCHEDULER_SERVICE" enable >/dev/null 2>&1 && "$SUBSCRIPTION_SCHEDULER_SERVICE" restart >/dev/null 2>&1 || rc=$?
+	else
+		"$SUBSCRIPTION_SCHEDULER_SERVICE" stop >/dev/null 2>&1 && "$SUBSCRIPTION_SCHEDULER_SERVICE" disable >/dev/null 2>&1 || rc=$?
+		rm -f "$SUBSCRIPTION_SCHEDULE_RUNTIME"
+	fi
+	if [ "$rc" -ne 0 ]; then
+		rollback_rc=0
+		$UCI_BIN -q set "localclash.subscription_schedule.enabled=$previous_enabled" >/dev/null 2>&1 || rollback_rc=1
+		$UCI_BIN -q set "localclash.subscription_schedule.update_hour=$previous_hour" >/dev/null 2>&1 || rollback_rc=1
+		$UCI_BIN -q commit localclash >/dev/null 2>&1 || rollback_rc=1
+		if [ "$previous_enabled" = 1 ]; then
+			"$SUBSCRIPTION_SCHEDULER_SERVICE" enable >/dev/null 2>&1 && "$SUBSCRIPTION_SCHEDULER_SERVICE" restart >/dev/null 2>&1 || rollback_rc=1
+		else
+			"$SUBSCRIPTION_SCHEDULER_SERVICE" stop >/dev/null 2>&1 && "$SUBSCRIPTION_SCHEDULER_SERVICE" disable >/dev/null 2>&1 || rollback_rc=1
+		fi
+		if [ "$rollback_rc" -ne 0 ]; then
+			fail "subscription_scheduler_service_rollback_failed" "订阅定时更新服务未能应用新配置，且原配置或服务状态未能完整恢复。"
+		else
+			fail "subscription_scheduler_service_failed" "订阅定时更新服务未能应用新配置；原配置和服务状态已恢复。"
+		fi
+		return 1
+	fi
+	printf '{"ok":true,"changed":true,"schedule":{"enabled":%s,"update_hour":%s},"summary":"订阅定时更新配置已保存。"}\n' "$enabled" "$update_hour"
+}
+
+start_subscription_schedule_run() {
+	local task_id bg_pid
+	clear_stale_lock
+	if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+		fail "task_locked" "另一个 localClash 操作正在运行，请稍后再试。"
+		return 1
+	fi
+	printf '%s\n' "$$" > "$LOCK_DIR/pid"
+	if task_pid_alive; then
+		rm -rf "$LOCK_DIR"
+		fail "task_locked" "另一个 localClash 后台任务正在收尾，请稍后再试。"
+		return 1
+	fi
+	task_id="$(now_epoch)-$$"
+	rm -f "$TASK_RESULT" "$TASK_INPUT" "$TASK_PID"
+	: > "$LOG"
+	write_task_running "订阅更新和热加载任务正在运行。" subscription_schedule "$task_id" || {
+		rm -rf "$LOCK_DIR"
+		fail "task_status_write_failed" "无法记录订阅更新任务，未执行更新。"
+		return 1
+	}
+	write_task_noncancellable "订阅更新和热加载正在执行，关闭页面不会停止任务。" || {
+		rm -rf "$LOCK_DIR"
+		return 1
+	}
+	"$HELPER_SELF" call subscription_schedule_run_task "$task_id" </dev/null >>"$LOG" 2>&1 &
+	bg_pid="$!"
+	write_task_pid "$bg_pid"
+	printf '%s\n' "$bg_pid" > "$LOCK_DIR/pid"
+	ok '"started":true,"running":true,"task":"subscription_schedule","task_id":"'"$task_id"'","cancellable":false,"summary":"订阅更新和热加载任务已启动。"'
+}
+
+subscription_schedule_run_task() {
+	local task_id waited result rc result_ok
+	task_id="$1"
+	waited=0
+	while [ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" != "$$" ]; do
+		[ "$waited" -lt 5 ] || return 1
+		waited=$((waited + 1))
+		sleep 1
+	done
+	trap '[ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" != "$$" ] || rm -rf "$LOCK_DIR"' EXIT
+	trap 'exit 143' INT TERM
+	if [ -z "$task_id" ] || [ "$(jsonfilter -i "$TASK_STATUS" -e '@.task_id' 2>/dev/null)" != "$task_id" ]; then
+		log_line "订阅更新：任务标识不一致，未执行更新"
+		return 1
+	fi
+	subscription_schedule_run_locked manual > "${TASK_RESULT}.tmp.$$"
+	rc="$?"
+	result_ok="$(jsonfilter -i "${TASK_RESULT}.tmp.$$" -e '@.ok' 2>/dev/null || true)"
+	case "$rc:$result_ok" in
+		0:true) ;;
+		*:false) [ "$rc" -ne 0 ] || rc=1 ;;
+		*)
+			rc=1
+			printf '%s\n' '{"ok":false,"code":"subscription_schedule_task_result_invalid","outcome":"attention_required","message":"订阅更新任务未产生与退出状态一致的有效结果，请检查运行时。","next_actions":["查看任务日志并核对最终运行状态。"]}' > "${TASK_RESULT}.tmp.$$"
+			;;
+	esac
+	mv "${TASK_RESULT}.tmp.$$" "$TASK_RESULT" || return 1
+	result="$(cat "$TASK_RESULT")"
+	write_task_done "$rc" "$result" || return 1
+	rm -f "$TASK_PID"
+	log_line "订阅更新：后台任务结束 task_id=$task_id exit_code=$rc"
+	return "$rc"
+}
+
 subscription_save_refresh_file() {
 	local input tmpdir
 	input="$1"
@@ -4947,8 +5513,11 @@ case "$method" in
 	  "subscription_get": {},
 	  "subscription_set": { "uris": [] },
 	  "subscription_setup": { "uris": [] },
-  "subscription_setup_async": { "uris": [] },
+	  "subscription_setup_async": { "uris": [] },
 	  "subscription_refresh": {},
+	  "subscription_schedule_get": {},
+	  "subscription_schedule_set": { "enabled": false, "update_hour": 0 },
+	  "subscription_schedule_run_now": {},
 	  "custom_sites_get": {},
 	  "custom_sites_transact": { "operation": "", "pattern": "", "route": "", "id": "" },
 	  "custom_sites_transact_async": { "operation": "", "pattern": "", "route": "", "id": "" },
@@ -5000,6 +5569,11 @@ JSON
 	subscription_setup_async) start_subscription_setup ;;
 	subscription_setup_run) with_lock subscription_setup_run ;;
 	subscription_refresh) with_lock call_core subscription refresh --json ;;
+	subscription_schedule_get) subscription_schedule_get ;;
+	subscription_schedule_set) with_lock subscription_schedule_set ;;
+	subscription_schedule_run_now) start_subscription_schedule_run ;;
+	subscription_schedule_run_task) subscription_schedule_run_task "${3:-}" ;;
+	subscription_schedule_tick) subscription_schedule_tick ;;
 	custom_sites_get) custom_sites_get ;;
 	custom_sites_transact) with_lock custom_sites_transact ;;
 	custom_sites_transact_async) start_custom_sites_transact ;;
