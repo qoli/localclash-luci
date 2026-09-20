@@ -219,6 +219,10 @@ core_installed() {
 	return 0
 }
 
+mihomo_core_installed() {
+	[ "${MOCK_MIHOMO_CORE_MISSING:-0}" != "1" ]
+}
+
 sleep() {
 	:
 }
@@ -298,7 +302,12 @@ call_core() {
 			printf '{"status":{"effective":true,"runtime_running":true,"profile_mode":"router"}}\n'
 			;;
 		"component update mihomo --json")
-			if [ "${MOCK_MIHOMO_CHANGED_MISSING:-0}" = "1" ]; then
+			if [ "${MOCK_MIHOMO_UPDATE_FAIL:-0}" = "1" ]; then
+				printf '{"ok":false,"code":"mihomo_download_failed","message":"download unavailable"}\n'
+				return 1
+			elif [ "${MOCK_MIHOMO_UNCHANGED:-0}" = "1" ]; then
+				printf '{"ok":true,"changed":false,"summary":"mihomo already current"}\n'
+			elif [ "${MOCK_MIHOMO_CHANGED_MISSING:-0}" = "1" ]; then
 				printf '{"ok":true,"summary":"mihomo updated"}\n'
 			else
 				printf '{"ok":true,"changed":true,"summary":"mihomo updated"}\n'
@@ -359,6 +368,10 @@ call_core() {
 			fi
 			;;
 		"mihomo config-test --json")
+			if [ "${MOCK_CONFIG_TEST_FAIL:-0}" = "1" ]; then
+				printf '{"ok":false,"code":"mihomo_config_invalid","message":"candidate config invalid"}\n'
+				return 1
+			fi
 			printf '{"ok":true,"changed":false,"summary":"config valid"}\n'
 			;;
 		"runtime restart --strategy process_restart --json"|"runtime restart --strategy hot_reload --json")
@@ -441,19 +454,13 @@ one_click_update_reexec
 bootstrap_core
 service_status
 call_core component update mihomo --json
-call_core mihomo config-test --json
-call_takeover status --json
-call_core runtime restart --strategy process_restart --json
-call_core runtime status --json
-takeover_apply
-call_takeover status --json
 call_core component update dashboard --json
 call_core subscription status --json
 call_core subscription refresh --json
 call_core config render --json
 call_core mihomo config-test --json
 call_takeover status --json
-call_core runtime restart --strategy hot_reload --json
+call_core runtime restart --strategy process_restart --json
 call_core runtime status --json
 takeover_apply
 call_takeover status --json
@@ -465,6 +472,18 @@ if ! diff -u "$expected" "${tmp_dir}/trace"; then
 fi
 grep -q 'dnsqualify' "${tmp_dir}/trace" && fail_test "retired dnsqualify step remained in one-click trace"
 grep -q 'custom-sites list' "${tmp_dir}/trace" && fail_test "unchecked policy sync must not read custom-site preservation snapshots"
+
+: > "${tmp_dir}/trace"
+set_task_input '{"version":1,"sync_default_policy":false}'
+MOCK_MIHOMO_UNCHANGED=1
+export MOCK_MIHOMO_UNCHANGED
+capture_one_click_update
+clear_task_input
+unset MOCK_MIHOMO_UNCHANGED
+assert_json "$result"
+[ "$result_rc" -eq 0 ] || fail_test "unchanged Mihomo material failed one-click update: ${result}"
+[ "$(grep -c '^call_core runtime restart --strategy hot_reload --json$' "${tmp_dir}/trace")" -eq 1 ] || fail_test "unchanged Mihomo material did not use exactly one final hot reload"
+grep -q '^call_core runtime restart --strategy process_restart --json$' "${tmp_dir}/trace" && fail_test "byte-identical Mihomo material caused a process restart"
 
 : > "${tmp_dir}/trace"
 set_task_input '{"version":1,"sync_default_policy":false}'
@@ -572,12 +591,6 @@ one_click_update_reexec
 bootstrap_core
 service_status
 call_core component update mihomo --json
-call_core mihomo config-test --json
-call_takeover status --json
-call_core runtime restart --strategy process_restart --json
-call_core runtime status --json
-takeover_apply
-call_takeover status --json
 call_core component update dashboard --json
 call_core subscription status --json
 call_core subscription refresh --json
@@ -587,6 +600,7 @@ EOF
 if ! diff -u "$expected" "${tmp_dir}/trace"; then
 	fail_test "subscription refresh failure boundary mismatch"
 fi
+grep -q '^call_core runtime restart ' "${tmp_dir}/trace" && fail_test "subscription refresh failure restarted Mihomo before all materials were ready"
 
 : > "${tmp_dir}/trace"
 rm -f "${tmp_dir}/takeover-status-count" "${tmp_dir}/takeover-recovered"
@@ -716,12 +730,6 @@ one_click_update_reexec
 bootstrap_core
 service_status
 call_core component update mihomo --json
-call_core mihomo config-test --json
-call_takeover status --json
-call_core runtime restart --strategy process_restart --json
-call_core runtime status --json
-takeover_apply
-call_takeover status --json
 call_core component update dashboard --json
 call_core subscription status --json
 call_core custom-sites list --json
@@ -731,7 +739,7 @@ call_core custom-sites list --json
 call_core config render --json
 call_core mihomo config-test --json
 call_takeover status --json
-call_core runtime restart --strategy hot_reload --json
+call_core runtime restart --strategy process_restart --json
 call_core runtime status --json
 takeover_apply
 call_takeover status --json
@@ -811,8 +819,38 @@ for sync_default_policy in false true; do
 	printf '%s\n' "$result" | python3 -c 'import json,sys; result=json.load(sys.stdin); assert result["ok"] is True; assert result["warnings"] == ["source test: HTTP 522; using validated subscription cache"]; assert result["subscription"]["refresh"]["warnings"] == result["warnings"]; assert "警告" in result["summary"]; assert result["checkpoints"]["material"]["ok"] is True' || fail_test "cache warning was not preserved in completion envelope"
 	grep -q '一键更新：警告：.*HTTP 522' "$LOG" || fail_test "cache warning missing from log"
 	grep -q '^call_core config render --json$' "${tmp_dir}/trace" || fail_test "cache warning skipped render"
-	grep -q '^call_core runtime restart --strategy hot_reload --json$' "${tmp_dir}/trace" || fail_test "cache warning skipped material checkpoint"
+	[ "$(grep -c '^call_core runtime restart --strategy process_restart --json$' "${tmp_dir}/trace")" -eq 1 ] || fail_test "cache warning did not use exactly one batched process restart"
+	grep -q '^call_core runtime restart --strategy hot_reload --json$' "${tmp_dir}/trace" && fail_test "cache warning caused a second hot reload"
 done
+
+: > "${tmp_dir}/trace"
+rm -f "${tmp_dir}/custom-sites-read-count"
+set_task_input '{"version":1,"sync_default_policy":false}'
+MOCK_MIHOMO_UPDATE_FAIL=1
+MOCK_SUBSCRIPTION_CACHE_WARNING=1
+export MOCK_MIHOMO_UPDATE_FAIL MOCK_SUBSCRIPTION_CACHE_WARNING
+capture_one_click_update
+clear_task_input
+unset MOCK_MIHOMO_UPDATE_FAIL MOCK_SUBSCRIPTION_CACHE_WARNING
+assert_json "$result"
+[ "$result_rc" -eq 0 ] || fail_test "existing Mihomo core did not keep one-click update successful: ${result}"
+printf '%s\n' "$result" | python3 -c 'import json,sys; result=json.load(sys.stdin); assert result["ok"] is True; assert result["mihomo"]["outcome"] == "existing_core_preserved"; assert result["mihomo"]["update_error"]["code"] == "mihomo_download_failed"; assert len(result["warnings"]) == 2; assert "已保留当前可用核心" in result["warnings"][0]; assert result["warnings"][1] == "source test: HTTP 522; using validated subscription cache"; assert result["checkpoints"]["software"]["changed"] is False' || fail_test "existing-core Mihomo warning result mismatch"
+grep -q '^call_core mihomo config-test --json$' "${tmp_dir}/trace" || fail_test "existing Mihomo core was not config-tested after update failure"
+[ "$(grep -c '^call_core runtime restart --strategy hot_reload --json$' "${tmp_dir}/trace")" -eq 1 ] || fail_test "existing-core fallback did not use exactly one final hot reload"
+grep -q '^call_core runtime restart --strategy process_restart --json$' "${tmp_dir}/trace" && fail_test "existing-core fallback unnecessarily process-restarted Mihomo"
+
+: > "${tmp_dir}/trace"
+set_task_input '{"version":1,"sync_default_policy":false}'
+MOCK_MIHOMO_UPDATE_FAIL=1
+MOCK_MIHOMO_CORE_MISSING=1
+export MOCK_MIHOMO_UPDATE_FAIL MOCK_MIHOMO_CORE_MISSING
+capture_one_click_update
+clear_task_input
+unset MOCK_MIHOMO_UPDATE_FAIL MOCK_MIHOMO_CORE_MISSING
+assert_json "$result"
+[ "$result_rc" -ne 0 ] || fail_test "missing Mihomo core did not fail one-click update"
+printf '%s\n' "$result" | grep -q '"code":"mihomo_download_failed"' || fail_test "missing-core failure did not preserve the download error: ${result}"
+grep -q '^call_core runtime restart ' "${tmp_dir}/trace" && fail_test "missing-core failure restarted Mihomo"
 
 : > "${tmp_dir}/trace"
 set_task_input '{"version":1,"sync_default_policy":false}'
@@ -825,6 +863,18 @@ unset MOCK_SUBSCRIPTION_CACHE_WARNING MOCK_CONFIG_RENDER_FAIL
 assert_json "$result"
 [ "$result_rc" -ne 0 ] || fail_test "cache warning masked a subsequent render failure"
 printf '%s\n' "$result" | grep -q '"code":"cached_subscription_invalid"' || fail_test "cache warning replaced render failure: ${result}"
-grep -q '^call_core runtime restart --strategy hot_reload --json$' "${tmp_dir}/trace" && fail_test "render failure activated cached material"
+grep -q '^call_core runtime restart ' "${tmp_dir}/trace" && fail_test "render failure activated incomplete material"
+
+: > "${tmp_dir}/trace"
+set_task_input '{"version":1,"sync_default_policy":false}'
+MOCK_CONFIG_TEST_FAIL=1
+export MOCK_CONFIG_TEST_FAIL
+capture_one_click_update
+clear_task_input
+unset MOCK_CONFIG_TEST_FAIL
+assert_json "$result"
+[ "$result_rc" -ne 0 ] || fail_test "invalid final Mihomo material returned success"
+printf '%s\n' "$result" | grep -q '"code":"mihomo_config_invalid"' || fail_test "final material validation failure was not preserved: ${result}"
+grep -q '^call_core runtime restart ' "${tmp_dir}/trace" && fail_test "invalid final Mihomo material restarted the runtime"
 
 printf 'rpcd one-click update tests passed\n'

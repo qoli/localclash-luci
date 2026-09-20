@@ -25,8 +25,9 @@ MCP_HELP="/usr/share/localclash/mcp-help.txt"
 MANIFEST_URL="${LOCALCLASH_RELEASE_MANIFEST:-https://github.com/qoli/localClash/releases/latest/download/localclash-release-manifest.json}"
 LUCI_RELEASE_API="${LOCALCLASH_LUCI_RELEASE_API:-https://api.github.com/repos/qoli/localclash-luci/releases/latest}"
 GITHUB_MIRROR="${LOCALCLASH_GITHUB_MIRROR:-auto}"
-GITHUB_RELEASE_MIRRORS="${LOCALCLASH_GITHUB_RELEASE_MIRRORS:-https://gh-proxy.com/https://github.com https://ghproxy.imciel.com/https://github.com https://gitproxy.mrhjx.cn/https://github.com https://gh.jasonzeng.dev/https://github.com https://gh.monlor.com/https://github.com https://gh.noki.icu/https://github.com https://ghfast.top/https://github.com}"
-GITHUB_RAW_MIRRORS="${LOCALCLASH_GITHUB_RAW_MIRRORS:-https://gh-proxy.com/https://raw.githubusercontent.com https://ghproxy.imciel.com/https://raw.githubusercontent.com https://gitproxy.mrhjx.cn/https://raw.githubusercontent.com https://gh.jasonzeng.dev/https://raw.githubusercontent.com https://gh.monlor.com/https://raw.githubusercontent.com https://gh.noki.icu/https://raw.githubusercontent.com https://ghfast.top/https://raw.githubusercontent.com https://fastly.jsdelivr.net/gh}"
+GITHUB_RELEASE_MIRRORS="${LOCALCLASH_GITHUB_RELEASE_MIRRORS:-https://gh-proxy.com/https://github.com https://proxy.vvvv.ee/https://github.com https://cors.isteed.cc/https://github.com https://gh.ddlc.top/https://github.com https://gh.xmly.dev/https://github.com https://ghproxy.net/https://github.com https://ghfast.top/https://github.com}"
+GITHUB_API_MIRRORS="${LOCALCLASH_GITHUB_API_MIRRORS:-https://gh-proxy.com/https://api.github.com https://proxy.vvvv.ee/https://api.github.com}"
+GITHUB_RAW_MIRRORS="${LOCALCLASH_GITHUB_RAW_MIRRORS:-https://gh-proxy.com/https://raw.githubusercontent.com https://proxy.vvvv.ee/https://raw.githubusercontent.com https://cors.isteed.cc/https://raw.githubusercontent.com https://gh.ddlc.top/https://raw.githubusercontent.com https://gh.xmly.dev/https://raw.githubusercontent.com https://ghproxy.net/https://raw.githubusercontent.com https://ghfast.top/https://raw.githubusercontent.com https://fastly.jsdelivr.net/gh}"
 FETCH_TIMEOUT="${LOCALCLASH_FETCH_TIMEOUT:-120}"
 TASK_STEP_TIMEOUT="${LOCALCLASH_TASK_STEP_TIMEOUT:-240}"
 TASK_HEARTBEAT_INTERVAL="${LOCALCLASH_TASK_HEARTBEAT_INTERVAL:-5}"
@@ -1437,6 +1438,7 @@ invalidate_github_mirror() {
 github_url_kind() {
 	case "$1" in
 		https://github.com/*) printf 'release\n' ;;
+		https://api.github.com/*) printf 'api\n' ;;
 		https://raw.githubusercontent.com/*) printf 'raw\n' ;;
 	esac
 }
@@ -1447,6 +1449,7 @@ candidate_mirror_for_kind() {
 	candidate="$2"
 	case "$kind" in
 		release) mirrors="$GITHUB_RELEASE_MIRRORS" ;;
+		api) mirrors="$GITHUB_API_MIRRORS" ;;
 		raw) mirrors="$GITHUB_RAW_MIRRORS" ;;
 		*) return 1 ;;
 	esac
@@ -1513,6 +1516,15 @@ github_download_candidates() {
 			fi
 			for mirror in $GITHUB_RELEASE_MIRRORS; do
 				[ "$mirror" = "$selected" ] || printf '%s%s\n' "$mirror" "${url#https://github.com}"
+			done
+			;;
+		https://api.github.com/*)
+			selected="$(select_github_mirror api "$GITHUB_API_MIRRORS" 2>/dev/null || true)"
+			if [ -n "$selected" ]; then
+				printf '%s%s\n' "$selected" "${url#https://api.github.com}"
+			fi
+			for mirror in $GITHUB_API_MIRRORS; do
+				[ "$mirror" = "$selected" ] || printf '%s%s\n' "$mirror" "${url#https://api.github.com}"
 			done
 			;;
 		https://raw.githubusercontent.com/*)
@@ -3160,7 +3172,7 @@ one_click_update_continue() {
 }
 
 one_click_update_continue_execute() {
-	local tmpdir sync_default_policy runtime_was_running takeover_was_effective profile_mode subscription_ready subscription_refresh_json policy_template_sync_json custom_sites_preservation custom_sites_before_fields custom_sites_after_fields mihomo_changed dashboard_changed runtime_recovered takeover_recovered mcp_healthy current_mode current_core software_checkpoint_json material_checkpoint_json warnings_json warning_text completion_summary
+	local tmpdir sync_default_policy runtime_was_running takeover_was_effective profile_mode subscription_ready subscription_refresh_json policy_template_sync_json custom_sites_preservation custom_sites_before_fields custom_sites_after_fields mihomo_changed mihomo_update_error mihomo_update_warning dashboard_changed runtime_recovered takeover_recovered mcp_healthy current_mode current_core commit_strategy software_checkpoint_json material_checkpoint_json warnings_json warning_text completion_summary
 	tmpdir="$1"
 	sync_default_policy="$2"
 	runtime_was_running="$3"
@@ -3174,6 +3186,7 @@ one_click_update_continue_execute() {
 	policy_template_sync_json='{"ok":true,"changed":false,"skipped":true,"summary":"未选择同步最新默认策略。"}'
 	custom_sites_preservation='null'
 	mihomo_changed=false
+	mihomo_update_warning=""
 	dashboard_changed=false
 	runtime_recovered=false
 	takeover_recovered=false
@@ -3206,44 +3219,24 @@ one_click_update_continue_execute() {
 	fi
 
 	if ! run_with_heartbeat "一键更新：正在更新 Mihomo 核心" "$tmpdir/mihomo.json" call_core component update mihomo --json; then
-		log_line "一键更新：Mihomo 核心更新失败"
-		cat "$tmpdir/mihomo.json"
-		rm -rf "$tmpdir"
-		return 1
+		mihomo_update_error="$(cat "$tmpdir/mihomo.json" 2>/dev/null || true)"
+		if ! mihomo_core_installed; then
+			log_line "一键更新：Mihomo 核心更新失败，且当前没有可用核心"
+			printf '%s\n' "$mihomo_update_error"
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		mihomo_update_warning="Mihomo 核心更新暂时不可用；已保留当前可用核心并继续一键更新。"
+		log_line "一键更新：警告：$mihomo_update_warning"
+		printf '{"ok":true,"changed":false,"skipped":true,"outcome":"existing_core_preserved","summary":"%s","update_error":%s}\n' \
+			"$(json_escape "$mihomo_update_warning")" "${mihomo_update_error:-null}" > "$tmpdir/mihomo.json"
 	fi
 	mihomo_changed="$(json_bool_required "$tmpdir/mihomo.json" '@.changed' "component_update_result_invalid" "无法读取 Mihomo 核心更新结果。")" || {
 		printf '%s\n' "$mihomo_changed"
 		rm -rf "$tmpdir"
 		return 1
 	}
-	if [ "$runtime_was_running" = "true" ]; then
-		if ! run_with_heartbeat "一键更新：正在验证 Mihomo 软件检查点" "$tmpdir/software-config-test.json" call_core mihomo config-test --json; then
-			log_line "一键更新：新 Mihomo 未通过现行配置验证"
-			cat "$tmpdir/software-config-test.json"
-			rm -rf "$tmpdir"
-			return 1
-		fi
-		if ! run_with_heartbeat "一键更新：正在提交 Mihomo 软件检查点" "$tmpdir/software-checkpoint.json" runtime_restart_continuity_run process_restart "$takeover_was_effective" "$profile_mode" one_click_update_software; then
-			log_line "一键更新：Mihomo 软件检查点提交失败"
-			cat "$tmpdir/software-checkpoint.json"
-			rm -rf "$tmpdir"
-			return 1
-		fi
-		software_checkpoint_json="$(cat "$tmpdir/software-checkpoint.json")"
-		runtime_recovered="$(json_bool_required "$tmpdir/software-checkpoint.json" '@.after.runtime_running' "software_checkpoint_invalid" "无法读取软件检查点的运行时状态。")" || {
-			printf '%s\n' "$runtime_recovered"
-			rm -rf "$tmpdir"
-			return 1
-		}
-		takeover_recovered="$(json_bool_required "$tmpdir/software-checkpoint.json" '@.after.takeover_effective' "software_checkpoint_invalid" "无法读取软件检查点的网络接管状态。")" || {
-			printf '%s\n' "$takeover_recovered"
-			rm -rf "$tmpdir"
-			return 1
-		}
-		log_line "一键更新：Mihomo 软件检查点已完成"
-	else
-		log_line "一键更新：更新前运行时未运行，Mihomo 软件已安装但不启动"
-	fi
+	log_line "一键更新：Mihomo 核心材料已准备；运行时切换延后到所有材料验证完成后"
 
 	if ! run_with_heartbeat "一键更新：正在更新 Dashboard" "$tmpdir/dashboard.json" call_core component update dashboard --json; then
 		log_line "一键更新：Dashboard 更新失败"
@@ -3271,7 +3264,7 @@ one_click_update_continue_execute() {
 	}
 	if [ "$subscription_ready" = "true" ] && [ "$sync_default_policy" != "true" ]; then
 		if ! run_with_heartbeat_until_complete "一键更新：正在刷新订阅" "$tmpdir/subscription-refresh.json" call_core subscription refresh --json; then
-			log_line "一键更新：订阅刷新失败；软件检查点保持生效，配置材料未切换"
+			log_line "一键更新：订阅刷新失败；运行时尚未切换"
 			cat "$tmpdir/subscription-refresh.json"
 			rm -rf "$tmpdir"
 			return 1
@@ -3374,6 +3367,18 @@ JSON
 		completion_summary='一键更新已完成，但有警告。'
 		log_line "一键更新：警告：$warning_text"
 	fi
+	if [ -n "$mihomo_update_warning" ]; then
+		case "$warnings_json" in
+			'[]') warnings_json='["'"$(json_escape "$mihomo_update_warning")"'"]' ;;
+			\[*\]) warnings_json='["'"$(json_escape "$mihomo_update_warning")"'",'"${warnings_json#\[}" ;;
+			*)
+				fail "one_click_update_warnings_invalid" "无法合并一键更新警告。"
+				rm -rf "$tmpdir"
+				return 1
+				;;
+		esac
+		completion_summary='一键更新已完成，但有警告。'
+	fi
 
 	if [ "$subscription_ready" = "true" ]; then
 		if ! run_with_heartbeat "一键更新：正在生成 Mihomo 配置" "$tmpdir/render.json" call_core config render --json; then
@@ -3382,33 +3387,75 @@ JSON
 			rm -rf "$tmpdir"
 			return 1
 		fi
-		if ! run_with_heartbeat "一键更新：正在验证 Mihomo 配置" "$tmpdir/config-test.json" call_core mihomo config-test --json; then
-			log_line "一键更新：Mihomo 配置验证失败"
+	fi
+
+	if [ "$runtime_was_running" = "true" ] || [ "$subscription_ready" = "true" ] || [ -n "$mihomo_update_warning" ]; then
+		if ! run_with_heartbeat "一键更新：正在验证最终 Mihomo 材料" "$tmpdir/config-test.json" call_core mihomo config-test --json; then
+			log_line "一键更新：最终 Mihomo 材料验证失败；运行时尚未切换"
 			cat "$tmpdir/config-test.json"
 			rm -rf "$tmpdir"
 			return 1
 		fi
-		if [ "$runtime_was_running" = "true" ]; then
-			if ! run_with_heartbeat "一键更新：正在提交配置材料检查点" "$tmpdir/material-checkpoint.json" runtime_restart_continuity_run hot_reload "$takeover_was_effective" "$profile_mode" one_click_update_material; then
-				log_line "一键更新：配置材料检查点提交失败"
-				cat "$tmpdir/material-checkpoint.json"
-				rm -rf "$tmpdir"
-				return 1
-			fi
-			material_checkpoint_json="$(cat "$tmpdir/material-checkpoint.json")"
-			runtime_recovered="$(json_bool_required "$tmpdir/material-checkpoint.json" '@.after.runtime_running' "material_checkpoint_invalid" "无法读取材料检查点的运行时状态。")" || {
-				printf '%s\n' "$runtime_recovered"
-				rm -rf "$tmpdir"
-				return 1
-			}
-			takeover_recovered="$(json_bool_required "$tmpdir/material-checkpoint.json" '@.after.takeover_effective' "material_checkpoint_invalid" "无法读取材料检查点的网络接管状态。")" || {
-				printf '%s\n' "$takeover_recovered"
-				rm -rf "$tmpdir"
-				return 1
-			}
+	fi
+
+	if [ "$runtime_was_running" = "true" ] && { [ "$mihomo_changed" = "true" ] || [ "$subscription_ready" = "true" ]; }; then
+		if [ "$mihomo_changed" = "true" ]; then
+			commit_strategy=process_restart
 		else
+			commit_strategy=hot_reload
+		fi
+		if ! run_with_heartbeat "一键更新：正在批量提交已验证材料" "$tmpdir/batch-checkpoint.json" runtime_restart_continuity_run "$commit_strategy" "$takeover_was_effective" "$profile_mode" one_click_update_batch; then
+			log_line "一键更新：批量材料提交失败"
+			cat "$tmpdir/batch-checkpoint.json"
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		runtime_recovered="$(json_bool_required "$tmpdir/batch-checkpoint.json" '@.after.runtime_running' "batch_checkpoint_invalid" "无法读取批量提交后的运行时状态。")" || {
+			printf '%s\n' "$runtime_recovered"
+			rm -rf "$tmpdir"
+			return 1
+		}
+		takeover_recovered="$(json_bool_required "$tmpdir/batch-checkpoint.json" '@.after.takeover_effective' "batch_checkpoint_invalid" "无法读取批量提交后的网络接管状态。")" || {
+			printf '%s\n' "$takeover_recovered"
+			rm -rf "$tmpdir"
+			return 1
+		}
+		if [ "$mihomo_changed" = "true" ]; then
+			software_checkpoint_json="$(cat "$tmpdir/batch-checkpoint.json")"
+		else
+			software_checkpoint_json='{"ok":true,"changed":false,"skipped":true,"summary":"Mihomo 核心没有变更。"}'
+		fi
+		if [ "$subscription_ready" = "true" ]; then
+			material_checkpoint_json="$(cat "$tmpdir/batch-checkpoint.json")"
+		fi
+		log_line "一键更新：已通过单一运行时切换提交全部材料"
+	elif [ "$runtime_was_running" = "true" ]; then
+		if ! call_takeover status --json > "$tmpdir/batch-existing-status.json"; then
+			log_line "一键更新：无法验证未切换的运行时和网络接管状态"
+			cat "$tmpdir/batch-existing-status.json" 2>/dev/null || true
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		runtime_recovered="$(json_bool_required "$tmpdir/batch-existing-status.json" '@.status.runtime_running' "batch_checkpoint_invalid" "无法读取现有 Mihomo 运行时状态。")" || {
+			printf '%s\n' "$runtime_recovered"
+			rm -rf "$tmpdir"
+			return 1
+		}
+		takeover_recovered="$(json_bool_required "$tmpdir/batch-existing-status.json" '@.status.effective' "batch_checkpoint_invalid" "无法读取现有网络接管状态。")" || {
+			printf '%s\n' "$takeover_recovered"
+			rm -rf "$tmpdir"
+			return 1
+		}
+		software_checkpoint_json='{"ok":true,"changed":false,"skipped":true,"summary":"Mihomo 核心未切换；现有运行时和网络接管状态已读回。","config_validation":'"$(cat "$tmpdir/config-test.json")"',"after":{"runtime_running":'"$runtime_recovered"',"takeover_effective":'"$takeover_recovered"'}}'
+		log_line "一键更新：所有材料已完成，Mihomo 无需重启"
+	else
+		if [ "$mihomo_changed" = "true" ]; then
+			software_checkpoint_json='{"ok":true,"changed":true,"activated":false,"summary":"Mihomo 核心材料已更新；运行时原本未运行，因此未执行重启。"}'
+		fi
+		if [ "$subscription_ready" = "true" ]; then
 			material_checkpoint_json='{"ok":true,"changed":true,"activated":false,"summary":"订阅和配置材料已生成并验证；运行时原本未运行，因此未执行热加载。"}'
 		fi
+		log_line "一键更新：材料已准备完成；更新前运行时未运行，未执行运行时切换"
 	fi
 
 	if [ "$takeover_was_effective" = "true" ]; then

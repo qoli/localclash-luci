@@ -31,7 +31,7 @@ assert_file_equals() {
 assert_no_old_mirrors() {
 	local file
 	file="$1"
-	if grep -Eq 'gh\.llkk\.cc|v1\.ax|ghp\.xptvhelper\.link' "${file}"; then
+	if grep -Eq 'gh\.llkk\.cc|v1\.ax|ghp\.xptvhelper\.link|ghproxy\.imciel\.com|gitproxy\.mrhjx\.cn|gh\.jasonzeng\.dev|gh\.monlor\.com|gh\.noki\.icu' "${file}"; then
 		fail "candidate list contains an old default mirror: ${file}"
 	fi
 }
@@ -41,26 +41,36 @@ printf '%s\n' 'https://gh-proxy.com/https://github.com' > "${MIRROR_CACHE_DIR}/r
 github_download_candidates 'https://github.com/qoli/localClash/releases/latest/download/localclash-release-manifest.json' > "${tmp_dir}/release.out"
 cat > "${tmp_dir}/release.expected" <<'EOF'
 https://gh-proxy.com/https://github.com/qoli/localClash/releases/latest/download/localclash-release-manifest.json
-https://ghproxy.imciel.com/https://github.com/qoli/localClash/releases/latest/download/localclash-release-manifest.json
-https://gitproxy.mrhjx.cn/https://github.com/qoli/localClash/releases/latest/download/localclash-release-manifest.json
-https://gh.jasonzeng.dev/https://github.com/qoli/localClash/releases/latest/download/localclash-release-manifest.json
-https://gh.monlor.com/https://github.com/qoli/localClash/releases/latest/download/localclash-release-manifest.json
-https://gh.noki.icu/https://github.com/qoli/localClash/releases/latest/download/localclash-release-manifest.json
+https://proxy.vvvv.ee/https://github.com/qoli/localClash/releases/latest/download/localclash-release-manifest.json
+https://cors.isteed.cc/https://github.com/qoli/localClash/releases/latest/download/localclash-release-manifest.json
+https://gh.ddlc.top/https://github.com/qoli/localClash/releases/latest/download/localclash-release-manifest.json
+https://gh.xmly.dev/https://github.com/qoli/localClash/releases/latest/download/localclash-release-manifest.json
+https://ghproxy.net/https://github.com/qoli/localClash/releases/latest/download/localclash-release-manifest.json
 https://ghfast.top/https://github.com/qoli/localClash/releases/latest/download/localclash-release-manifest.json
 https://github.com/qoli/localClash/releases/latest/download/localclash-release-manifest.json
 EOF
 assert_file_equals "${tmp_dir}/release.out" "${tmp_dir}/release.expected"
 assert_no_old_mirrors "${tmp_dir}/release.out"
 
+printf '%s\n' 'https://gh-proxy.com/https://api.github.com' > "${MIRROR_CACHE_DIR}/api"
+github_download_candidates 'https://api.github.com/repos/qoli/localclash-luci/releases/latest' > "${tmp_dir}/api.out"
+cat > "${tmp_dir}/api.expected" <<'EOF'
+https://gh-proxy.com/https://api.github.com/repos/qoli/localclash-luci/releases/latest
+https://proxy.vvvv.ee/https://api.github.com/repos/qoli/localclash-luci/releases/latest
+https://api.github.com/repos/qoli/localclash-luci/releases/latest
+EOF
+assert_file_equals "${tmp_dir}/api.expected" "${tmp_dir}/api.out"
+assert_no_old_mirrors "${tmp_dir}/api.out"
+
 printf '%s\n' 'https://gh-proxy.com/https://raw.githubusercontent.com' > "${MIRROR_CACHE_DIR}/raw"
 github_download_candidates 'https://raw.githubusercontent.com/vernesong/OpenClash/core/master/core_version' > "${tmp_dir}/raw.out"
 cat > "${tmp_dir}/raw.expected" <<'EOF'
 https://gh-proxy.com/https://raw.githubusercontent.com/vernesong/OpenClash/core/master/core_version
-https://ghproxy.imciel.com/https://raw.githubusercontent.com/vernesong/OpenClash/core/master/core_version
-https://gitproxy.mrhjx.cn/https://raw.githubusercontent.com/vernesong/OpenClash/core/master/core_version
-https://gh.jasonzeng.dev/https://raw.githubusercontent.com/vernesong/OpenClash/core/master/core_version
-https://gh.monlor.com/https://raw.githubusercontent.com/vernesong/OpenClash/core/master/core_version
-https://gh.noki.icu/https://raw.githubusercontent.com/vernesong/OpenClash/core/master/core_version
+https://proxy.vvvv.ee/https://raw.githubusercontent.com/vernesong/OpenClash/core/master/core_version
+https://cors.isteed.cc/https://raw.githubusercontent.com/vernesong/OpenClash/core/master/core_version
+https://gh.ddlc.top/https://raw.githubusercontent.com/vernesong/OpenClash/core/master/core_version
+https://gh.xmly.dev/https://raw.githubusercontent.com/vernesong/OpenClash/core/master/core_version
+https://ghproxy.net/https://raw.githubusercontent.com/vernesong/OpenClash/core/master/core_version
 https://ghfast.top/https://raw.githubusercontent.com/vernesong/OpenClash/core/master/core_version
 https://fastly.jsdelivr.net/gh/vernesong/OpenClash@core/master/core_version
 https://raw.githubusercontent.com/vernesong/OpenClash/core/master/core_version
