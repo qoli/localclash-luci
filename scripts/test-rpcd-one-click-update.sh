@@ -220,7 +220,8 @@ core_installed() {
 }
 
 mihomo_core_installed() {
-	[ "${MOCK_MIHOMO_CORE_MISSING:-0}" != "1" ]
+	trace "mihomo_core_installed"
+	[ -f "${tmp_dir}/mihomo-core" ]
 }
 
 sleep() {
@@ -823,34 +824,55 @@ for sync_default_policy in false true; do
 	grep -q '^call_core runtime restart --strategy hot_reload --json$' "${tmp_dir}/trace" && fail_test "cache warning caused a second hot reload"
 done
 
-: > "${tmp_dir}/trace"
-rm -f "${tmp_dir}/custom-sites-read-count"
-set_task_input '{"version":1,"sync_default_policy":false}'
-MOCK_MIHOMO_UPDATE_FAIL=1
-MOCK_SUBSCRIPTION_CACHE_WARNING=1
-export MOCK_MIHOMO_UPDATE_FAIL MOCK_SUBSCRIPTION_CACHE_WARNING
-capture_one_click_update
-clear_task_input
-unset MOCK_MIHOMO_UPDATE_FAIL MOCK_SUBSCRIPTION_CACHE_WARNING
-assert_json "$result"
-[ "$result_rc" -eq 0 ] || fail_test "existing Mihomo core did not keep one-click update successful: ${result}"
-printf '%s\n' "$result" | python3 -c 'import json,sys; result=json.load(sys.stdin); assert result["ok"] is True; assert result["mihomo"]["outcome"] == "existing_core_preserved"; assert result["mihomo"]["update_error"]["code"] == "mihomo_download_failed"; assert len(result["warnings"]) == 2; assert "已保留当前可用核心" in result["warnings"][0]; assert result["warnings"][1] == "source test: HTTP 522; using validated subscription cache"; assert result["checkpoints"]["software"]["changed"] is False' || fail_test "existing-core Mihomo warning result mismatch"
-grep -q '^call_core mihomo config-test --json$' "${tmp_dir}/trace" || fail_test "existing Mihomo core was not config-tested after update failure"
-[ "$(grep -c '^call_core runtime restart --strategy hot_reload --json$' "${tmp_dir}/trace")" -eq 1 ] || fail_test "existing-core fallback did not use exactly one final hot reload"
-grep -q '^call_core runtime restart --strategy process_restart --json$' "${tmp_dir}/trace" && fail_test "existing-core fallback unnecessarily process-restarted Mihomo"
-
-: > "${tmp_dir}/trace"
-set_task_input '{"version":1,"sync_default_policy":false}'
-MOCK_MIHOMO_UPDATE_FAIL=1
-MOCK_MIHOMO_CORE_MISSING=1
-export MOCK_MIHOMO_UPDATE_FAIL MOCK_MIHOMO_CORE_MISSING
-capture_one_click_update
-clear_task_input
-unset MOCK_MIHOMO_UPDATE_FAIL MOCK_MIHOMO_CORE_MISSING
-assert_json "$result"
-[ "$result_rc" -ne 0 ] || fail_test "missing Mihomo core did not fail one-click update"
-printf '%s\n' "$result" | grep -q '"code":"mihomo_download_failed"' || fail_test "missing-core failure did not preserve the download error: ${result}"
-grep -q '^call_core runtime restart ' "${tmp_dir}/trace" && fail_test "missing-core failure restarted Mihomo"
+# A failed Mihomo download must end the task before any material validation,
+# runtime switch or takeover reconciliation, regardless of the old disk file.
+for runtime_stopped in 0 1; do
+	for disk_core_present in 0 1; do
+		for sync_default_policy in false true; do
+			for luci_changed in false true; do
+				: > "${tmp_dir}/trace"
+				: > "$LOG"
+				rm -f "${tmp_dir}/mihomo-core"
+				if [ "$disk_core_present" = 1 ]; then
+					printf 'old disk binary may be corrupt\n' > "${tmp_dir}/mihomo-core"
+				fi
+				set_task_input "{\"version\":1,\"sync_default_policy\":${sync_default_policy}}"
+				MOCK_MIHOMO_UPDATE_FAIL=1
+				MOCK_INITIAL_RUNTIME_STOPPED="$runtime_stopped"
+				MOCK_LUCI_CHANGED="$luci_changed"
+				# Even if takeover status would trigger recovery, this failure
+				# must not read that status or attempt to repair it.
+				MOCK_TAKEOVER_LOST_AFTER_FAILURE=1
+				rm -f "${tmp_dir}/takeover-status-count" "${tmp_dir}/takeover-recovered"
+				export MOCK_MIHOMO_UPDATE_FAIL MOCK_INITIAL_RUNTIME_STOPPED MOCK_LUCI_CHANGED MOCK_TAKEOVER_LOST_AFTER_FAILURE
+				capture_one_click_update
+				clear_task_input
+				unset MOCK_MIHOMO_UPDATE_FAIL MOCK_INITIAL_RUNTIME_STOPPED MOCK_LUCI_CHANGED MOCK_TAKEOVER_LOST_AFTER_FAILURE
+				assert_json "$result"
+				[ "$result_rc" -ne 0 ] || fail_test "Mihomo download failure returned success: ${result}"
+				printf '%s\n' "$result" | python3 -c 'import json,sys; result=json.load(sys.stdin); assert result == {"ok":False,"code":"mihomo_download_failed","message":"download unavailable"}' || fail_test "original download failure was not preserved: ${result}"
+				[ ! -e "$LOCK_DIR" ] || fail_test "download failure left the task lock"
+				[ ! -e "$state_handoff_dir" ] || fail_test "download failure left the handoff state"
+				grep -q '不执行 Mihomo 重启或网络接管恢复' "$LOG" || fail_test "download failure boundary missing from log"
+				{
+					printf 'call_core runtime status --json\n'
+					if [ "$runtime_stopped" = 0 ]; then
+						printf 'call_takeover status --json\n'
+					fi
+					printf 'luci_update\n'
+					if [ "$luci_changed" = true ]; then
+						printf 'one_click_update_reexec\n'
+					fi
+					printf 'bootstrap_core\nservice_status\ncall_core component update mihomo --json\n'
+				} > "$expected"
+				if ! diff -u "$expected" "${tmp_dir}/trace"; then
+					fail_test "download failure reached downstream operations (stopped=${runtime_stopped}, disk=${disk_core_present}, policy=${sync_default_policy}, luci_changed=${luci_changed})"
+				fi
+			done
+		done
+	done
+done
+rm -f "${tmp_dir}/mihomo-core"
 
 : > "${tmp_dir}/trace"
 set_task_input '{"version":1,"sync_default_policy":false}'
