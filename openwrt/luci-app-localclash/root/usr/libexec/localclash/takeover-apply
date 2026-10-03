@@ -309,8 +309,8 @@ add rule inet fw4 localclash_mangle ip protocol icmp icmp type echo-request mark
 insert rule inet fw4 mangle_prerouting position 0 meta nfproto ipv4 counter jump localclash_mangle comment "localClash TUN mark"
 add chain inet fw4 localclash_dns_redirect
 add rule inet fw4 localclash_dns_redirect iifname @localclash_bypass_iif counter return comment "localClash ingress bypass"
-add rule inet fw4 localclash_dns_redirect ip daddr @localclash_localdns4 counter return comment "localClash local DNS bypass"
-add rule inet fw4 localclash_dns_redirect ip6 daddr @localclash_localdns6 counter return comment "localClash local DNS bypass"
+add rule inet fw4 localclash_dns_redirect iifname "lo" ip daddr @localclash_localdns4 counter return comment "localClash local DNS bypass"
+add rule inet fw4 localclash_dns_redirect iifname "lo" ip6 daddr @localclash_localdns6 counter return comment "localClash local DNS bypass"
 add rule inet fw4 localclash_dns_redirect ip daddr @localclash_dns_active4 meta l4proto { tcp, udp } th dport 53 counter redirect to $DNS_PORT comment "localClash active DNS redirect"
 add rule inet fw4 localclash_dns_redirect ip6 daddr @localclash_dns_active6 meta l4proto { tcp, udp } th dport 53 counter redirect to $DNS_PORT comment "localClash active DNS redirect"
 add rule inet fw4 localclash_dns_redirect meta l4proto { tcp, udp } th dport 53 counter redirect to 53 comment "localClash DNS hijack to dnsmasq"

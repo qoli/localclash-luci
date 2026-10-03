@@ -123,6 +123,16 @@ Core installation must be an explicit LuCI action, not an automatic `postinst`
 network download. Installing the OpenWrt package should be transparent and
 should not depend on WAN, DNS, GitHub, or proxy reachability.
 
+### DNS 接管与本地解析
+
+DNS ingress 接管继续依赖 `dns-guard` 维护的限时租约。租约有效时，LAN 客户端查询
+路由器自身 DNS 地址的 UDP/TCP 53 流量也转入 Mihomo；租约到期后，新连接由 dnsmasq
+接收。显式配置的 ingress bypass 接口仍保持原行为。
+
+`localClash local DNS bypass` 只放行从 `lo` 进入、目的为路由器本地 DNS 地址的查询，
+让 Mihomo 按 Core 的本地域名策略回查 dnsmasq，避免再次进入自身。不能仅按目的 IP
+绕过 LAN 查询，也不能删除本机回查的 bypass。此流程不修改 dnsmasq 上游。
+
 ## LuCI V1 Page
 
 The first version can be a single page with compact sections.
