@@ -10,52 +10,45 @@ mkdir -p "${tmp_dir}/bin" "${tmp_dir}/state"
 PATH="${tmp_dir}/bin:${PATH}"
 
 cat > "${tmp_dir}/bin/jsonfilter" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-input=""
-expr=""
-while [ "$#" -gt 0 ]; do
-	case "$1" in
-		-i) input="$2"; shift 2 ;;
-		-e) expr="$2"; shift 2 ;;
-		*) shift ;;
-	esac
-done
-content="$(cat "$input")"
-json_bool() {
-	local field="$1"
-	if printf '%s\n' "$content" | grep -q "\"${field}\"[[:space:]]*:[[:space:]]*true"; then
-		printf 'true\n'
-	elif printf '%s\n' "$content" | grep -q "\"${field}\"[[:space:]]*:[[:space:]]*false"; then
-		printf 'false\n'
-	else
-		exit 1
-	fi
-}
-case "$expr" in
-	@.ok) json_bool ok ;;
-	@.running) json_bool running ;;
-	@.cancellable) json_bool cancellable ;;
-	@.started_at)
-		printf '%s\n' "$content" | sed -n 's/.*"started_at"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p'
-		;;
-	@.task)
-		printf '%s\n' "$content" | sed -n 's/.*"task"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
-		;;
-	@.status.effective) json_bool effective ;;
-	@.status.runtime_running) json_bool runtime_running ;;
-	@.status.running) json_bool running ;;
-	@.status.profile_mode)
-		printf '%s\n' "$content" | sed -n 's/.*"profile_mode"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
-		;;
-	@.code)
-		printf '%s\n' "$content" | sed -n 's/.*"code"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
-		;;
-	@.message)
-		printf '%s\n' "$content" | sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
-		;;
-	*) exit 1 ;;
-esac
+#!/usr/bin/env python3
+import json, sys
+
+args = sys.argv[1:]
+source = None
+expression = None
+while args:
+    option = args.pop(0)
+    if option == '-i':
+        source = open(args.pop(0), encoding='utf-8').read()
+    elif option == '-s':
+        source = args.pop(0)
+    elif option == '-e':
+        expression = args.pop(0)
+if source is None or expression is None or not expression.startswith('@.'):
+    raise SystemExit(1)
+values = [json.loads(source)]
+for part in expression[2:].split('.'):
+    wildcard = part.endswith('[*]')
+    key = part[:-3] if wildcard else part
+    selected = []
+    for value in values:
+        if not isinstance(value, dict) or key not in value:
+            continue
+        item = value[key]
+        if wildcard:
+            if isinstance(item, dict): selected.extend(item.values())
+            elif isinstance(item, list): selected.extend(item)
+        else:
+            selected.append(item)
+    values = selected
+if not values:
+    raise SystemExit(1)
+for value in values:
+    if isinstance(value, bool): print('true' if value else 'false')
+    elif isinstance(value, (dict, list)):
+        # OpenWrt jsonfilter prints whitespace inside an empty array.
+        print('[ ]' if value == [] else json.dumps(value, ensure_ascii=False, separators=(',', ':')))
+    elif value is not None: print(value)
 EOF
 chmod +x "${tmp_dir}/bin/jsonfilter"
 
@@ -104,9 +97,16 @@ MOCK_REFRESH_FAIL=0
 MOCK_RENDER_FAIL=0
 MOCK_RESTART_FAIL=0
 MOCK_RUNTIME_RUNNING=true
+MOCK_PRE_RUNNING=true
+MOCK_SUPPORT_FAIL=0
+MOCK_VERIFY_FAIL=0
+MOCK_VERIFY_SHA=abc123
+MOCK_VERIFY_FALSE=0
 status_calls=0
 
 reset_case() {
+	mkdir -p "$LOCK_DIR"
+	printf '%s\n' "$$" > "$LOCK_DIR/pid"
 	: > "${tmp_dir}/trace"
 	: > "$LOG"
 	MOCK_SET_FAIL=0
@@ -114,29 +114,48 @@ reset_case() {
 	MOCK_RENDER_FAIL=0
 	MOCK_RESTART_FAIL=0
 	MOCK_RUNTIME_RUNNING=true
+	MOCK_PRE_RUNNING=true
+	MOCK_SUPPORT_FAIL=0
+	MOCK_VERIFY_FAIL=0
+	MOCK_VERIFY_SHA=abc123
+	MOCK_VERIFY_FALSE=0
 	status_calls=0
-	printf '{"ok":true,"running":true,"done":false,"started_at":123,"task":"subscription_set","summary":"saving"}\n' > "$TASK_STATUS"
+	rm -f "${tmp_dir}/saved-input"
+	printf '{"ok":true,"running":true,"done":false,"started_at":123,"task":"subscription_set","task_id":"save-123","cancellable":false,"summary":"saving"}\n' > "$TASK_STATUS"
 }
 
 call_core() {
 	trace "call_core $*"
 	case "$*" in
+		"subscription verify-runtime --check-support --json")
+			[ "$MOCK_SUPPORT_FAIL" -eq 0 ] || { printf '{"ok":false,"code":"unsupported_verification","message":"old core"}\n'; return 10; }
+			printf '{"ok":true,"status":{"supported":true}}\n'
+			;;
+		"subscription verify-runtime --json")
+			[ "$MOCK_VERIFY_FAIL" -eq 0 ] || { printf '{"ok":false,"code":"subscription_runtime_verification_failed","details":{"missing":["NewNode"],"unexpected":["OldNode"]}}\n'; return 15; }
+			if [ "$MOCK_VERIFY_FALSE" -eq 1 ]; then
+				printf '{"ok":true,"status":{"verified":false,"config_sha256":"abc123"},"warnings":[]}\n'
+			else
+				printf '{"ok":true,"status":{"verified":true,"config_sha256":"%s"},"warnings":[]}\n' "$MOCK_VERIFY_SHA"
+			fi
+			;;
 		"subscription set --input $input --json")
 			[ "$MOCK_SET_FAIL" -eq 0 ] || { printf '{"ok":false,"code":"set_failed"}\n'; return 11; }
-			printf '{"ok":true,"changed":true}\n'
+			cp "$input" "${tmp_dir}/saved-input"
+			printf '{"ok":true,"changed":true,"warnings":[]}\n'
 			;;
 		"subscription refresh --json")
 			[ "$MOCK_REFRESH_FAIL" -eq 0 ] || { printf '{"ok":false,"code":"refresh_failed"}\n'; return 12; }
-			printf '{"ok":true,"refreshed":true}\n'
+			printf '{"ok":true,"status":{"sources":[{"id":"source-a","status":"cached"},{"id":"source-b","status":"failed"}]},"warnings":["source-a used cache\\nHTTP 522","source-b was skipped"]}\n'
 			;;
 		"config render --json")
 			[ "$MOCK_RENDER_FAIL" -eq 0 ] || { printf '{"ok":false,"code":"render_failed"}\n'; return 13; }
-			printf '{"ok":true,"changed":true}\n'
+			printf '{"ok":true,"changed":true,"warnings":[]}\n'
 			;;
 		"runtime restart --strategy process_restart --json")
 			grep -q '"cancellable":false' "$TASK_STATUS" || fail_test "restart began before task became noncancellable"
 			[ "$MOCK_RESTART_FAIL" -eq 0 ] || { printf '{"ok":false,"code":"mock_restart_failed","message":"restart failed"}\n'; return 14; }
-			printf '{"ok":true,"changed":true,"summary":"runtime restarted"}\n'
+			printf '{"ok":true,"changed":true,"summary":"runtime restarted","warnings":["connections interrupted"],"status":{"config_validation":{"config_sha256":"abc123"}}}\n'
 			;;
 		"runtime status --json")
 			printf '{"ok":true,"status":{"running":%s}}\n' "$MOCK_RUNTIME_RUNNING"
@@ -153,7 +172,7 @@ call_takeover() {
 	case "$*" in
 		"status --json")
 			status_calls=$((status_calls + 1))
-			printf '{"ok":true,"status":{"effective":false,"runtime_running":true,"profile_mode":"normal"}}\n'
+			printf '{"ok":true,"status":{"effective":false,"runtime_running":%s,"profile_mode":"normal"}}\n' "$MOCK_PRE_RUNNING"
 			;;
 		*) return 99 ;;
 	esac
@@ -171,7 +190,7 @@ capture_setup
 [ "$result_rc" -eq 0 ] || fail_test "successful chain failed: $result"
 printf '%s\n' "$result" | python3 -m json.tool >/dev/null || fail_test "success result is not JSON"
 printf '%s\n' "$result" | grep -q '"runtime_restart"' || fail_test "success omitted restart result"
-printf '%s\n' "$result" | grep -q '运行时已重启并验证生效' || fail_test "success summary omitted activation"
+printf '%s\n' "$result" | grep -q '运行时已重启并验证订阅节点' || fail_test "success summary omitted activation"
 write_task_done 0 "$result"
 grep -q '"cancellable":false' "$TASK_STATUS" || fail_test "terminal subscription status lost noncancellable policy"
 mkdir -p "$LOCK_DIR"
@@ -185,6 +204,8 @@ printf '%s\n' "$terminal_cancel_result" | grep -q '"exit_code":0' || fail_test "
 printf '%s\n' "$terminal_cancel_result" | grep -q 'task_cancelled' && fail_test "terminal result was overwritten by cancellation"
 rm -rf "$LOCK_DIR"
 cat > "${tmp_dir}/expected-success" <<EOF
+call_takeover status --json
+call_core subscription verify-runtime --check-support --json
 call_core subscription set --input $input --json
 heartbeat 订阅设置：正在刷新订阅
 call_core subscription refresh --json
@@ -195,6 +216,7 @@ call_takeover status --json
 call_core runtime restart --strategy process_restart --json
 call_core runtime status --json
 call_takeover status --json
+call_core subscription verify-runtime --json
 EOF
 diff -u "${tmp_dir}/expected-success" "${tmp_dir}/trace" || fail_test "successful call order mismatch"
 
@@ -236,5 +258,76 @@ set -e
 [ "$cancel_rc" -ne 0 ] || fail_test "noncancellable subscription restart phase accepted cancellation"
 printf '%s\n' "$cancel_result" | grep -q '"code":"task_not_cancellable"' || fail_test "cancellation rejection code missing: $cancel_result"
 rm -rf "$LOCK_DIR"
+
+
+assert_result() {
+	printf '%s\n' "$result" | python3 -c "$1"
+}
+
+reset_case
+capture_setup
+assert_result 'import json,sys; r=json.load(sys.stdin); assert r["ok"] and not r["partial"]; assert all(r["stages"].values()); assert r["warnings"] == ["source-a used cache\nHTTP 522", "source-b was skipped", "connections interrupted"]; assert [s["status"] for s in r["sources"]] == ["cached", "failed"]'
+
+# Reproduce iStoreOS tr without POSIX class expansion while keeping the real
+# pipeline result checks: spaced empty arrays must not add empty comma items.
+tr() {
+	if [ "${1:-}" = -d ] && [ "${2:-}" = '[:space:]' ]; then
+		cat
+	else
+		command tr "$@"
+	fi
+}
+reset_case
+capture_setup
+unset -f tr
+[ "$result_rc" -eq 0 ] || fail_test "BusyBox warning aggregation failed: $result"
+assert_result 'import json,sys; r=json.load(sys.stdin); assert r["ok"] and all(r["stages"].values()); assert r["warnings"] == ["source-a used cache\nHTTP 522", "source-b was skipped", "connections interrupted"]'
+
+reset_case
+MOCK_PRE_RUNNING=false
+capture_setup
+[ "$result_rc" -ne 0 ] || fail_test "stopped preflight succeeded"
+[ ! -f "${tmp_dir}/saved-input" ] || fail_test "stopped preflight saved input"
+! grep -q 'call_core' "${tmp_dir}/trace" || fail_test "stopped preflight called Core"
+assert_result 'import json,sys; r=json.load(sys.stdin); assert not r["changed"] and not r["partial"]; assert not any(r["stages"].values())'
+
+reset_case
+MOCK_SUPPORT_FAIL=1
+capture_setup
+[ "$result_rc" -ne 0 ] || fail_test "old Core was accepted"
+[ ! -f "${tmp_dir}/saved-input" ] || fail_test "old Core was detected after saving"
+
+reset_case
+MOCK_REFRESH_FAIL=1
+capture_setup
+[ -f "${tmp_dir}/saved-input" ] || fail_test "refresh failure did not reflect saved input"
+assert_result 'import json,sys; r=json.load(sys.stdin); assert r["partial"] and r["changed"]; assert r["phase"] == "refresh"; assert r["stages"]["sources_saved"]; assert not r["stages"]["config_rendered"]; assert r["details"]["cause"]["code"] == "refresh_failed"'
+
+reset_case
+MOCK_SET_FAIL=1
+capture_setup
+[ "$result_rc" -ne 0 ] || fail_test "set failure succeeded"
+[ ! -f "${tmp_dir}/saved-input" ] || fail_test "set failure mutated saved input"
+assert_result 'import json,sys; r=json.load(sys.stdin); assert not r["changed"] and not r["partial"]; assert r["phase"] == "set"'
+! grep -q 'subscription refresh' "${tmp_dir}/trace" || fail_test "set failure continued to refresh"
+
+reset_case
+MOCK_PRE_RUNNING=null
+capture_setup
+[ "$result_rc" -ne 0 ] || fail_test "invalid preflight succeeded"
+[ ! -f "${tmp_dir}/saved-input" ] || fail_test "invalid preflight saved input"
+assert_result 'import json,sys; r=json.load(sys.stdin); assert r["code"] == "subscription_preflight_invalid"; assert not r["changed"]'
+
+for verification_failure in missing_nodes different_config false_verified; do
+	reset_case
+	case "$verification_failure" in
+		missing_nodes) MOCK_VERIFY_FAIL=1 ;;
+		different_config) MOCK_VERIFY_SHA=other ;;
+		false_verified) MOCK_VERIFY_FALSE=1 ;;
+	esac
+	capture_setup
+	[ "$result_rc" -ne 0 ] || fail_test "invalid readback succeeded: $verification_failure"
+	assert_result 'import json,sys; r=json.load(sys.stdin); assert not r["ok"] and r["partial"] and r["changed"]; assert r["phase"] == "verify"; assert r["stages"]["runtime_restart_completed"]; assert not r["stages"]["runtime_verified"]; assert r["warnings"]'
+done
 
 printf 'rpcd subscription setup restart chain tests passed\n'

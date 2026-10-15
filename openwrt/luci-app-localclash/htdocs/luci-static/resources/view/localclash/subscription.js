@@ -38,18 +38,21 @@ var callSubscriptionScheduleRunNow = rpc.declare({
 var callTaskStatus = rpc.declare({
 	object: 'localclash',
 	method: 'task_status',
+	params: [ 'task_id' ],
 	expect: { '': {} }
 });
 
 var callTaskCancel = rpc.declare({
 	object: 'localclash',
 	method: 'task_cancel',
+	params: [ 'task_id' ],
 	expect: { '': {} }
 });
 
 var callBootstrapLogs = rpc.declare({
 	object: 'localclash',
 	method: 'bootstrap_logs',
+	params: [ 'task_id' ],
 	expect: { '': {} }
 });
 
@@ -102,7 +105,7 @@ function taskLogClipboardText(title, statusLine, logOutput, resultOutput) {
 	].join('\n');
 }
 
-function showTaskModal(title, cancellable) {
+function showTaskModal(title, cancellable, getTaskId) {
 	var logOutput = E('pre', { 'class': 'localclash-task-log' }, [ _('等待任务输出…') ]);
 	var statusLine = E('p', { 'class': 'localclash-task-status' }, [ _('正在启动任务…') ]);
 	var resultOutput = E('pre', { 'class': 'localclash-result localclash-task-result' }, []);
@@ -133,7 +136,7 @@ function showTaskModal(title, cancellable) {
 				return;
 			cancelButton.disabled = true;
 			statusLine.textContent = _('正在中止任务…');
-			callTaskCancel().then(function(result) {
+			callTaskCancel(getTaskId ? getTaskId() : undefined).then(function(result) {
 				statusLine.textContent = result && result.message ? result.message : _('任务已中止。');
 				resultOutput.textContent = JSON.stringify(result, null, 2);
 			}).catch(function(err) {
@@ -177,79 +180,75 @@ function liveTaskButton(label, handler, extraClass) {
 			ev.preventDefault();
 			var button = ev.currentTarget;
 			var startedAt = Date.now();
+			var taskId;
 			var modal;
-			var timer;
-
 			if (button.disabled)
 				return null;
-
 			button.disabled = true;
 			button.setAttribute('aria-busy', 'true');
 			button.classList.add('localclash-busy');
 			button.textContent = _('查看任务输出…');
-			modal = showTaskModal(label, true);
+			modal = showTaskModal(label, false, function() { return taskId; });
 
 			function updateLogs() {
-				return callBootstrapLogs().then(function(result) {
+				return callBootstrapLogs(taskId).then(function(result) {
+					if (!result || result.ok !== true)
+						throw new Error(result && result.message || _('无法读取本次任务日志。'));
 					var elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
-					var lines = (result && result.logs) || [];
 					modal.statusLine.textContent = formatText(_('任务执行中，已等待 %s 秒。'), elapsed);
-					modal.logOutput.textContent = formatLogLines(lines);
+					modal.logOutput.textContent = formatLogLines(result.logs || []);
 					modal.logOutput.scrollTop = modal.logOutput.scrollHeight;
-				}).catch(function(err) {
-					modal.statusLine.textContent = formatText(_('无法读取任务输出：%s'), err.message || String(err));
 				});
 			}
 
 			function waitForTaskCompletion() {
-				return callTaskStatus().then(function(task) {
-					if (task && task.cancellable === false) {
+				return callTaskStatus(taskId).then(function(task) {
+					if (!task || task.ok !== true || task.task_id !== taskId)
+						throw new Error(task && task.message || _('任务记录已变化，无法确认本次操作结果。'));
+					if (task.cancellable === false) {
 						modal.cancelButton.disabled = true;
 						modal.cancelButton.style.display = 'none';
 					}
-					if (task && task.done)
-						return task.result || task;
-					if (task && task.running === false && task.result)
-						return task.result;
-
-					return new Promise(function(resolve) {
-						window.setTimeout(resolve, 1000);
-					}).then(waitForTaskCompletion);
+					if (task.done) {
+						if (!task.result || typeof task.result.ok !== 'boolean')
+							throw new Error(_('任务没有有效的最终结果。'));
+						if ((task.exit_code === 0) !== (task.result.ok === true))
+							throw new Error(_('任务退出状态与结果不一致。'));
+					}
+					else if (task.running !== true)
+						throw new Error(_('本次任务已停止，但没有完成结果。'));
+					return updateLogs().then(function() {
+						if (task.done)
+							return task.result;
+						return new Promise(function(resolve) {
+							window.setTimeout(resolve, 1000);
+						}).then(waitForTaskCompletion);
+					});
 				});
 			}
 
 			return Promise.resolve().then(handler).then(function(result) {
-				var completion = (result && (result.started || result.running)) ? waitForTaskCompletion() : Promise.resolve(result);
-
-				timer = window.setInterval(updateLogs, 1000);
-				return updateLogs().then(function() {
-					return completion;
-				});
-			}).then(function(finalResult) {
-				window.clearInterval(timer);
-				return updateLogs().then(function() {
-					return finalResult;
-				});
-			}).then(function(finalResult) {
-				if (finalResult && finalResult.ok === false)
-					modal.statusLine.textContent = formatText(_('任务失败：%s'), finalResult.message || finalResult.code || _('未知错误'));
+				if (!result || result.ok !== true)
+					return result || { ok: false, message: _('任务未启动。') };
+				if (result.started !== true || !result.task_id)
+					throw new Error(_('本次任务未启动，请等待当前任务完成后重试。'));
+				taskId = result.task_id;
+				if (result.cancellable === true)
+					modal.cancelButton.style.display = '';
+				return waitForTaskCompletion();
+			}).then(function(result) {
+				if (!result || result.ok !== true)
+					modal.statusLine.textContent = formatText(result && result.state_unknown ? _('任务未全部完成，部分更改可能已保存：%s') : result && result.partial ? _('任务未全部完成，部分更改已保存：%s') : _('任务失败：%s'), result && (result.message || result.code) || _('未知错误'));
 				else {
-					modal.statusLine.textContent = _('任务完成。');
+					modal.statusLine.textContent = result.warnings && result.warnings.length ? formatText(_('任务完成，但有警告：%s'), result.warnings.join('；')) : _('任务完成。');
 					modal.closeButton.setAttribute('data-reload', 'true');
 				}
-				modal.cancelButton.disabled = true;
-				modal.resultOutput.textContent = JSON.stringify(finalResult, null, 2);
+				modal.resultOutput.textContent = JSON.stringify(result, null, 2);
 			}).catch(function(err) {
-				window.clearInterval(timer);
-				if (!timer)
-					modal.logOutput.textContent = _('任务未启动。');
-
-				return (timer ? updateLogs() : Promise.resolve()).then(function() {
-					modal.statusLine.textContent = formatText(_('任务失败：%s'), err.message || String(err));
-					modal.resultOutput.textContent = JSON.stringify({ ok: false, message: err.message || String(err) }, null, 2);
-					modal.cancelButton.disabled = true;
-				});
+				modal.statusLine.textContent = formatText(_('无法确认本次任务结果：%s'), err.message || String(err));
+				modal.resultOutput.textContent = JSON.stringify({ ok: false, outcome: 'attention_required', message: err.message || String(err) }, null, 2);
 			}).finally(function() {
+				modal.cancelButton.disabled = true;
 				button.disabled = false;
 				button.removeAttribute('aria-busy');
 				button.classList.remove('localclash-busy');

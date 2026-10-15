@@ -997,13 +997,26 @@ Method contracts:
   background task using the same MCP transaction as a scheduled tick. It does
   not bypass an active localClash task.
 - `subscription_setup_async`: input `{ "uris": ["https://...", "vless://..."] }`.
-  在共享后台任务中依序保存来源、刷新订阅、生成配置，再复用
-  `runtime_restart_continuity_run process_restart` 重启运行时并验证最终运行状态与
-  原网络接管状态。前置步骤、重启或最终验证任一步失败时，任务明确失败且保留原始
-  错误；只有全部完成才报告订阅已生效。此串接不会再启动第二个共用 task files 的
-  背景任务。进入运行时重启前，当前订阅任务会原子切换为不可取消，页面随
-  `task_status.cancellable=false` 隐藏中止按钮，避免在接管恢复和最终验证之间
-  切断交易。
+  在修改共享 task files 前原子取得任务锁，返回 `task=subscription_set`、唯一
+  `task_id` 和 `cancellable=true`。锁忙时明确返回 `task_locked`，不会保存本次
+  输入或把其他任务当成本次操作。输入保存到以 `task_id` 命名的独立文件，避免与
+  旧任务的共享输入混用。worker 在确认锁交接及任务身份后执行；最终结果
+  先原子发布，再释放锁。保存、刷新及生成阶段保留取消能力；进入重启前切换为
+  `cancellable=false`，直到订阅及接管读回完成。取消以 `changed=null`、
+  `state_unknown=true` 明确表示中止时的持久状态未能确认，不冒充未保存。
+  写入来源前先检查 runtime 正在运行、记录原网络接管状态，并通过 Core
+  `subscription verify-runtime --check-support --json` 确认配对接口可用。Core 不支持
+  此接口、runtime 已停止或前置状态无效时，不保存来源。
+  依序保存来源、刷新订阅、生成配置，再复用
+  `runtime_restart_continuity_run process_restart` 重启运行时，恢复并验证原接管状态；
+  最后调用 `subscription verify-runtime --json` 比对 controller 实际节点和代理组，
+  并核对其配置 SHA256 与本次重启的验证证明一致，全部通过才报告订阅已生效。
+  结果保留 `warnings`、各来源 `sources` 状态、原始失败 `details.cause`，并通过
+  `stages` 分别报告来源已保存、刷新完成、配置已生成、重启链完成及语义读回完成。
+  保存之后的失败返回 `changed=true`、`partial=true`、`outcome=attention_required`；
+  已保存的来源不会自动回滚，用户可以据此核对现场后决定下一步。
+  `task_status`、`task_cancel` 和 `bootstrap_logs` 支持可选的 `task_id`；指定身份不符时返回
+  `task_identity_mismatch`，订阅页面只查询和展示自己启动的任务。
 - `custom_sites_get`: no input. Calls
   `localclash custom-sites list --json` and returns the authoritative proxy and
   direct lists unchanged.

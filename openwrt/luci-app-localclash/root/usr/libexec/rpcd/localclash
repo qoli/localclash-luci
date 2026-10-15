@@ -882,24 +882,37 @@ write_task_running() {
 	summary="$1"
 	task="${2:-task}"
 	extra=""
-	if [ "$task" = runtime_restart ] || [ "$task" = subscription_schedule ]; then
-		extra=',"cancellable":false,"task_id":"'"$(json_escape "$3")"'"'
+	if [ "$task" = runtime_restart ] || [ "$task" = subscription_schedule ] || [ "$task" = subscription_set ]; then
+		extra=',"cancellable":false,"task_id":"'"$(json_escape "${3:-}")"'"'
+		[ "$task" != subscription_set ] || extra=',"cancellable":true,"task_id":"'"$(json_escape "${3:-}")"'"'
 	fi
 	printf '{"ok":true,"running":true,"done":false,"started_at":%s,"task":"%s","summary":"%s"%s}\n' "$(now_epoch)" "$(json_escape "$task")" "$(json_escape "$summary")" "$extra" > "${TASK_STATUS}.tmp.$$" && mv "${TASK_STATUS}.tmp.$$" "$TASK_STATUS"
 }
 
 write_task_noncancellable() {
-	local summary task started task_id extra
+	local summary task started task_id extra control_dir rc
 	summary="$1"
 	task="$(task_name)"
 	started="$(task_started_at)"
 	task_id="$(jsonfilter -i "$TASK_STATUS" -e '@.task_id' 2>/dev/null || true)"
+	control_dir=""
+	if [ "$task" = subscription_set ]; then
+		control_dir="$LOCK_DIR/control"
+		mkdir "$control_dir" 2>/dev/null || return 1
+		if [ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" != "$$" ]; then
+			rmdir "$control_dir"
+			return 1
+		fi
+	fi
 	extra=""
 	[ -z "$task_id" ] || extra=',"task_id":"'"$(json_escape "$task_id")"'"'
 	case "$started" in
 		""|*[!0-9]*) started=0 ;;
 	esac
 	printf '{"ok":true,"running":true,"done":false,"started_at":%s,"task":"%s","summary":"%s","cancellable":false%s}\n' "$started" "$(json_escape "$task")" "$(json_escape "$summary")" "$extra" > "${TASK_STATUS}.tmp.$$" && mv "${TASK_STATUS}.tmp.$$" "$TASK_STATUS"
+	rc=$?
+	[ -z "$control_dir" ] || rmdir "$control_dir"
+	return "$rc"
 }
 
 write_task_pid() {
@@ -938,6 +951,8 @@ write_task_done() {
 	extra=""
 	if [ "$task" = runtime_restart ] || [ "$task" = subscription_schedule ]; then
 		extra=',"cancellable":false,"task_id":"'"$(json_escape "$(jsonfilter -i "$TASK_STATUS" -e '@.task_id')")"'"'
+	elif [ "$task" = subscription_set ]; then
+		extra=',"cancellable":'"${cancellable:-true}"',"task_id":"'"$(json_escape "$(jsonfilter -i "$TASK_STATUS" -e '@.task_id')")"'"'
 	elif [ "$cancellable" = false ]; then
 		extra=',"cancellable":false'
 	fi
@@ -1004,8 +1019,9 @@ write_task_stale_result() {
 			action="点击检查 LuCI 更新重试。"
 			;;
 			subscription_set)
-				message="订阅设置任务已中断，请重试。"
-				action="重新保存订阅设置。"
+				message="订阅保存和应用任务已中断，部分来源或配置可能已保存，无法确认最终运行状态。"
+				action="先检查已保存的订阅、运行时和网络接管状态，再决定是否重新应用。"
+				rm -f "$TASK_INPUT.$(jsonfilter -i "$TASK_STATUS" -e '@.task_id' 2>/dev/null)"
 				;;
 			subscription_schedule)
 				message="订阅更新和热加载任务已中断，无法确认最终运行状态。"
@@ -1021,6 +1037,9 @@ write_task_stale_result() {
 			;;
 	esac
 	result='{"ok":false,"code":"task_interrupted","message":"'"$(json_escape "$message")"'","details":{},"next_actions":["'"$(json_escape "$action")"'"]}'
+	if [ "$task" = subscription_set ]; then
+		result='{"ok":false,"code":"task_interrupted","changed":null,"partial":true,"state_unknown":true,"outcome":"attention_required","message":"'"$(json_escape "$message")"'","next_actions":["'"$(json_escape "$action")"'"]}'
+	fi
 	printf '%s\n' "$result" > "$TASK_RESULT"
 	write_task_done 124 "$result"
 }
@@ -1125,11 +1144,46 @@ kill_process_tree() {
 }
 
 task_cancel() {
-	local pid lock_pid result killed task cancellable
+	local pid lock_pid result killed task cancellable task_id
 	killed=0
+	task_read_identity "${1:-}" || return 1
 	reconcile_task_status
 	task="$(task_name)"
+	task_id="$(jsonfilter -i "$TASK_STATUS" -e '@.task_id' 2>/dev/null || true)"
 	cancellable="$(jsonfilter -i "$TASK_STATUS" -e '@.cancellable' 2>/dev/null || true)"
+	if [ "$task" = subscription_set ] && [ "$(jsonfilter -i "$TASK_STATUS" -e '@.done' 2>/dev/null)" = true ]; then
+		cat "$TASK_STATUS"
+		return 0
+	fi
+	if [ "$task" = subscription_set ] && task_status_running; then
+		# Serialize cancellation against the transition into restart. Transfer lock
+		# ownership before signalling the worker so its EXIT trap cannot admit a
+		# second job while cancellation is still publishing its terminal result.
+		if ! mkdir "$LOCK_DIR/control" 2>/dev/null; then
+			fail "task_control_busy" "任务正在切换执行阶段，请读回任务状态后再决定是否中止。"
+			return 1
+		fi
+		if ! task_read_identity "${1:-}"; then
+			rmdir "$LOCK_DIR/control"
+			return 1
+		fi
+		cancellable="$(jsonfilter -i "$TASK_STATUS" -e '@.cancellable' 2>/dev/null || true)"
+		if [ "$cancellable" != false ]; then
+			pid="$(cat "$TASK_PID" 2>/dev/null)"
+			if [ -z "$pid" ] || [ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" != "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+				rmdir "$LOCK_DIR/control"
+				fail "task_control_busy" "任务尚未完成交接或已停止，请读回任务状态。"
+				return 1
+			fi
+			if ! printf '%s\n' "$$" > "$LOCK_DIR/pid"; then
+				rmdir "$LOCK_DIR/control"
+				fail "task_control_failed" "无法接管任务锁，未中止任务。"
+				return 1
+			fi
+		else
+			rmdir "$LOCK_DIR/control"
+		fi
+	fi
 	if [ "$task" = runtime_restart ] || [ "$cancellable" = false ]; then
 		if task_status_running; then
 			if [ "$task" = subscription_set ]; then
@@ -1164,7 +1218,7 @@ task_cancel() {
 	fi
 	if [ -f "$LOCK_DIR/pid" ]; then
 		lock_pid="$(cat "$LOCK_DIR/pid" 2>/dev/null)"
-		if [ -n "$lock_pid" ] && [ "$lock_pid" != "$pid" ] && kill -0 "$lock_pid" 2>/dev/null; then
+		if [ -n "$lock_pid" ] && [ "$lock_pid" != "$$" ] && [ "$lock_pid" != "$pid" ] && kill -0 "$lock_pid" 2>/dev/null; then
 			kill_process_tree -TERM "$lock_pid"
 			killed=1
 		fi
@@ -1172,13 +1226,17 @@ task_cancel() {
 	if [ "$killed" -eq 1 ]; then
 		sleep 2
 		[ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && kill_process_tree -KILL "$pid"
-		[ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null && kill_process_tree -KILL "$lock_pid"
+		[ -n "$lock_pid" ] && [ "$lock_pid" != "$$" ] && kill -0 "$lock_pid" 2>/dev/null && kill_process_tree -KILL "$lock_pid"
 	fi
-	rm -rf "$LOCK_DIR" 2>/dev/null || true
 	rm -f "$TASK_PID" "$TASK_INPUT" 2>/dev/null || true
 	result='{"ok":false,"code":"task_cancelled","message":"任务已中止。","details":{},"next_actions":["可以重新执行刚才的操作。"]}'
+	if [ "$task" = subscription_set ]; then
+		rm -f "$TASK_INPUT.$task_id"
+		result='{"ok":false,"code":"task_cancelled","changed":null,"partial":true,"state_unknown":true,"outcome":"attention_required","message":"订阅应用已中止，部分来源或配置可能已保存，无法确认中止时的持久状态。","next_actions":["先核对已保存的订阅和运行状态，再决定是否重新应用。"]}'
+	fi
 	printf '%s\n' "$result" > "$TASK_RESULT"
 	write_task_done 130 "$result"
+	rm -rf "$LOCK_DIR" 2>/dev/null || true
 	log_line "任务控制：任务已中止"
 	printf '%s\n' "$result"
 }
@@ -4345,63 +4403,157 @@ subscription_schedule_run_task() {
 	return "$rc"
 }
 
-subscription_save_refresh_file() {
-	local input tmpdir
-	input="$1"
-	tmpdir="$2"
-
-	log_line "订阅设置：正在保存订阅源"
-	if ! call_core subscription set --input "$input" --json > "$tmpdir/set.json"; then
-		cat "$tmpdir/set.json"
-		return 1
+# Validate both the process exit and product envelope before advancing a stage.
+subscription_setup_check_result() {
+	local file rc result_ok
+	file="$1"
+	rc="$2"
+	result_ok="$(jsonfilter -i "$file" -e '@.ok' 2>/dev/null || true)"
+	[ "$rc:$result_ok" != "0:true" ] || return 0
+	if [ "$result_ok" != false ]; then
+		printf '{"ok":false,"code":"subscription_setup_result_invalid","message":"订阅应用步骤未产生与退出状态一致的有效 JSON 结果。","details":{"exit_code":%s}}\n' "$rc" > "$file"
 	fi
+	return 1
+}
 
-	log_line "订阅设置：正在刷新订阅"
-	if ! run_with_heartbeat_until_complete "订阅设置：正在刷新订阅" "$tmpdir/refresh.json" call_core subscription refresh --json; then
-		cat "$tmpdir/refresh.json"
-		return 1
+subscription_setup_result() {
+	local tmpdir phase cause ok changed partial saved refreshed rendered restarted verified warnings warning_file value body separator code message sources before restart verification
+	tmpdir="$1"
+	phase="$2"
+	cause="${3:-}"
+	ok=false; changed=false; partial=false
+	saved=false; refreshed=false; rendered=false; restarted=false; verified=false
+	[ "$(jsonfilter -i "$tmpdir/set.json" -e '@.ok' 2>/dev/null)" != true ] || saved=true
+	[ "$(jsonfilter -i "$tmpdir/refresh.json" -e '@.ok' 2>/dev/null)" != true ] || refreshed=true
+	[ "$(jsonfilter -i "$tmpdir/render.json" -e '@.ok' 2>/dev/null)" != true ] || rendered=true
+	[ "$(jsonfilter -i "$tmpdir/restart.json" -e '@.ok' 2>/dev/null)" != true ] || restarted=true
+	[ "$(jsonfilter -i "$tmpdir/verify.json" -e '@.ok' 2>/dev/null)" != true ] || verified=true
+	if [ "$saved" = true ]; then changed=true; partial=true; fi
+	if [ "$phase" = complete ]; then ok=true; partial=false; fi
+	# Preserve JSON arrays directly; splitting warning strings into lines loses
+	# embedded newlines and can produce invalid JSON or drop source diagnostics.
+	warnings="["
+	separator=""
+	for warning_file in set refresh render restart verify; do
+		for value in '@.warnings' '@.runtime.warnings'; do
+			body="$(jsonfilter -i "$tmpdir/$warning_file.json" -e "$value" 2>/dev/null || true)"
+			case "$body" in
+				\[*\]) body="${body#\[}"; body="${body%\]}" ;;
+				*) continue ;;
+			esac
+			# iStoreOS BusyBox tr does not expand POSIX character classes.
+			[ -n "$(printf '%s' "$body" | tr -d ' \t\r\n')" ] || continue
+			warnings="$warnings$separator$body"
+			separator=,
+		done
+	done
+	warnings="$warnings]"
+	sources="$(jsonfilter -i "$tmpdir/refresh.json" -e '@.status.sources' 2>/dev/null || true)"
+	before="$(cat "$tmpdir/before.json" 2>/dev/null || true)"
+	restart="$(cat "$tmpdir/restart.json" 2>/dev/null || true)"
+	verification="$(cat "$tmpdir/verify.json" 2>/dev/null || true)"
+	printf '{"ok":%s,"changed":%s,"partial":%s,"phase":"%s","outcome":"%s","stages":{"sources_saved":%s,"subscriptions_refreshed":%s,"config_rendered":%s,"runtime_restart_completed":%s,"runtime_verified":%s},"warnings":%s,"sources":%s,"before":%s,"runtime_restart":%s,"subscription_verification":%s' \
+		"$ok" "$changed" "$partial" "$phase" "$([ "$ok" = true ] && printf ready || printf attention_required)" \
+		"$saved" "$refreshed" "$rendered" "$restarted" "$verified" "$warnings" "${sources:-null}" "${before:-null}" "${restart:-null}" "${verification:-null}"
+	if [ "$ok" = true ]; then
+		printf ',"summary":"订阅已保存、刷新，配置已生成，运行时已重启并验证订阅节点，网络接管状态已核对。","next_actions":[]}\n'
+	else
+		code="$(jsonfilter -i "$cause" -e '@.code' 2>/dev/null || true)"
+		message="$(jsonfilter -i "$cause" -e '@.message' 2>/dev/null || true)"
+		message="$(printf '%s' "$message" | tr '\r\n\t' '   ')"
+		printf ',"code":"%s","message":"%s","details":{"cause":%s},"next_actions":["按任务结果核对已保存的来源、配置和运行状态后，再决定是否重新应用。"]}\n' \
+			"$(json_escape "${code:-subscription_setup_failed}")" "$(json_escape "${message:-订阅应用失败，请查看失败阶段和原始结果。}")" "$(cat "$cause")"
 	fi
 }
 
 subscription_setup_file() {
-	local input tmpdir restart_json
+	local input tmpdir rc effective profile running phase expected_sha verified_sha
 	input="$1"
 	tmpdir="$(mktemp -d /tmp/localclash-subscription.XXXXXX)" || {
 		fail "tmpdir_failed" "无法创建临时订阅目录。"
 		return 1
 	}
-
-	if ! subscription_save_refresh_file "$input" "$tmpdir"; then
+	phase=preflight
+	log_line "订阅设置：正在检查运行时和网络接管，尚未保存来源"
+	call_takeover status --json > "$tmpdir/before.json"
+	rc=$?
+	if subscription_setup_check_result "$tmpdir/before.json" "$rc"; then
+		effective="$(jsonfilter -i "$tmpdir/before.json" -e '@.status.effective' 2>/dev/null || true)"
+		profile="$(jsonfilter -i "$tmpdir/before.json" -e '@.status.profile_mode' 2>/dev/null || true)"
+		case "$effective:$profile" in true:router|false:router|false:normal) ;;
+			*) fail "subscription_preflight_invalid" "无法确认应用前的网络接管状态，未保存订阅。" > "$tmpdir/preflight-error.json" ;;
+		esac
+		running="$(jsonfilter -i "$tmpdir/before.json" -e '@.status.runtime_running' 2>/dev/null || true)"
+		case "$running" in
+			true) ;;
+			false) fail "runtime_restart_precondition_failed" "运行时当前未运行，请先启动运行时；未保存订阅。" > "$tmpdir/preflight-error.json" ;;
+			*) fail "subscription_preflight_invalid" "无法确认应用前的运行时状态，未保存订阅。" > "$tmpdir/preflight-error.json" ;;
+		esac
+	else
+		cp "$tmpdir/before.json" "$tmpdir/preflight-error.json"
+	fi
+	if [ -f "$tmpdir/preflight-error.json" ]; then
+		subscription_setup_result "$tmpdir" "$phase" "$tmpdir/preflight-error.json"
+		rm -rf "$tmpdir"
+		return 1
+	fi
+	# Core and LuCI have separate release channels. Reject an older Core before
+	# mutating anything if it cannot provide the required semantic readback.
+	call_core subscription verify-runtime --check-support --json > "$tmpdir/support.json"
+	rc=$?
+	if ! subscription_setup_check_result "$tmpdir/support.json" "$rc"; then
+		subscription_setup_result "$tmpdir" "$phase" "$tmpdir/support.json"
 		rm -rf "$tmpdir"
 		return 1
 	fi
 
-	log_line "订阅设置：正在生成 Mihomo 配置"
-	if ! run_with_heartbeat "订阅设置：正在生成 Mihomo 配置" "$tmpdir/render.json" call_core config render --json; then
-		cat "$tmpdir/render.json"
-		rm -rf "$tmpdir"
-		return 1
-	fi
-
-	log_line "订阅设置：正在重启运行时并验证订阅生效"
-	if task_status_running && [ "$(task_name)" = subscription_set ]; then
-		if ! write_task_noncancellable "订阅已保存并生成配置，正在重启运行时和验证网络接管。"; then
-			fail "task_status_write_failed" "订阅已保存并生成配置，但无法进入不可取消的重启阶段；未执行重启。"
+	for phase in set refresh render restart verify; do
+		case "$phase" in
+			set)
+				log_line "订阅设置：正在保存订阅源"
+				call_core subscription set --input "$input" --json > "$tmpdir/set.json"
+				;;
+			refresh)
+				run_with_heartbeat_until_complete "订阅设置：正在刷新订阅" "$tmpdir/refresh.json" call_core subscription refresh --json
+				;;
+			render)
+				run_with_heartbeat "订阅设置：正在生成 Mihomo 配置" "$tmpdir/render.json" call_core config render --json
+				;;
+			restart)
+				if task_status_running && [ "$(task_name)" = subscription_set ]; then
+					if ! write_task_noncancellable "订阅已保存并生成配置，正在重启运行时和验证网络接管。"; then
+						fail "task_status_write_failed" "无法记录不可取消的重启阶段，未执行重启。" > "$tmpdir/restart.json"
+						subscription_setup_result "$tmpdir" "$phase" "$tmpdir/restart.json"
+						rm -rf "$tmpdir"
+						return 1
+					fi
+				fi
+				run_with_heartbeat_until_complete "订阅设置：正在重启运行时并验证订阅生效" "$tmpdir/restart.json" runtime_restart_continuity_run process_restart "$effective" "$profile" subscription_setup
+				;;
+			verify)
+				log_line "订阅设置：正在读回订阅节点和代理组"
+				call_core subscription verify-runtime --json > "$tmpdir/verify.json"
+				;;
+		esac
+		rc=$?
+		if [ "$phase:$rc" = verify:0 ] && [ "$(jsonfilter -i "$tmpdir/verify.json" -e '@.ok' 2>/dev/null)" = true ]; then
+			expected_sha="$(jsonfilter -i "$tmpdir/restart.json" -e '@.runtime.status.config_validation.config_sha256' 2>/dev/null || true)"
+			verified_sha="$(jsonfilter -i "$tmpdir/verify.json" -e '@.status.config_sha256' 2>/dev/null || true)"
+			if [ "$(jsonfilter -i "$tmpdir/verify.json" -e '@.status.verified' 2>/dev/null)" != true ] || [ -z "$expected_sha" ] || [ "$verified_sha" != "$expected_sha" ]; then
+				cp "$tmpdir/verify.json" "$tmpdir/verify-readback.json"
+				fail_with_details "subscription_verification_invalid" "订阅读回未确认已加载本次重启验证的配置。" '"readback":'"$(cat "$tmpdir/verify-readback.json")" > "$tmpdir/verify.json"
+				rc=1
+			fi
+		fi
+		if ! subscription_setup_check_result "$tmpdir/$phase.json" "$rc"; then
+			subscription_setup_result "$tmpdir" "$phase" "$tmpdir/$phase.json"
 			rm -rf "$tmpdir"
 			return 1
 		fi
-	fi
-	if ! run_with_heartbeat_until_complete "订阅设置：正在重启运行时并验证订阅生效" "$tmpdir/restart.json" runtime_restart_continuity_run process_restart observe "" subscription_setup; then
-		log_line "订阅设置：运行时重启或最终状态验证失败"
-		cat "$tmpdir/restart.json"
-		rm -rf "$tmpdir"
-		return 1
-	fi
-	restart_json="$(cat "$tmpdir/restart.json")"
-
+	done
+	subscription_setup_result "$tmpdir" complete
 	rm -rf "$tmpdir"
 	log_line "订阅设置：已完成"
-	printf '{"ok":true,"changed":true,"summary":"订阅已保存、刷新，配置已生成，运行时已重启并验证生效。","runtime_restart":%s,"next_actions":[]}\n' "$restart_json"
 }
 
 write_bootstrap_subscription_input() {
@@ -4445,39 +4597,84 @@ subscription_setup() {
 }
 
 start_subscription_setup() {
-	local payload result rc bg_pid
+	local payload task_id task_input bg_pid
 	clear_stale_lock
-	if [ -d "$LOCK_DIR" ]; then
-		printf '{"ok":true,"started":false,"running":true,"summary":"另一个 localClash 任务正在运行。"}\n'
-		return 0
+	if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+		fail "task_locked" "另一个 localClash 操作正在运行，未保存本次订阅。"
+		return 1
+	fi
+	if ! printf '%s\n' "$$" > "$LOCK_DIR/pid"; then
+		rm -rf "$LOCK_DIR"
+		fail "task_lock_write_failed" "无法记录订阅任务锁，未保存订阅。"
+		return 1
+	fi
+	if task_pid_alive; then
+		rm -rf "$LOCK_DIR"
+		fail "task_locked" "另一个后台任务正在收尾，未保存本次订阅。"
+		return 1
 	fi
 	payload="$(strip_ubus_rpc_session "$(cat)")"
-	rm -f "$TASK_STATUS" "$TASK_RESULT" "$TASK_INPUT" "$TASK_PID"
+	task_id="$(now_epoch)-$$"
+	task_input="$TASK_INPUT.$task_id"
+	rm -f "$TASK_RESULT" "$TASK_PID"
+	if ! (umask 077; write_versioned_payload "$payload" > "$task_input") ||
+		! jsonfilter -i "$task_input" -e '@.version' >/dev/null 2>&1; then
+		rm -f "$task_input"
+		rm -rf "$LOCK_DIR"
+		fail "task_input_write_failed" "无法记录订阅输入，未保存订阅。"
+		return 1
+	fi
+	if ! write_task_running "订阅保存和应用正在执行。" subscription_set "$task_id"; then
+		rm -f "$task_input"
+		rm -rf "$LOCK_DIR"
+		fail "task_status_write_failed" "无法记录订阅任务，未保存订阅。"
+		return 1
+	fi
 	: > "$LOG"
-	write_versioned_payload "$payload" > "$TASK_INPUT"
-	write_task_running "订阅设置任务正在运行。" "subscription_set"
-	log_line "订阅设置：已加入后台任务队列"
-	(
-		result="$("$0" call subscription_setup_run 2>>"$LOG")"
-		rc=$?
-		if [ -z "$result" ]; then
-			result='{"ok":false,"code":"empty_task_result","message":"订阅设置任务没有产生 JSON 结果。","details":{},"next_actions":[]}'
-		fi
-		printf '%s\n' "$result" > "$TASK_RESULT"
-		write_task_done "$rc" "$result"
-		rm -f "$TASK_INPUT" "$TASK_PID"
-	) >/dev/null 2>&1 &
+	log_line "订阅设置：已加入后台任务 task_id=$task_id"
+	"$HELPER_SELF" call subscription_setup_run "$task_id" </dev/null >>"$LOG" 2>&1 &
 	bg_pid="$!"
 	write_task_pid "$bg_pid"
-	ok '"started":true,"running":true,"summary":"订阅设置任务已启动。"'
+	printf '%s\n' "$bg_pid" > "$LOCK_DIR/pid"
+	ok '"started":true,"running":true,"task":"subscription_set","task_id":"'"$task_id"'","cancellable":true,"summary":"订阅保存和应用任务已启动。"'
 }
 
 subscription_setup_run() {
-	if [ ! -f "$TASK_INPUT" ]; then
-		fail "task_input_missing" "订阅设置任务输入缺失。"
+	local task_id task_input waited rc result
+	task_id="$1"
+	task_input="$TASK_INPUT.$task_id"
+	waited=0
+	while [ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" != "$$" ]; do
+		[ "$waited" -lt 5 ] || return 1
+		waited=$((waited + 1))
+		sleep 1
+	done
+	trap '[ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" != "$$" ] || rm -rf "$LOCK_DIR"' EXIT
+	trap 'rm -f "$task_input"; exit 143' INT TERM
+	if [ -z "$task_id" ] || [ "$(jsonfilter -i "$TASK_STATUS" -e '@.task_id' 2>/dev/null)" != "$task_id" ]; then
+		rm -f "$task_input"
+		log_line "订阅设置：任务标识不一致，未保存订阅"
 		return 1
 	fi
-	subscription_setup_file "$TASK_INPUT"
+	if [ -f "$task_input" ]; then
+		subscription_setup_file "$task_input" > "${TASK_RESULT}.tmp.$$"
+		rc=$?
+	else
+		fail "task_input_missing" "订阅任务输入缺失，未保存订阅。" > "${TASK_RESULT}.tmp.$$"
+		rc=1
+	fi
+	subscription_setup_check_result "${TASK_RESULT}.tmp.$$" "$rc" || rc=1
+	if [ "$(jsonfilter -i "$TASK_STATUS" -e '@.task_id' 2>/dev/null)" != "$task_id" ]; then
+		rm -f "${TASK_RESULT}.tmp.$$" "$task_input"
+		log_line "订阅设置：任务身份已变化，未覆盖其他任务结果 task_id=$task_id"
+		return 1
+	fi
+	mv "${TASK_RESULT}.tmp.$$" "$TASK_RESULT" || return 1
+	result="$(cat "$TASK_RESULT")"
+	write_task_done "$rc" "$result" || return 1
+	rm -f "$task_input" "$TASK_PID"
+	log_line "订阅设置：后台任务结束 task_id=$task_id exit_code=$rc"
+	return "$rc"
 }
 
 apply_state() {
@@ -4607,7 +4804,18 @@ bootstrap_assets() {
 	ok "\"changed\":true,\"summary\":\"localClash 基础文件已安装。\",\"base_assets\":{\"installed\":true,\"path\":\"$(json_escape "$STATE_DIR")\"}"
 }
 
+task_read_identity() {
+	local expected
+	expected="${1:-}"
+	case "$expected" in ""|null) return 0 ;; esac
+	if [ "$(jsonfilter -i "$TASK_STATUS" -e '@.task_id' 2>/dev/null || true)" != "$expected" ]; then
+		fail "task_identity_mismatch" "任务记录已变化，未将其他任务的结果或日志作为本次操作结果。"
+		return 1
+	fi
+}
+
 bootstrap_logs() {
+	task_read_identity "${1:-}" || return 1
 	if [ -f "$LOG" ]; then
 		awk '
 			BEGIN { printf "{\"ok\":true,\"complete\":true,\"logs\":[" }
@@ -4637,6 +4845,7 @@ bootstrap_task_status() {
 }
 
 task_status() {
+	task_read_identity "${1:-}" || return 1
 	bootstrap_task_status
 }
 
@@ -5537,11 +5746,11 @@ case "$method" in
   "bootstrap_core_async": {},
   "bootstrap_assets": {},
   "bootstrap_default": { "uris": [], "core": "meta", "template": "localclash-default" },
-  "task_status": {},
-  "task_cancel": {},
+  "task_status": { "task_id": "" },
+  "task_cancel": { "task_id": "" },
   "bootstrap_task_status": {},
   "mcp_help": {},
-  "bootstrap_logs": {}
+  "bootstrap_logs": { "task_id": "" }
 }
 JSON
 		;;
@@ -5550,7 +5759,7 @@ JSON
 	subscription_set) subscription_set ;;
 	subscription_setup) with_lock subscription_setup ;;
 	subscription_setup_async) start_subscription_setup ;;
-	subscription_setup_run) with_lock subscription_setup_run ;;
+	subscription_setup_run) subscription_setup_run "${3:-}" ;;
 	subscription_refresh) with_lock call_core subscription refresh --json ;;
 	subscription_schedule_get) subscription_schedule_get ;;
 	subscription_schedule_set) with_lock subscription_schedule_set ;;
@@ -5604,11 +5813,11 @@ JSON
 	bootstrap_assets) with_lock bootstrap_assets ;;
 	bootstrap_default) start_bootstrap_default ;;
 	bootstrap_default_run) with_lock bootstrap_default_run ;;
-	task_status) task_status ;;
-	task_cancel) task_cancel ;;
+	task_status) task_status "$(jsonfilter -e '@.task_id' 2>/dev/null || true)" ;;
+	task_cancel) task_cancel "$(jsonfilter -e '@.task_id' 2>/dev/null || true)" ;;
 	bootstrap_task_status) bootstrap_task_status ;;
 	mcp_help) mcp_help ;;
-	bootstrap_logs) bootstrap_logs ;;
+	bootstrap_logs) bootstrap_logs "$(jsonfilter -e '@.task_id' 2>/dev/null || true)" ;;
 	*) fail "unknown_method" "未知的 localClash rpcd 方法。"; false ;;
 esac
 
