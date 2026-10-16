@@ -20,7 +20,7 @@ concurrency:
 
 # 发布前按影响做交互测试与修复回验，以 G99 汇总风险；不要求全表或共用功能双核心重测。
 # 本 workflow 不执行 QEMU 或自动核验功能表。
-# https://github.com/qoli/localClash/blob/main/docs/istoreos-release-test-sop.md
+# https://github.com/qoli/localClash/blob/main/.codex/skills/localclash-istoreos-test/SKILL.md
 jobs:
   test-and-release:
     runs-on: ubuntu-latest

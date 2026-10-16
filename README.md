@@ -11,14 +11,15 @@
 
 > [!TIP]
 > ☕ localClash 是独立维护的开源项目。如果它帮你省了配置 Mihomo 和接管路由器网络的时间，欢迎支持项目继续维护。
+>
+> [![支持 localClash](https://img.shields.io/badge/支持-localClash-f97316?style=for-the-badge)](https://github.com/qoli/localClash#支持-localclash)
+>
+> [支持 localClash](https://github.com/qoli/localClash#支持-localclash)
 
-责任划分：localClash Core 只负责 Mihomo 配置、验证、程序生命周期与
-`runtime facts`；本项目的 OpenWrt manager 独立拥有 fw4/nft、policy routing、
-DNS hijack、接管状态、boot/hotplug 恢复，以及 runtime/takeover transaction。
->
-> [![支持 localClash](https://img.shields.io/badge/支持-localClash-f97316?style=for-the-badge)](https://github.com/qoli/localClash/blob/main/SUPPORT.md)
->
-> [支持 localClash](https://github.com/qoli/localClash/blob/main/SUPPORT.md)
+责任划分：Core 管理订阅、Mihomo 配置与验证、程序生命周期及版本化 runtime facts；
+本项目负责 LuCI、包和 ACL，以及 fw4/nftables、策略路由、DNS 接管、
+boot/hotplug 恢复和跨 runtime/takeover 的事务。普通 IPK/APK 只安装界面和集成文件；
+核心及资源由用户显式初始化下载。
 
 最简单的流程是：
 
@@ -107,7 +108,7 @@ DNS hijack、接管状态、boot/hotplug 恢复，以及 runtime/takeover transa
 
 1. 把你的订阅地址粘贴进去。
 2. 如果有多个订阅或节点，每行放一个地址。
-3. 一般用户可以先不勾选 `使用 Smart 核心` 和 `使用 minimal 配置`。
+3. 选择核心与策略模板；一般用户保持默认 Meta 核心和完整默认策略即可。
 4. 点击 `开始初始化`。
 5. 等待任务完成，不要中途刷新页面或断电。
 
@@ -150,25 +151,27 @@ Skill 与 MCP 缺一不可：Skill 约束 Agent 如何规划和操作，MCP 才�
 
 ## 以后怎么更新
 
-localClash 现在提供 `一键更新`：更新 LuCI 界面、localClash 核心、Mihomo 核心和 Dashboard，并把软件更新与订阅材料更新拆成两个独立检查点。
+在 `服务 -> localClash -> 概览` 点击 `一键更新`，更新 LuCI、localClash、
+Mihomo 和 Dashboard。下载、订阅刷新、策略同步、配置生成及验证先准备好，
+最后只进行一次 Mihomo 运行时切换：核心 binary 发生变化时重启程序，
+只有材料变化时热加载。随后读回运行时及网络接管状态；切换期间可能短暂断网。
+结果中的软件／材料检查点字段描述这次批量提交，不代表先重启、再热加载两次。
 
-日常更新时，先进入：
+LuCI 包更新后，任务保存快照并以同一 PID 交接给磁盘上的新版 helper；
+新版校验任务锁、状态版本和阶段后继续。localClash 核心替换后，由该任务
+重启并检查 MCP 服务。普通 package `postinst` 不下载核心，也不管理 MCP 生命周期。
+缺少这套交接能力的旧版，首次升级先在 `高级组件维护` 更新 LuCI，
+任务完成并刷新页面后再一键更新。
 
-```text
-服务 -> localClash
-```
+`同步最新默认策略（推荐）` 默认勾选，会重置本地策略补丁，包含用户自定义补丁；
+独立的 `网站分流` 自定义列表会保留并校验数量及 SHA。取消勾选则保留当前策略；
+该选择会保存供后续更新使用。
 
-在 `概览` 页点击 `一键更新`。更新准备阶段会保持当前运行时继续工作。新的 Meta 和 Smart Mihomo 会先下载到候选目录，成对完成可执行文件检查，并用现行配置验证当前选用的候选核心；两者都准备好后才成对替换正式文件。随后流程先以现行配置重启 Mihomo、恢复并验证网络接管，完成“软件检查点”。只有软件检查点成功后，才刷新订阅、同步已选择的默认策略、生成并验证新配置，再通过热加载提交“配置材料检查点”。每个检查点切换运行时时都可能短暂断网。
-
-一键更新采用两阶段交接：LuCI 安装包发生更新时，旧 helper 会先保存任务快照，再以同一个任务 PID 重新执行磁盘上的新版 helper；新版 helper 校验任务锁、状态版本和执行阶段后，才继续更新 localClash 核心。LuCI Release 信息、checksum 和安装包下载／校验遇到临时失败时，每个阶段最多尝试 3 次（首次尝试加 2 次自动重试）；下载器只有在退出码为 0、输出文件存在且非空、临时文件原子提交成功时才算完成，watchdog 主动终止的下载会明确记录为超时并进入既有重试／镜像候选流程。checksum 文件还必须包含完整的 64 位十六进制 sha256。套件安装和服务操作失败仍会明确停止，不会盲目重跑。localClash 核心完成原子替换后，流程立即执行 `/etc/init.d/localclash-mcp restart`，再更新基础资源，并在限定次数内同时确认 procd 的 `mcp` instance 正在运行和 MCP 健康检查通过。这里不会用 PID、进程名称或运行中二进制的 sha256 来猜测是否需要重启；服务脚本写入、重启或 readiness 检查失败时，任务都会明确失败并停止后续步骤。
-
-独立执行 LuCI 更新时，package `postinst` 不负责 localClash 进程生命周期；更新任务会主动调用磁盘上的新版 helper 重启 `localclash-mcp`。一键更新则由交接后的新版 helper 在核心替换后执行唯一一次权威重启，避免 package 安装阶段先重启旧核心。
-
-如果当前 LuCI 版本还不包含上述 helper 交接机制，第一次升级请先在 `高级组件维护` 中执行 `检查 LuCI 更新`，等待后台任务完成并刷新页面，然后再执行 `一键更新`。从新版开始，后续一键更新会自动完成交接。
-
-`同步最新默认策略（推荐）` 默认勾选，会以最新 localClash 内置默认策略完全覆盖本地策略补丁，包括用户自定义策略；这是一次明确的策略重置，不会因同名规则冲突而中断。取消勾选后，LuCI 会保留当前本地策略，并把选择保存到路由器的 localClash 工作目录，下次打开页面和执行一键更新时会沿用上次选择。
-
-如果订阅源临时不可用，`一键更新` 会明确停止配置材料阶段，不会使用旧订阅缓存冒充本次刷新成功，也不会生成或切换新配置。此前已完成的软件检查点会继续运行，网络接管保持在已验证状态；用户修正订阅后可以重新执行更新。配置生成、配置验证或材料热加载失败同样会明确停止，并保留故障发生前已经提交的检查点。
+订阅源临时不可用时，Core 可以使用经过校验的该源缓存，并保留 `cached` 状态和警告；
+没有合法下载或缓存的来源会排除。仍有有效来源时可继续生成、验证及提交；
+所有来源均无效则失败并保留先前合并材料。因此“完成但有警告”不表示全部来源已下载成功。
+下载、安装、生成、验证或运行时提交失败都会明确报告；根据任务结果核对已完成阶段、
+回滚结果与接管状态，再决定后续操作。
 
 如果要单独维护某个组件，可以使用 `高级组件维护`：
 
@@ -199,22 +202,43 @@ localClash 现在提供 `一键更新`：更新 LuCI 界面、localClash 核心�
 
 不要。普通用户只需要下载 `.ipk` 或 `.apk` 安装包。
 
-更多问题见 [常见问题](docs/faq.md)。
+### 初始化失败
+
+先看任务窗口日志，检查路由器时间、DNS、GitHub 可达性，以及当前网络是否依赖旧代理
+才能下载。普通包安装不包含 runtime，首次进入显示核心缺失是正常状态；
+通过初始化显式安装所需组件。保留失败阶段和错误信息，不要连续重复初始化掩盖首个失败。
+
+### 订阅、网站和进阶设置
+
+页面分为 `概览`、`订阅`、`网站分流` 和 `进阶`。`保存并应用订阅` 会刷新材料、
+生成配置并重启运行时；定时刷新对已运行核心热加载，不会自动启动停止的核心。
+刷新警告、任务完成、程序运行和网络接管有效是不同状态。
+
+`网站分流` 只接受域名或含 `*`／`?` 的主机模式，选择代理或直连；
+不含通配符时匹配域名及子域名。两份列表中最新匹配项优先，删除后可能显露旧规则；
+同名黄色警告不阻止保存。代理沿用现有出口，指定国家或 Smart 策略请通过 Agent/MCP。
+列表跨默认策略同步保留，但恢复未配置状态的一般重置会删除它。
+
+Agent 管理真实路由器时，使用概览页复制的 Skill + MCP 接入信息；
+本地源码和节点名称不能代替路由器已加载状态或真实流量证据。
 
 ## 支持 localClash
 
 如果 localClash 帮你省了配置 Mihomo 和接管路由器网络的时间，可以请作者喝杯咖啡，支持项目继续维护：
 
-[![支持 localClash](https://img.shields.io/badge/支持-localClash-f97316?style=for-the-badge)](https://github.com/qoli/localClash/blob/main/SUPPORT.md)
+[![支持 localClash](https://img.shields.io/badge/支持-localClash-f97316?style=for-the-badge)](https://github.com/qoli/localClash#支持-localclash)
 
-[支持 localClash](https://github.com/qoli/localClash/blob/main/SUPPORT.md)
+[支持 localClash](https://github.com/qoli/localClash#支持-localclash)
 
-## 更多文档
+## 维护与验收
 
-- 产品边界：[docs/openwrt-luci.md](docs/openwrt-luci.md)
-- ucode 改写提案：[docs/ucode-rewrite-adaptation.md](docs/ucode-rewrite-adaptation.md)
-- 发布功能验收：[iStoreOS 测试 SOP](https://github.com/qoli/localClash/blob/main/docs/istoreos-release-test-sop.md) 与 [功能测试表](https://github.com/qoli/localClash/blob/main/docs/istoreos-test-features.md)：追踪各功能最后实测版本，按改动选测，核对后沿用历史证据；不要求每次发布重跑全表。相邻仓库入口：`../localClash/docs/istoreos-release-test-sop.md`。
-- 发布流程：[docs/github-release-runbook.md](docs/github-release-runbook.md)
+- [Core 使用与运行时说明](https://github.com/qoli/localClash#readme)。
+- [功能测试表](https://github.com/qoli/localClash/blob/main/docs/istoreos-test-features.md)
+  保存最后实测版本和证据；按改动选测，核对后沿用历史结果，不要求发布时重跑全表。
+- [测试 Skill](https://github.com/qoli/localClash/blob/main/.codex/skills/localclash-istoreos-test/SKILL.md)
+  集中 QEMU 方法、真实订阅现场、旧版升级及外部 oracle。
+- [发布与公告 Skill](https://github.com/qoli/localClash/blob/main/.codex/skills/localclash-release-broadcast/SKILL.md)
+  集中 LuCI tag/CI、离线 Core pin、资产核对和公告流程。
 
 ## 社区
 

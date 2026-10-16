@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 # 源码、构建和资产检查不替代推送发布 tag 前的人工 iStoreOS QEMU 功能门槛。
-# https://github.com/qoli/localClash/blob/main/docs/istoreos-release-test-sop.md
+# https://github.com/qoli/localClash/blob/main/.codex/skills/localclash-istoreos-test/SKILL.md
 jobs:
   test-and-package:
     runs-on: ubuntu-latest
