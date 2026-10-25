@@ -2646,11 +2646,12 @@ service_start() {
 
 status() {
 	local core_ok mihomo_ok dashboard_ok subscription_ok runtime_ok summary runtime_profile base_assets boot_restore luci_package
-	local snapshot snapshot_error snapshot_rc snapshot_ok error_excerpt
+	local snapshot snapshot_error snapshot_rc snapshot_ok error_excerpt core_version
 	local base_assets_ok base_assets_path base_assets_missing base_assets_policy base_assets_template base_assets_rule_source_dir base_assets_patch_count base_assets_patches_ok
 	local runtime_profile_path runtime_profile_exists runtime_profile_mode runtime_profile_core runtime_profile_core_path runtime_profile_source user_profile_path user_profile_exists
 	local subscription_configured_value subscription_merged_value
 	core_ok="$(core_installed && echo true || echo false)"
+	core_version=""
 	if [ "$core_ok" = true ]; then
 		snapshot="/tmp/localclash-product-status.$$.json"
 		snapshot_error="${snapshot}.err"
@@ -2687,6 +2688,7 @@ status() {
 			return 1
 		fi
 
+		core_version="$(jsonfilter -i "$snapshot" -e '@.status.components.localclash.version' 2>/dev/null || true)"
 		base_assets_path="$(jsonfilter -i "$snapshot" -e '@.status.components.base_assets.path' 2>/dev/null || printf '%s' "$STATE_DIR")"
 		base_assets_missing="$(jsonfilter -i "$snapshot" -e '@.status.components.base_assets.missing[*]' 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
 		base_assets_policy="$(jsonfilter -i "$snapshot" -e '@.status.components.base_assets.policy' 2>/dev/null || true)"
@@ -2721,7 +2723,7 @@ status() {
 	boot_restore="$(boot_restore_json)"
 	luci_package="$(luci_package_json)"
 	summary='"components":{"mihomo":{"installed":'"$mihomo_ok"'},"dashboard":{"installed":'"$dashboard_ok"'}},"subscription":{"configured":'"$subscription_ok"'},"runtime":{"running":'"$runtime_ok"'}'
-	printf '{"ok":true,"core":{"installed":%s,"path":"%s"},%s,%s,%s,%s,"mcp_service":{%s},"status":{"ok":true,"changed":false,"summary":"localClash LuCI 状态摘要。",%s,"status":{%s}}}\n' "$core_ok" "$CORE" "$base_assets" "$runtime_profile" "$boot_restore" "$luci_package" "$(service_body)" "$summary" "$summary"
+	printf '{"ok":true,"core":{"installed":%s,"path":"%s","version":"%s"},%s,%s,%s,%s,"mcp_service":{%s},"status":{"ok":true,"changed":false,"summary":"localClash LuCI 状态摘要。",%s,"status":{%s}}}\n' "$core_ok" "$CORE" "$(json_escape "$core_version")" "$base_assets" "$runtime_profile" "$boot_restore" "$luci_package" "$(service_body)" "$summary" "$summary"
 }
 
 component_update() {

@@ -1310,6 +1310,7 @@ function oneClickUpdateSection() {
 		E('div', { 'class': 'localclash-update-row' }, [
 			E('div', { 'class': 'localclash-update-copy' }, [
 				E('span', { 'class': 'localclash-one-click-update-status-title' }, [ _('版本状态') ]),
+				E('span', { 'id': 'localclash-current-versions' }, [ _('正在读取当前版本…') ]),
 				E('span', { 'id': 'localclash-one-click-update-status', 'class': 'localclash-muted' }, [ _('正在检查更新…') ])
 			]),
 			oneClickUpdateButton()
@@ -1325,6 +1326,15 @@ function oneClickUpdateSection() {
 			])
 		])
 	]), 'localclash-one-click-update-section');
+}
+
+function currentVersionsSummary(data) {
+	var luciPackage = data && data.luci_package ? data.luci_package : {};
+	var core = data && data.core ? data.core : {};
+	var luciVersion = luciPackage.version || (luciPackage.installed === false ? _('未安装') : _('版本未知'));
+	var coreVersion = core.version || (core.installed === false ? _('未安装') : _('版本未知'));
+
+	return formatText(_('当前版本：LuCI %s · localClash %s'), luciVersion, coreVersion);
 }
 
 function updateCheckCurrentVersion(check) {
@@ -1383,11 +1393,14 @@ function applyOneClickUpdateCheck(luciCheck, coreCheck, task) {
 }
 
 function refreshOneClickUpdateCheck(data, task) {
+	var versions = document.getElementById('localclash-current-versions');
 	var status = document.getElementById('localclash-one-click-update-status');
 	var button = document.getElementById('localclash-one-click-update-button');
 
 	if (!status)
 		return Promise.resolve();
+	if (versions)
+		versions.textContent = currentVersionsSummary(data);
 	if (!data) {
 		applyOneClickUpdateCheck({ ok: false, message: _('状态数据未加载') }, null);
 		return Promise.resolve();
@@ -1818,6 +1831,7 @@ return view.extend({
 				'.localclash-summary-table .localclash-button{min-width:4.25rem;min-height:2.2rem;margin:.125rem;padding:.42rem .68rem;white-space:nowrap}',
 				'.localclash-update-row{display:flex;gap:1rem;align-items:center;justify-content:space-between;padding:1rem}',
 				'.localclash-update-copy{display:grid;gap:.25rem;min-width:0}',
+				'#localclash-current-versions{overflow-wrap:anywhere}',
 				'.localclash-one-click-update-status-title{font-weight:700}',
 				'.localclash-inline-details{margin:0 1rem .85rem 1rem;border-top:1px solid rgba(127,127,127,.18)}',
 				'.localclash-inline-details summary{padding:.8rem 0;cursor:pointer;font-weight:600}',
