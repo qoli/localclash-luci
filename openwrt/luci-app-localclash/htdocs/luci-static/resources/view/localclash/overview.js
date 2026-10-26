@@ -1777,7 +1777,7 @@ return view.extend({
 			'role': 'main',
 			'aria-labelledby': 'localclash-overview-title'
 		}, [
-			E('link', { 'rel': 'stylesheet', 'href': L.resource('localclash/style.css') }),
+			E('link', { 'rel': 'stylesheet', 'href': L.resource('localclash/style.css') + '?v=' + encodeURIComponent(L.env.resource_version) }),
 			E('h2', { 'id': 'localclash-overview-title' }, [ _('localClash') ]),
 			E('div', { 'class': 'cbi-map-descr' }, [
 				_('localClash 用于管理路由器上的 Mihomo 运行时、订阅配置、Dashboard 和网络接管。')

@@ -12,11 +12,12 @@ body[data-page^="admin-services-localclash"] {
 	--lc-success: #2e9d62;
 	--lc-warning: #c58a1b;
 	--lc-focus: var(--primary, var(--lc-ink));
-	color-scheme: light dark;
+	color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
-	body[data-page^="admin-services-localclash"] {
+	/* An explicit LuCI theme takes precedence over the browser preference. */
+	body[data-page^="admin-services-localclash"]:not([theme="light"]) {
 		--lc-paper: #000;
 		--lc-ink: #fff;
 		--lc-muted: #bfc0c5;
@@ -26,7 +27,21 @@ body[data-page^="admin-services-localclash"] {
 		--lc-panel-strong: rgba(0, 0, 0, .28);
 		--lc-panel-outline: rgba(255, 255, 255, .16);
 		--lc-danger: #ff8095;
+		color-scheme: dark;
 	}
+}
+
+body[data-page^="admin-services-localclash"][theme="dark"] {
+	--lc-paper: #000;
+	--lc-ink: #fff;
+	--lc-muted: #bfc0c5;
+	--lc-soft: #1c1c1e;
+	--lc-line: rgba(255, 255, 255, .1);
+	--lc-panel: rgba(0, 0, 0, .16);
+	--lc-panel-strong: rgba(0, 0, 0, .28);
+	--lc-panel-outline: rgba(255, 255, 255, .16);
+	--lc-danger: #ff8095;
+	color-scheme: dark;
 }
 
 .localclash-view,

@@ -297,7 +297,7 @@ return view.extend({
 	render: function(customSites) {
 		currentCustomSites = customSites;
 		return E('main', { 'class': 'cbi-map localclash-view localclash-custom-sites', 'role': 'main' }, [
-			E('link', { 'rel': 'stylesheet', 'href': L.resource('localclash/style.css') }),
+			E('link', { 'rel': 'stylesheet', 'href': L.resource('localclash/style.css') + '?v=' + encodeURIComponent(L.env.resource_version) }),
 			E('div', { 'class': 'localclash-custom-sites-header' }, [
 				E('div', { 'class': 'localclash-custom-sites-header-copy' }, [
 					E('h2', {}, [ _('网站分流') ]),
