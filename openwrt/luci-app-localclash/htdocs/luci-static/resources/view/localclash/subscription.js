@@ -2,6 +2,7 @@
 'require view';
 'require rpc';
 'require ui';
+'require localclash.style as localclashStyle';
 
 var callSubscriptionGet = rpc.declare({
 	object: 'localclash',
@@ -374,7 +375,7 @@ return view.extend({
 		deferAfterPaint(refreshSubscriptionInput, 600);
 
 		return E('div', { 'class': 'cbi-map localclash-view localclash-subscription' }, [
-			E('link', { 'rel': 'stylesheet', 'href': L.resource('localclash/style.css') + '?v=' + encodeURIComponent(L.env.resource_version) }),
+			localclashStyle.stylesheet(),
 			E('h2', {}, [ _('订阅') ]),
 			E('div', { 'class': 'cbi-map-descr' }, [ _('管理订阅来源与每日自动更新。') ]),
 			E('div', { 'class': 'cbi-section localclash-section' }, [

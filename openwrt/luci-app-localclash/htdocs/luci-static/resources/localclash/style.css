@@ -17,7 +17,7 @@ body[data-page^="admin-services-localclash"] {
 
 @media (prefers-color-scheme: dark) {
 	/* An explicit LuCI theme takes precedence over the browser preference. */
-	body[data-page^="admin-services-localclash"]:not([theme="light"]) {
+	body[data-page^="admin-services-localclash"]:not([theme="light"]):not([data-localclash-theme="light"]) {
 		--lc-paper: #000;
 		--lc-ink: #fff;
 		--lc-muted: #bfc0c5;
@@ -31,7 +31,8 @@ body[data-page^="admin-services-localclash"] {
 	}
 }
 
-body[data-page^="admin-services-localclash"][theme="dark"] {
+body[data-page^="admin-services-localclash"][theme="dark"],
+body[data-page^="admin-services-localclash"][data-localclash-theme="dark"]:not([theme="light"]) {
 	--lc-paper: #000;
 	--lc-ink: #fff;
 	--lc-muted: #bfc0c5;

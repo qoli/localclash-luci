@@ -2,6 +2,7 @@
 'require view';
 'require rpc';
 'require ui';
+'require localclash.style as localclashStyle';
 'require fs';
 'require localclash.dashboard as dashboardAccess';
 
@@ -1040,7 +1041,7 @@ return view.extend({
 		}, 600);
 
 		return E('div', { 'class': 'cbi-map localclash-view localclash-advanced' }, [
-			E('link', { 'rel': 'stylesheet', 'href': L.resource('localclash/style.css') + '?v=' + encodeURIComponent(L.env.resource_version) }),
+			localclashStyle.stylesheet(),
 			E('h2', {}, [ _('进阶') ]),
 			E('div', { 'class': 'cbi-map-descr' }, [ _('查看完整状态，管理核心、运行时与网络接管。') ]),
 			section(_('状态'), E('div', { 'id': 'localclash-advanced-status-body' }, [
