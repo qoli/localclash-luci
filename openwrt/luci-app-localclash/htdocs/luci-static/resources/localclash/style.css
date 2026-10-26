@@ -1,0 +1,385 @@
+/* LocalClash content only. The LuCI theme owns navigation and the focus accent. */
+body[data-page^="admin-services-localclash"] {
+	--lc-paper: #fff;
+	--lc-ink: #000;
+	--lc-muted: #666;
+	--lc-soft: #f5f6f7;
+	--lc-line: rgba(0, 0, 0, .1);
+	--lc-panel: rgba(255, 255, 255, .68);
+	--lc-panel-strong: rgba(255, 255, 255, .88);
+	--lc-panel-outline: rgba(0, 0, 0, .14);
+	--lc-danger: #c42d4b;
+	--lc-success: #2e9d62;
+	--lc-warning: #c58a1b;
+	--lc-focus: var(--primary, var(--lc-ink));
+	color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+	body[data-page^="admin-services-localclash"] {
+		--lc-paper: #000;
+		--lc-ink: #fff;
+		--lc-muted: #bfc0c5;
+		--lc-soft: #1c1c1e;
+		--lc-line: rgba(255, 255, 255, .1);
+		--lc-panel: rgba(0, 0, 0, .16);
+		--lc-panel-strong: rgba(0, 0, 0, .28);
+		--lc-panel-outline: rgba(255, 255, 255, .16);
+		--lc-danger: #ff8095;
+	}
+}
+
+.localclash-view,
+body[data-page^="admin-services-localclash"] .modal {
+	box-sizing: border-box;
+	color: var(--lc-ink);
+	font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+	font-size: 15px;
+	font-weight: 400;
+	line-height: 1.65;
+}
+
+.localclash-view {
+	width: 100%;
+	max-width: 1160px;
+	margin: 0 auto;
+	padding: 28px 24px 48px;
+	background: transparent;
+}
+
+.localclash-view ~ .cbi-page-actions {
+	display: none !important;
+}
+
+.localclash-view h2,
+.localclash-view h3,
+.localclash-view .cbi-section > h3,
+body[data-page^="admin-services-localclash"] .modal h4 {
+	width: auto;
+	margin: 0 0 16px;
+	padding: 0;
+	border: 0;
+	border-radius: 0;
+	color: var(--lc-ink);
+	background: transparent;
+	box-shadow: none;
+	font-weight: 650;
+	letter-spacing: -.02em;
+	line-height: 1.4 !important; /* LuCI themes set heading line-height with !important. */
+}
+
+.localclash-view h2 {
+	font-family: ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+	font-size: 30px;
+	font-weight: 700;
+}
+
+.localclash-view h3 {
+	font-size: 18px;
+}
+
+.localclash-view .cbi-map-descr,
+.localclash-view .localclash-muted,
+.localclash-view .localclash-subscription-status {
+	margin: 0 0 16px;
+	padding: 0;
+	color: var(--lc-muted);
+	font-size: 14px;
+	font-weight: 400;
+	line-height: 1.7;
+}
+
+.localclash-view .cbi-section {
+	min-width: 0;
+	margin: 20px 0 0;
+	padding: 24px;
+	border: 1px solid var(--lc-line);
+	border-radius: 18px;
+	color: inherit;
+	background: var(--lc-panel) !important; /* Keep the LuCI canvas visible through its panels. */
+	box-shadow: none;
+	font: inherit;
+}
+
+.localclash-view .cbi-section p {
+	padding: 0;
+	line-height: 1.7;
+}
+
+.localclash-actions,
+.localclash-state-actions,
+body[data-page^="admin-services-localclash"] .modal .right {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 10px;
+	margin: 20px 0 0;
+	padding: 0;
+}
+
+.localclash-view .btn,
+body[data-page^="admin-services-localclash"] .modal .btn {
+	box-sizing: border-box;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	float: none;
+	min-width: 0;
+	min-height: 44px;
+	margin: 0;
+	padding: 10px 18px;
+	border: 1px solid var(--lc-line);
+	border-radius: 999px;
+	border-color: var(--lc-line) !important; /* Keep controls distinct from dark translucent panels. */
+	color: var(--lc-ink) !important; /* Argon forces white text on every .btn. */
+	background: transparent !important;
+	box-shadow: none !important;
+	font: 550 14px/1.4 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+	text-decoration: none;
+	text-transform: none;
+	white-space: normal;
+	cursor: pointer;
+}
+
+.localclash-view .btn:hover,
+body[data-page^="admin-services-localclash"] .modal .btn:hover {
+	background: var(--lc-soft) !important;
+}
+
+.localclash-view :is(.cbi-button-apply, .cbi-button-action, .cbi-button-save, .cbi-button-add),
+body[data-page^="admin-services-localclash"] .modal .cbi-button-apply {
+	border-color: var(--lc-ink) !important;
+	color: var(--lc-paper) !important;
+	background: var(--lc-ink) !important;
+}
+
+.localclash-view :is(.cbi-button-apply, .cbi-button-action, .cbi-button-save, .cbi-button-add):hover,
+body[data-page^="admin-services-localclash"] .modal .cbi-button-apply:hover {
+	background: var(--lc-ink) !important;
+	opacity: .85;
+}
+
+.localclash-view :is(.cbi-button-reset, .localclash-danger),
+body[data-page^="admin-services-localclash"] .modal .cbi-button-negative {
+	color: var(--lc-danger) !important;
+}
+
+.localclash-view .btn:disabled,
+body[data-page^="admin-services-localclash"] .modal .btn:disabled {
+	opacity: .45;
+	cursor: default;
+}
+
+.localclash-view .localclash-busy {
+	opacity: .65;
+	cursor: wait;
+}
+
+.localclash-view :is(a, button, input, textarea, select, summary):focus-visible,
+body[data-page^="admin-services-localclash"] .modal :is(button, input, textarea, select):focus-visible {
+	outline: 2px solid var(--lc-focus) !important;
+	outline-offset: 3px;
+}
+
+.localclash-view :is(textarea, select, input[type="text"]),
+body[data-page^="admin-services-localclash"] .modal input[type="text"] {
+	box-sizing: border-box;
+	min-width: 0;
+	min-height: 44px;
+	padding: 10px 12px;
+	border: 1px solid var(--lc-line);
+	border-radius: 10px;
+	color: var(--lc-ink);
+	box-shadow: none;
+	font-size: 14px;
+	line-height: 1.6;
+}
+
+.localclash-view :is(input[type="checkbox"], input[type="radio"]),
+body[data-page^="admin-services-localclash"] .modal input[type="radio"] {
+	flex: none;
+	width: 18px;
+	height: 18px;
+	margin: 2px 0 0;
+	accent-color: var(--lc-focus);
+}
+
+.localclash-view textarea.localclash-textarea,
+.localclash-view textarea.localclash-copybox {
+	display: block;
+	width: 100%;
+	min-height: 192px;
+	margin: 16px 0 12px;
+	padding: 16px;
+	font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+	resize: vertical;
+}
+
+.localclash-view textarea.localclash-copybox {
+	height: 20rem;
+}
+
+.localclash-state-panel {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 24px;
+	margin: 28px 0;
+	padding: 24px;
+	border: 1px solid var(--lc-panel-outline);
+	border-radius: 20px;
+	background: var(--lc-panel-strong);
+}
+
+.localclash-state-copy { min-width: 0; }
+.localclash-state-actions { flex: none; margin: 0; }
+.localclash-view .localclash-state-message { margin: 8px 0 0; color: var(--lc-muted); font-size: 14px; }
+.localclash-status-badge { display: inline-flex; align-items: center; gap: 8px; font-weight: 550; line-height: 1.5; }
+.localclash-state-panel .localclash-status-badge { font-size: 20px; font-weight: 650; }
+.localclash-status-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--lc-muted); }
+.localclash-status-success .localclash-status-dot { background: var(--lc-success); }
+.localclash-status-warning .localclash-status-dot { background: var(--lc-warning); }
+.localclash-status-danger .localclash-status-dot { background: var(--lc-danger); }
+
+.localclash-view .table {
+	width: 100%;
+	margin: 0;
+	border: 0;
+	border-collapse: collapse;
+	border-radius: 0;
+	background: transparent;
+}
+
+.localclash-view .table :is(th, td) {
+	height: auto;
+	padding: 14px 12px;
+	border: 0;
+	border-bottom: 1px solid var(--lc-line);
+	color: inherit;
+	background: transparent;
+	font-weight: 400;
+	line-height: 1.6;
+	text-align: left;
+	vertical-align: middle;
+	white-space: normal;
+	word-break: normal;
+	overflow-wrap: anywhere;
+}
+
+.localclash-view .table tr { background: transparent !important; }
+.localclash-view .table th { color: var(--lc-muted); font-size: 13px; }
+.localclash-view .table :is(th, td):first-child { padding-left: 0; }
+.localclash-view .table :is(th, td):last-child { padding-right: 0; }
+.localclash-view .table tr:last-child td { border-bottom: 0; }
+.localclash-summary-table td:first-child { width: 27%; font-weight: 550; }
+.localclash-summary-table td:nth-child(2) { width: 32%; }
+.localclash-view .table .cbi-section-actions { text-align: right; }
+.localclash-view .localclash-summary-table .btn { min-height: 40px; padding: 8px 14px; border-color: var(--lc-line) !important; color: var(--lc-ink) !important; background: transparent !important; font-size: 13px; }
+.localclash-view .localclash-summary-table .btn + .btn { margin-left: 6px; }
+.localclash-status-table { table-layout: fixed; }
+.localclash-status-table :is(th, td):first-child { width: 180px; font-weight: 550; }
+.localclash-status-table td:last-child { color: var(--lc-muted); font-size: 14px; }
+
+.localclash-update-row { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+.localclash-update-copy { display: grid; gap: 6px; min-width: 0; }
+.localclash-one-click-update-status-title { font-weight: 550; }
+#localclash-current-versions { color: var(--lc-muted); font-size: 14px; overflow-wrap: anywhere; }
+.localclash-inline-details { margin-top: 24px; border-top: 1px solid var(--lc-line); }
+.localclash-view summary { padding: 16px 0; cursor: pointer; font-size: 14px; font-weight: 550; }
+.localclash-details-body { padding-bottom: 8px; }
+.localclash-support-item + .localclash-support-item { border-top: 1px solid var(--lc-line); }
+.localclash-support-item > summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 20px; list-style: none; }
+.localclash-support-item > summary::-webkit-details-marker { display: none; }
+.localclash-support-item > summary > small { grid-column: 1; color: var(--lc-muted); font-weight: 400; }
+.localclash-support-item > summary::after { content: "+"; grid-column: 2; grid-row: 1 / 3; align-self: center; color: var(--lc-muted); font-size: 20px; font-weight: 400; }
+.localclash-support-item[open] > summary::after { content: "−"; }
+.localclash-support-body { padding-bottom: 20px; }
+.localclash-view .localclash-support-body .localclash-actions { margin-top: 12px; }
+
+.localclash-bootstrap-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 20px 0; }
+.localclash-setup-panel { margin-top: 24px; }
+.localclash-choice-group { min-width: 0; margin: 0; padding: 16px; border: 1px solid var(--lc-line); border-radius: 16px; }
+.localclash-choice-group legend { width: auto; margin: 0; padding: 0 6px; border: 0; color: var(--lc-ink); font-size: 14px; font-weight: 550; }
+.localclash-choice-option { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; padding: 10px 0; cursor: pointer; }
+.localclash-choice-option :is(strong, small) { display: block; }
+.localclash-choice-option small { margin-top: 4px; color: var(--lc-muted); line-height: 1.6; }
+.localclash-inline-check { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "box title" ". help"; gap: 4px 10px; max-width: 640px; margin: 16px 0; line-height: 1.6; text-align: left; }
+.localclash-inline-check input { grid-area: box; }
+.localclash-inline-check-title { grid-area: title; font-weight: 550; }
+.localclash-inline-check-help { grid-area: help; color: var(--lc-muted); font-size: 13px; }
+.localclash-reset-confirmation { display: flex; align-items: flex-start; gap: 10px; margin-top: 16px; font-size: 14px; line-height: 1.7; cursor: pointer; }
+
+.localclash-schedule-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: center; gap: 24px; max-width: 720px; margin: 24px 0; }
+.localclash-schedule-enabled { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.localclash-schedule-hour { display: grid; gap: 8px; font-size: 14px; }
+.localclash-view .localclash-schedule-status { margin: 20px 0 0; padding: 0; border: 0; color: var(--lc-muted); background: transparent; font: inherit; font-size: 14px; white-space: pre-wrap; }
+.localclash-view .localclash-error { color: var(--lc-danger); }
+
+.localclash-custom-sites-header { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+.localclash-custom-sites-header-copy { min-width: 0; max-width: 720px; }
+.localclash-custom-sites-header .btn { flex: none; }
+.localclash-custom-site-table td:first-child { width: 36%; }
+.localclash-custom-site-table td:nth-child(2) { width: 25%; color: var(--lc-muted); font-size: 13px; }
+.localclash-custom-site-table td:nth-child(3) { color: var(--lc-muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.localclash-view .localclash-custom-site-table code { padding: 0; border: 0; color: var(--lc-ink); background: transparent; font: 550 15px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: normal; overflow-wrap: anywhere; }
+.localclash-custom-site-warning-text { display: block; margin-top: 4px; color: var(--lc-muted); font-size: 13px; }
+.localclash-custom-site-warning td:first-child { border-left: 2px solid var(--lc-warning); padding-left: 12px !important; }
+.localclash-view .localclash-custom-site-delete { border-color: transparent !important; }
+.localclash-empty { margin: 0; padding: 24px 0 !important; color: var(--lc-muted); font-size: 14px; }
+
+body[data-page^="admin-services-localclash"] .modal {
+	width: min(600px, calc(100% - 32px));
+	min-width: 0;
+	max-width: 100%;
+	padding: 24px;
+	border: 1px solid var(--lc-line);
+	border-radius: 20px;
+	box-shadow: 0 24px 80px rgba(0, 0, 0, .2);
+}
+
+body[data-page^="admin-services-localclash"] .modal h4 { font-size: 20px; }
+body[data-page^="admin-services-localclash"] .modal .right { justify-content: flex-end; }
+body[data-page^="admin-services-localclash"] .modal .localclash-muted { color: var(--lc-muted); font-size: 14px; line-height: 1.7; }
+.localclash-custom-site-form { display: grid; gap: 16px; min-width: 0; }
+.localclash-field-title { display: block; margin-bottom: 8px; font-size: 14px; font-weight: 550; }
+.localclash-custom-site-input { width: 100%; }
+.localclash-route-choice { display: flex; flex-wrap: wrap; gap: 20px; margin: 0; padding: 16px; border: 1px solid var(--lc-line); border-radius: 12px; }
+.localclash-route-choice legend { width: auto; padding: 0 6px; margin: 0; border: 0; color: var(--lc-muted); font-size: 14px; }
+.localclash-route-choice label { display: inline-flex; align-items: center; gap: 8px; }
+body[data-page^="admin-services-localclash"] :is(.localclash-result, .localclash-task-log) { box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; max-height: 48vh; overflow: auto; padding: 16px; border: 1px solid var(--lc-line); border-radius: 12px; color: var(--lc-ink); background: transparent; font: 13px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.localclash-task-status { margin: 0 0 16px; line-height: 1.65; }
+.localclash-task-result:empty { display: none; }
+
+@media (max-width: 760px) {
+	.localclash-view { padding: 24px 0 40px; }
+	.localclash-view h2 { font-size: 28px; }
+	.localclash-view .cbi-section { padding: 18px; border-radius: 16px; }
+	.localclash-state-panel { flex-direction: column; align-items: stretch; gap: 20px; padding: 20px; }
+	.localclash-state-actions { gap: 8px; }
+	.localclash-view .localclash-state-actions .btn { padding-inline: 14px; }
+	.localclash-view .localclash-state-actions .cbi-button-reset { border-color: transparent !important; }
+	.localclash-update-row { align-items: flex-start; flex-direction: column; gap: 16px; }
+	.localclash-bootstrap-options, .localclash-schedule-grid { grid-template-columns: minmax(0, 1fr); }
+	.localclash-custom-sites-header { flex-direction: column; align-items: flex-start; gap: 8px; }
+	.localclash-view :is(.localclash-summary-table, .localclash-status-table, .localclash-custom-site-table),
+	.localclash-view :is(.localclash-summary-table, .localclash-status-table, .localclash-custom-site-table) tbody { display: block; }
+	.localclash-view :is(.localclash-summary-table, .localclash-status-table, .localclash-custom-site-table) tr { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px 12px; margin: 0; padding: 16px 0; border: 0; border-bottom: 1px solid var(--lc-line); }
+	.localclash-view :is(.localclash-summary-table, .localclash-status-table, .localclash-custom-site-table) tr:first-child { display: none; }
+	.localclash-view :is(.localclash-summary-table, .localclash-status-table, .localclash-custom-site-table) tr:last-child { border-bottom: 0; }
+	.localclash-view :is(.localclash-summary-table, .localclash-status-table, .localclash-custom-site-table) td { display: block; width: auto; min-width: 0; margin: 0; padding: 0; border: 0; }
+	.localclash-view .table td::before { display: none; }
+	.localclash-view .localclash-summary-table tr { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "name actions" "state actions"; align-items: center; }
+	.localclash-view .localclash-summary-table td:first-child { grid-area: name; }
+	.localclash-view .localclash-summary-table td:nth-child(2) { grid-area: state; color: var(--lc-muted); font-size: 14px; }
+	.localclash-view .localclash-summary-table .cbi-section-actions { grid-area: actions; margin: 0; }
+	.localclash-view .localclash-summary-table .cbi-section-actions:empty { display: none; }
+	.localclash-view .localclash-status-table td:last-child { font-size: 14px; }
+	.localclash-view .localclash-custom-site-table tr { grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 4px 8px; }
+	.localclash-custom-site-table td:first-child { grid-column: 1; grid-row: 1; }
+	.localclash-custom-site-table td:nth-child(2) { grid-column: 1; grid-row: 2; }
+	.localclash-custom-site-table td:nth-child(3) { grid-column: 1; grid-row: 3; }
+	.localclash-custom-site-table td.cbi-section-actions { grid-column: 2; grid-row: 1 / 4; align-self: center; }
+	.localclash-view .localclash-custom-site-delete { padding-inline: 10px; }
+	.localclash-custom-site-warning td:first-child { border-left: 0; padding-left: 0 !important; }
+	body[data-page^="admin-services-localclash"] .modal { padding: 20px; }
+}

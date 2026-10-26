@@ -373,32 +373,16 @@ return view.extend({
 		}, [ scheduleStatusText(scheduleResult) ]);
 		deferAfterPaint(refreshSubscriptionInput, 600);
 
-		return E('div', { 'class': 'cbi-map localclash-view' }, [
-			E('style', {}, [ [
-				'.localclash-view .localclash-section{clear:both;margin-top:1.5rem;padding-bottom:.25rem}',
-				'.localclash-view .localclash-actions{display:flex;flex-wrap:wrap;gap:.625rem;align-items:center;margin:.875rem 0 0 0;padding:1rem}',
-				'.localclash-view .localclash-button{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;float:none;margin:0;min-width:8.5rem;min-height:2.75rem;padding:.7rem 1.05rem;line-height:1.2;text-align:center;white-space:normal}',
-				'.localclash-view .localclash-button:focus{outline:2px solid rgba(73,115,255,.35);outline-offset:2px}',
-				'.localclash-view .localclash-button:active{transform:translateY(1px)}',
-				'.localclash-view .localclash-button.localclash-busy{cursor:wait;opacity:.72}',
-				'.localclash-view .localclash-textarea{box-sizing:border-box;width:calc(100% - 2rem);min-height:12rem;margin:1rem;padding:1rem;font-family:monospace;line-height:1.45;resize:vertical}',
-				'.localclash-view .localclash-subscription-status{margin:.25rem 1rem 0 1rem;color:inherit;line-height:1.45}',
-				'.localclash-view .localclash-subscription-status.localclash-error{color:#b42318}',
-				'.localclash-view .localclash-schedule-grid{display:grid;grid-template-columns:minmax(10rem,16rem) minmax(12rem,24rem);gap:.75rem 1rem;align-items:center;margin:1rem}',
-				'.localclash-view .localclash-schedule-status{margin:1rem;padding:1rem;white-space:pre-wrap;line-height:1.5}',
-				'.localclash-view + .cbi-page-actions,.localclash-view ~ .cbi-page-actions,.cbi-page-actions{display:none!important}',
-				'.localclash-result{box-sizing:border-box;width:100%;min-width:0;max-width:100%;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word}',
-				'.localclash-task-status{margin:.25rem 0 1rem 0;line-height:1.45}',
-				'.localclash-task-log{box-sizing:border-box;width:100%;min-width:0;max-width:100%;max-height:48vh;overflow:auto;margin:0 0 1rem 0;padding:1rem;background:#111827;color:#d1d5db;border-radius:6px;white-space:pre-wrap;word-break:break-word}',
-				'.localclash-task-result:empty{display:none}',
-				'@media (max-width: 700px){.localclash-view .localclash-button{width:100%;min-width:0}.localclash-view .localclash-schedule-grid{grid-template-columns:1fr}.localclash-task-log{min-width:0;max-width:100%;max-height:42vh;font-size:12px}.localclash-result{max-width:100%}}'
-			].join('\n') ]),
-			E('h2', {}, [ _('localClash') ]),
+		return E('div', { 'class': 'cbi-map localclash-view localclash-subscription' }, [
+			E('link', { 'rel': 'stylesheet', 'href': L.resource('localclash/style.css') }),
+			E('h2', {}, [ _('订阅') ]),
+			E('div', { 'class': 'cbi-map-descr' }, [ _('管理订阅来源与每日自动更新。') ]),
 			E('div', { 'class': 'cbi-section localclash-section' }, [
-				E('h3', {}, [ _('订阅') ]),
+				E('h3', {}, [ _('订阅来源') ]),
 					E('textarea', {
 						'id': 'localclash-subscription-urls',
 						'class': 'cbi-input-textarea localclash-textarea',
+						'aria-label': _('订阅来源'),
 						'placeholder': _('每行一条订阅 URI 或节点 URI'),
 						'input': function(ev) {
 							ev.currentTarget.setAttribute('data-dirty', 'true');
@@ -419,10 +403,14 @@ return view.extend({
 					E('h3', {}, [ _('自动更新') ]),
 					E('p', {}, [ _('每天在所选时间通过本机 MCP 刷新订阅、验证候选配置，并在 Mihomo 正在运行时执行热加载。') ]),
 					E('div', { 'class': 'localclash-schedule-grid' }, [
-						E('label', { 'for': 'localclash-subscription-schedule-enabled' }, [ _('启用定时更新') ]),
-						scheduleEnabled,
-						E('label', { 'for': 'localclash-subscription-schedule-hour' }, [ _('每天更新时间（路由器本地时间）') ]),
-						scheduleHour
+						E('label', { 'class': 'localclash-schedule-enabled', 'for': 'localclash-subscription-schedule-enabled' }, [
+							scheduleEnabled,
+							E('span', {}, [ _('启用定时更新') ])
+						]),
+						E('label', { 'class': 'localclash-schedule-hour', 'for': 'localclash-subscription-schedule-hour' }, [
+							E('span', {}, [ _('每天更新时间（路由器本地时间）') ]),
+							scheduleHour
+						])
 					]),
 					scheduleStatus,
 					actionRow([
@@ -450,7 +438,7 @@ return view.extend({
 						}, [ _('保存定时设置') ]),
 						liveTaskButton(_('立即更新并热加载'), function() {
 							return callSubscriptionScheduleRunNow();
-						}, 'cbi-button-apply')
+						})
 					])
 				])
 			]);

@@ -1039,32 +1039,10 @@ return view.extend({
 			resumeTaskIfNeeded();
 		}, 600);
 
-		return E('div', { 'class': 'cbi-map localclash-view' }, [
-			E('style', {}, [ [
-				'.localclash-view .localclash-section{clear:both;margin-top:1.5rem;padding-bottom:.25rem}',
-				'.localclash-view .localclash-actions{display:flex;flex-wrap:wrap;gap:.625rem;align-items:center;margin:.875rem 0 0 0;padding:1rem}',
-				'.localclash-view .localclash-button{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;float:none;margin:0;min-width:8.5rem;min-height:2.75rem;padding:.7rem 1.05rem;line-height:1.2;text-align:center;white-space:normal}',
-				'.localclash-view .localclash-button:focus{outline:2px solid rgba(73,115,255,.35);outline-offset:2px}',
-				'.localclash-view .localclash-button:active{transform:translateY(1px)}',
-				'.localclash-view .localclash-button.localclash-busy{cursor:wait;opacity:.72}',
-				'.localclash-view .localclash-danger{border-color:#c44;background:#d94b4b;color:#fff}',
-				'.localclash-view .localclash-reset-confirmation{display:flex;gap:.5rem;align-items:flex-start;margin:.875rem 1rem 0;line-height:1.45;cursor:pointer}',
-				'.localclash-view .localclash-reset-confirmation input{flex:none;margin-top:.2rem}',
-				'.localclash-view + .cbi-page-actions,.localclash-view ~ .cbi-page-actions,.cbi-page-actions{display:none!important}',
-				'.localclash-view .localclash-muted{color:inherit;line-height:1.55}',
-				'.localclash-view .localclash-status-table{width:100%;max-width:100%}',
-				'.localclash-view table.table th,.localclash-view table.table td{text-align:left;height:70px;vertical-align:middle;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}',
-				'.localclash-view table.table tr.cbi-rowstyle-1,.localclash-view table.table tr.cbi-rowstyle-1 > th,.localclash-view table.table tr.cbi-rowstyle-1 > td{background-color:rgba(255,255,255,.03)}',
-				'.localclash-view .localclash-status-table th,.localclash-view .localclash-status-table td{vertical-align:middle}',
-				'.localclash-view .localclash-status-table td:first-child{width:13rem;white-space:nowrap}',
-				'.localclash-view .localclash-status-table td:last-child{word-break:break-word}',
-				'.localclash-result{box-sizing:border-box;width:100%;min-width:0;max-width:100%;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word}',
-				'.localclash-task-status{margin:.25rem 0 1rem 0;line-height:1.45}',
-				'.localclash-task-log{box-sizing:border-box;width:100%;min-width:0;max-width:100%;max-height:48vh;overflow:auto;margin:0 0 1rem 0;padding:1rem;background:#111827;color:#d1d5db;border-radius:6px;white-space:pre-wrap;word-break:break-word}',
-				'.localclash-task-result:empty{display:none}',
-				'@media (max-width: 700px){.localclash-view .localclash-button{width:100%;min-width:0}.localclash-view .localclash-status-table td:first-child{width:auto;white-space:normal}.localclash-task-log{min-width:0;max-width:100%;max-height:42vh;font-size:12px}.localclash-result{max-width:100%}}'
-			].join('\n') ]),
-			E('h2', {}, [ _('localClash') ]),
+		return E('div', { 'class': 'cbi-map localclash-view localclash-advanced' }, [
+			E('link', { 'rel': 'stylesheet', 'href': L.resource('localclash/style.css') }),
+			E('h2', {}, [ _('进阶') ]),
+			E('div', { 'class': 'cbi-map-descr' }, [ _('查看完整状态，管理核心、运行时与网络接管。') ]),
 			section(_('状态'), E('div', { 'id': 'localclash-advanced-status-body' }, [
 				advancedStatusLoadingTable()
 			])),

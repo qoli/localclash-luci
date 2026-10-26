@@ -25,7 +25,6 @@ assert(overviewSource.includes("button.disabled = true;\n\tbutton.setAttribute('
 assert(overviewSource.includes("button.disabled = ev.target.checked !== true;"));
 assert(overviewSource.includes("!loginCheckbox || loginCheckbox.checked !== true"));
 assert(overviewSource.includes("_('我已登入 GitHub')"));
-assert(overviewSource.includes(".localclash-view .localclash-github-login-confirmation{padding-left:1em}"));
 assert(overviewSource.includes('function takeoverInterrupted(takeover)'));
 assert(overviewSource.includes("status.effective === false"));
 assert(overviewSource.includes("actions.push(commandButton(_('应用接管'), callTakeoverApply, 'cbi-button-apply'))"));

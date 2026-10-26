@@ -242,7 +242,14 @@ function siteRow(entry, warned) {
 	return E('tr', { 'class': warned ? 'tr localclash-custom-site-warning' : 'tr' }, [
 		E('td', { 'class': 'td', 'data-title': _('网站') }, site),
 		E('td', { 'class': 'td', 'data-title': _('匹配方式') }, [ matchLabel(entry.match) ]),
-		E('td', { 'class': 'td', 'data-title': _('加入时间') }, [ entry.added_at ]),
+		E('td', { 'class': 'td', 'data-title': _('加入时间') }, [
+			E('time', { 'datetime': entry.added_at, 'title': entry.added_at }, [
+				new Date(entry.added_at).toLocaleString('zh-CN', {
+					year: 'numeric', month: '2-digit', day: '2-digit',
+					hour: '2-digit', minute: '2-digit', hour12: false
+				})
+			])
+		]),
 		E('td', { 'class': 'td cbi-section-actions', 'data-title': _('操作') }, [ deleteButton(entry) ])
 	]);
 }
@@ -289,32 +296,11 @@ return view.extend({
 
 	render: function(customSites) {
 		currentCustomSites = customSites;
-		return E('main', { 'class': 'cbi-map localclash-custom-sites', 'role': 'main' }, [
-			E('style', {}, [ [
-				'.localclash-custom-sites{box-sizing:border-box;width:100%;max-width:1100px;margin:0 auto;padding-bottom:2rem}',
-				'.localclash-custom-sites + .cbi-page-actions,.localclash-custom-sites ~ .cbi-page-actions,.cbi-page-actions{display:none!important}',
-				'.localclash-custom-sites-header{display:flex;gap:1rem;align-items:center;justify-content:space-between;margin-bottom:1rem}',
-				'.localclash-custom-sites-header-copy{min-width:0}',
-				'.localclash-custom-sites-header h2{margin-bottom:.35rem}',
-				'.localclash-custom-sites .localclash-muted{line-height:1.55}',
-				'.localclash-custom-site-list{margin-top:1rem}',
-				'.localclash-custom-site-table td,.localclash-custom-site-table th{vertical-align:middle;text-align:left}',
-				'.localclash-custom-site-table td:first-child{width:46%}',
-				'.localclash-custom-site-table code{overflow-wrap:anywhere;word-break:break-word}',
-				'.localclash-custom-site-warning,.localclash-custom-site-warning > td{background:rgba(224,166,36,.15)!important}',
-				'.localclash-custom-site-warning-text{display:inline-block;margin-left:.65rem;color:#9a6900;font-weight:650}',
-				'.localclash-empty{padding:1rem;border:1px dashed rgba(127,127,127,.3);border-radius:.5rem}',
-				'.localclash-custom-site-form{display:grid;gap:.75rem;min-width:min(32rem,80vw)}',
-				'.localclash-field-title{display:block;margin-bottom:.35rem;font-weight:650}',
-				'.localclash-custom-site-input{box-sizing:border-box;width:100%}',
-				'.localclash-route-choice{display:flex;gap:1rem;flex-wrap:wrap;padding:.75rem}',
-				'.localclash-route-choice legend{padding:0 .35rem;font-weight:650}',
-				'.localclash-route-choice label{display:inline-flex;gap:.4rem;align-items:center}',
-				'@media (max-width:700px){.localclash-custom-sites-header{align-items:stretch;flex-direction:column}.localclash-custom-sites-header .cbi-button{width:100%}.localclash-custom-site-table,.localclash-custom-site-table tbody,.localclash-custom-site-table tr,.localclash-custom-site-table th,.localclash-custom-site-table td{display:block;width:auto!important}.localclash-custom-site-table tr.table-titles{display:none}.localclash-custom-site-table tr{padding:.75rem}.localclash-custom-site-table td{padding:.2rem 0}.localclash-custom-site-table td.cbi-section-actions{margin-top:.5rem;text-align:left}}'
-			].join('\n') ]),
+		return E('main', { 'class': 'cbi-map localclash-view localclash-custom-sites', 'role': 'main' }, [
+			E('link', { 'rel': 'stylesheet', 'href': L.resource('localclash/style.css') }),
 			E('div', { 'class': 'localclash-custom-sites-header' }, [
 				E('div', { 'class': 'localclash-custom-sites-header-copy' }, [
-					E('h2', {}, [ _('简易网站分流') ]),
+					E('h2', {}, [ _('网站分流') ]),
 					E('div', { 'class': 'cbi-map-descr' }, [
 						_('添加一个完整域名或 Mihomo 通配符域名，并选择代理或直连。最后成功加入的自定义规则优先。')
 					])
