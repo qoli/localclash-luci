@@ -5,8 +5,9 @@ body[data-page^="admin-services-localclash"] {
 	--lc-muted: #666;
 	--lc-soft: #f5f6f7;
 	--lc-line: rgba(0, 0, 0, .1);
-	--lc-panel: rgba(255, 255, 255, .68);
-	--lc-panel-strong: rgba(255, 255, 255, .88);
+	/* Trackly neutral grays keep panel levels visible on white and black canvases. */
+	--lc-panel: rgba(102, 102, 102, .06);
+	--lc-panel-strong: rgba(102, 102, 102, .10);
 	--lc-panel-outline: rgba(0, 0, 0, .14);
 	--lc-danger: #c42d4b;
 	--lc-success: #2e9d62;
@@ -23,8 +24,8 @@ body[data-page^="admin-services-localclash"] {
 		--lc-muted: #bfc0c5;
 		--lc-soft: #1c1c1e;
 		--lc-line: rgba(255, 255, 255, .1);
-		--lc-panel: rgba(0, 0, 0, .16);
-		--lc-panel-strong: rgba(0, 0, 0, .28);
+		--lc-panel: rgba(161, 161, 166, .12);
+		--lc-panel-strong: rgba(161, 161, 166, .20);
 		--lc-panel-outline: rgba(255, 255, 255, .16);
 		--lc-danger: #ff8095;
 		color-scheme: dark;
@@ -38,8 +39,8 @@ body[data-page^="admin-services-localclash"][data-localclash-theme="dark"]:not([
 	--lc-muted: #bfc0c5;
 	--lc-soft: #1c1c1e;
 	--lc-line: rgba(255, 255, 255, .1);
-	--lc-panel: rgba(0, 0, 0, .16);
-	--lc-panel-strong: rgba(0, 0, 0, .28);
+	--lc-panel: rgba(161, 161, 166, .12);
+	--lc-panel-strong: rgba(161, 161, 166, .20);
 	--lc-panel-outline: rgba(255, 255, 255, .16);
 	--lc-danger: #ff8095;
 	color-scheme: dark;
@@ -233,6 +234,11 @@ body[data-page^="admin-services-localclash"] .modal input[type="radio"] {
 
 .localclash-view textarea.localclash-copybox {
 	height: 20rem;
+}
+
+.localclash-view #localclash-subscription-urls {
+	min-height: calc(5lh + 34px); /* Five lines, 16px padding per side, and borders. */
+	padding: 16px;
 }
 
 .localclash-state-panel {

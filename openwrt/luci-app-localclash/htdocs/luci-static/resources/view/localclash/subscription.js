@@ -383,6 +383,7 @@ return view.extend({
 					E('textarea', {
 						'id': 'localclash-subscription-urls',
 						'class': 'cbi-input-textarea localclash-textarea',
+						'rows': 5,
 						'aria-label': _('订阅来源'),
 						'placeholder': _('每行一条订阅 URI 或节点 URI'),
 						'input': function(ev) {
