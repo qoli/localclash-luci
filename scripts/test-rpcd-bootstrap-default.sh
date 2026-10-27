@@ -143,6 +143,7 @@ runtime_start_takeover_run() {
 }
 
 assert_refresh_order() {
+	grep -q '^call_core component update mihomo' "${tmp_dir}/trace" && fail_test "bootstrap acquired the old profile's core before applying the requested selection"
 	grep -q '"refresh_subscription":[[:space:]]*false' "${tmp_dir}/template-input.json" || fail_test "bootstrap requested an existing-material transaction"
 	[ "$(grep -c '^call_core subscription refresh --json$' "${tmp_dir}/trace")" = 1 ] || fail_test "bootstrap must refresh subscriptions and capabilities exactly once"
 	apply_line="$(grep -n '^call_core config apply-template ' "${tmp_dir}/trace" | cut -d: -f1)"
@@ -165,6 +166,16 @@ if ! grep -Eq '^call_core config apply-template --input .*/template\.json --json
 fi
 
 assert_refresh_order
+
+for selected_core in meta smart; do
+	: > "${tmp_dir}/trace"
+	printf '{"core":"%s","template":"minimal"}\n' "$selected_core" > "$TASK_INPUT"
+	result="$(bootstrap_default_run)"
+	printf '%s\n' "$result" | grep -q '"ok":true' || fail_test "selected $selected_core bootstrap failed: $result"
+	jsonfilter -i "${tmp_dir}/template-input.json" -e '@.core' | grep -qx "$selected_core" || fail_test "requested core was not passed to the Core configuration operation"
+	assert_refresh_order
+done
+rm -f "$TASK_INPUT"
 set_line="$(grep -n '^call_core subscription set ' "${tmp_dir}/trace" | cut -d: -f1)"
 [ -n "$set_line" ] && [ "$set_line" -lt "$apply_line" ] || fail_test "new subscription was not saved before template import"
 

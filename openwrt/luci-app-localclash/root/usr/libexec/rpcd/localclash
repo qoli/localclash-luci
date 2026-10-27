@@ -2192,19 +2192,6 @@ base_assets_body() {
 	printf '"base_assets":{"installed":%s,"path":"%s","source":"localclash-core","missing":"%s","policy":"%s","default_template":"%s","rule_source_dir":"%s","default_patch_count":%s,"default_patches_installed":%s}' "$installed" "$(json_escape "$path")" "$(json_escape "$missing")" "$(json_escape "$policy")" "$(json_escape "$default_template")" "$(json_escape "$rule_source_dir")" "${default_patch_count:-0}" "$default_patches_installed"
 }
 
-mihomo_core_installed() {
-	local tmp installed
-	core_installed || return 1
-	tmp="/tmp/localclash-component-status.$$.json"
-	if ! call_core component status --json > "$tmp" 2>/dev/null; then
-		rm -f "$tmp"
-		return 1
-	fi
-	installed="$(jsonfilter -i "$tmp" -e '@.status.mihomo.installed' 2>/dev/null || true)"
-	rm -f "$tmp"
-	[ "$installed" = "true" ]
-}
-
 dashboard_installed() {
 	local tmp installed
 	core_installed || return 1
@@ -4671,7 +4658,7 @@ start_bootstrap_default() {
 }
 
 bootstrap_default_run() {
-	local tmpdir mihomo_attempt payload selected_core selected_template subscription_input subscription_changed subscription_ready runtime_started runtime_result service_result
+	local tmpdir payload selected_core selected_template subscription_input subscription_changed subscription_ready runtime_started runtime_result service_result
 	payload='{"version":1}'
 	selected_core="meta"
 	selected_template="localclash-default"
@@ -4740,23 +4727,9 @@ bootstrap_default_run() {
 		log_line "默认初始化：未收到新的订阅输入"
 	fi
 
-	if mihomo_core_installed; then
-		log_line "默认初始化：Mihomo 核心已安装，跳过更新"
-	else
-		log_line "默认初始化：正在更新 Mihomo 核心"
-		mihomo_attempt=1
-		while ! run_with_heartbeat "默认初始化：正在更新 Mihomo 核心" "$tmpdir/mihomo.json" call_core component update mihomo --json; do
-			if [ "$mihomo_attempt" -ge 3 ]; then
-				log_line "默认初始化：Mihomo 核心更新失败，已尝试 $mihomo_attempt 次"
-				cat "$tmpdir/mihomo.json"
-				rm -rf "$tmpdir"
-				return 1
-			fi
-			mihomo_attempt=$((mihomo_attempt + 1))
-			log_line "默认初始化：Mihomo 核心更新失败，正在进行第 $mihomo_attempt 次重试"
-			sleep 2
-		done
-	fi
+	# Core's template operation acquires the requested flavor before saving its
+	# profile. Updating the current profile here would fetch the wrong flavor on
+	# first Smart initialization, since a fresh workspace initially selects Meta.
 
 	if dashboard_installed; then
 		log_line "默认初始化：Dashboard 面板文件已安装，跳过更新"
@@ -4784,7 +4757,7 @@ bootstrap_default_run() {
 }
 JSON
 
-	log_line "默认初始化：正在应用 router/$selected_core/$selected_template 默认配置"
+	log_line "默认初始化：正在准备 $selected_core 核心并应用 router/$selected_core/$selected_template 默认配置"
 	if ! call_core config apply-template --input "$tmpdir/template.json" --json > "$tmpdir/template-result.json"; then
 		log_line "默认初始化：默认配置应用失败"
 		cat "$tmpdir/template-result.json"
