@@ -12,7 +12,7 @@ import sys
 
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-TAG_RE = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
+TAG_RE = re.compile(r"^v[0-9]+\.[0-9]+(?:\.[0-9]+)?$")
 ARCHES = {"x86_64": "amd64", "aarch64": "arm64"}
 
 

@@ -12,8 +12,7 @@ import unittest
 SCRIPT = pathlib.Path(__file__).with_name("resolve-core-release.py")
 
 
-def manifest() -> dict:
-    tag = "v1.2.3"
+def manifest(tag: str = "v1.2.3") -> dict:
     base = f"https://github.com/qoli/localClash/releases/download/{tag}"
     return {
         "schema_version": 1,
@@ -50,10 +49,10 @@ def manifest() -> dict:
 
 
 class ResolveCoreReleaseTests(unittest.TestCase):
-    def run_resolver(self, mutate_lock=None, mutate_manifest=None):
+    def run_resolver(self, mutate_lock=None, mutate_manifest=None, tag="v1.2.3"):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
-            manifest_doc = manifest()
+            manifest_doc = manifest(tag)
             if mutate_manifest:
                 mutate_manifest(manifest_doc)
             manifest_path = root / "manifest.json"
@@ -61,8 +60,8 @@ class ResolveCoreReleaseTests(unittest.TestCase):
             lock_doc = {
                 "schema_version": 1,
                 "repository": "qoli/localClash",
-                "tag": "v1.2.3",
-                "manifest_url": "https://github.com/qoli/localClash/releases/download/v1.2.3/localclash-release-manifest.json",
+                "tag": tag,
+                "manifest_url": f"https://github.com/qoli/localClash/releases/download/{tag}/localclash-release-manifest.json",
                 "manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
             }
             if mutate_lock:
@@ -97,6 +96,13 @@ class ResolveCoreReleaseTests(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("manifest SHA-256 mismatch", result.stderr)
+
+    def test_resolves_two_part_core_release(self):
+        result = self.run_resolver(tag="v0.105")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        resolved = json.loads(result.stdout)
+        self.assertEqual(resolved["core_tag"], "v0.105")
+        self.assertIn("/v0.105/", resolved["core"]["url"])
 
     def test_rejects_latest_or_wrong_provenance_url(self):
         result = self.run_resolver(

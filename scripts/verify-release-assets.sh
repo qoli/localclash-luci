@@ -13,7 +13,7 @@ dist_dir="${repo_root}/dist"
 pkg_name="$(awk -F':=' '/^PKG_NAME:=/ { print $2; exit }' "$package_makefile")"
 pkg_version="$(awk -F':=' '/^PKG_VERSION:=/ { print $2; exit }' "$package_makefile")"
 pkg_release="$(awk -F':=' '/^PKG_RELEASE:=/ { print $2; exit }' "$package_makefile")"
-expected_tag="v${pkg_version}-${pkg_release}"
+expected_tag="$(python3 "${repo_root}/scripts/generate-release-notes.py" --print-tag)"
 [ "$release_tag" = "$expected_tag" ] || {
 	printf 'release tag %s does not match package metadata %s\n' "$release_tag" "$expected_tag" >&2
 	exit 1

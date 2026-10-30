@@ -40,6 +40,18 @@ class GenerateReleaseNotesTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "does not match"):
             MODULE.render("v1.2.3-8", repo)
 
+    def test_two_part_public_tag_keeps_package_revision_in_assets(self):
+        repo = self.make_repo("PKG_VERSION:=0.88\nPKG_RELEASE:=1\n")
+
+        notes = MODULE.render("v0.88", repo)
+
+        self.assertIn("/releases/download/v0.88/", notes)
+        self.assertIn("luci-app-localclash_0.88-1_all.ipk", notes)
+        self.assertIn("luci-app-localclash-0.88-r1.apk", notes)
+        self.assertIn("localclash-istore-v0.88-x86_64.run", notes)
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            MODULE.render("v0.88-1", repo)
+
 
 if __name__ == "__main__":
     unittest.main()

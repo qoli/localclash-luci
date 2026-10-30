@@ -20,11 +20,19 @@ def package_version(makefile: Path) -> tuple[str, str]:
     return version_match.group(1).strip(), release_match.group(1).strip()
 
 
+def release_tag_for(version: str, release: str) -> str:
+    if re.fullmatch(r"[0-9]+\.[0-9]+", version):
+        return f"v{version}"
+    if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
+        return f"v{version}-{release}"
+    raise ValueError("package version must use two components or a legacy three-part version")
+
+
 def render(release_tag: str, repo_root: Path) -> str:
     version, release = package_version(
         repo_root / "openwrt/luci-app-localclash/Makefile"
     )
-    expected_tag = f"v{version}-{release}"
+    expected_tag = release_tag_for(version, release)
     if release_tag != expected_tag:
         raise ValueError(
             f"release tag {release_tag} does not match package metadata {expected_tag}"
@@ -67,11 +75,19 @@ def render(release_tag: str, repo_root: Path) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("release_tag")
-    parser.add_argument("output", type=Path)
+    parser.add_argument("release_tag", nargs="?")
+    parser.add_argument("output", nargs="?", type=Path)
+    parser.add_argument("--print-tag", action="store_true")
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parents[1]
+    if args.print_tag:
+        if args.release_tag is not None or args.output is not None:
+            parser.error("--print-tag takes no positional arguments")
+        print(release_tag_for(*package_version(repo_root / "openwrt/luci-app-localclash/Makefile")))
+        return
+    if args.release_tag is None or args.output is None:
+        parser.error("release_tag and output are required unless --print-tag is used")
     notes = render(args.release_tag, repo_root)
     args.output.write_text(notes, encoding="utf-8")
 

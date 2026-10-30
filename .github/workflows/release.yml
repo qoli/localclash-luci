@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing release tag to build, for example v0.1.0-44"
+        description: "Existing release tag to build, for example v0.88"
         required: true
         type: string
 
@@ -38,7 +38,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          expected_tag="$(awk -F':=' '/^PKG_VERSION:=/ { version=$2 } /^PKG_RELEASE:=/ { release=$2 } END { print "v" version "-" release }' openwrt/luci-app-localclash/Makefile)"
+          expected_tag="$(python3 scripts/generate-release-notes.py --print-tag)"
           test "$RELEASE_TAG" = "$expected_tag" || {
             printf 'release tag %s does not match package metadata %s\n' "$RELEASE_TAG" "$expected_tag" >&2
             exit 1
