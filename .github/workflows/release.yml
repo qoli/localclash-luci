@@ -28,6 +28,16 @@ jobs:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
       GH_TOKEN: ${{ github.token }}
     steps:
+      - name: Validate new release version format
+        shell: bash
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != workflow_dispatch ]; then
+            printf '%s\n' "$RELEASE_TAG" | grep -Eq '^v[0-9]+\.[0-9]+$' || {
+              printf 'new LuCI releases require v<major>.<sequence>: %s\n' "$RELEASE_TAG" >&2
+              exit 1
+            }
+          fi
+
       - name: Checkout release tag
         uses: actions/checkout@v6
         with:
@@ -38,7 +48,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          expected_tag="$(python3 scripts/generate-release-notes.py --print-tag)"
+          # Historical tag checkouts predate generate-release-notes.py --print-tag.
+          expected_tag="$(awk -F':=' '/^PKG_VERSION:=/ { version=$2 } /^PKG_RELEASE:=/ { release=$2 } END { if (split(version, parts, ".") == 2) print "v" version; else print "v" version "-" release }' openwrt/luci-app-localclash/Makefile)"
           test "$RELEASE_TAG" = "$expected_tag" || {
             printf 'release tag %s does not match package metadata %s\n' "$RELEASE_TAG" "$expected_tag" >&2
             exit 1
