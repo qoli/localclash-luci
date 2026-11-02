@@ -43,7 +43,7 @@ call_core() {
 		printf '{"ok":false,"code":"core_failure","message":"core failed"}\n'
 		return 7
 	fi
-	printf '{"ok":true,"custom_sites":{"proxy":[],"direct":[]}}\n'
+	printf '{"ok":true,"custom_sites":{"proxy":[],"direct":[],"reject":[]}}\n'
 }
 
 result="$(custom_sites_get)"
@@ -58,6 +58,13 @@ payload = json.load(open(sys.argv[1], encoding="utf-8"))
 assert payload == {"version": 1, "operation": "add", "pattern": "ABC.*cdn.com", "route": "proxy"}, payload
 PY
 printf '%s\n' "$result" | grep -q '"ok":true' || fail_test "add result was not passed through"
+
+printf '{"operation":"add","pattern":"blocked.example","route":"reject"}' | with_lock custom_sites_transact >/dev/null
+python3 - "${tmp_dir}/payload" <<'PY_REJECT'
+import json, sys
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+assert payload == {"version": 1, "operation": "add", "pattern": "blocked.example", "route": "reject"}, payload
+PY_REJECT
 
 printf '{"operation":"delete","id":"site-42"}' | with_lock custom_sites_transact >/dev/null
 python3 - "${tmp_dir}/payload" <<'PY'
@@ -81,7 +88,7 @@ grep -q 'custom_sites_transact) with_lock custom_sites_transact' "${helper}" || 
 grep -q 'custom_sites_transact_async) start_custom_sites_transact' "${helper}" || fail_test "async transact dispatch is missing"
 grep -q 'custom_sites_transact_run) with_lock custom_sites_transact_run' "${helper}" || fail_test "async transact runner is not locked"
 
-printf '{"version":1,"operation":"add","pattern":"async.example","route":"direct"}\n' > "$TASK_INPUT"
+printf '{"version":1,"operation":"add","pattern":"async.example","route":"reject"}\n' > "$TASK_INPUT"
 MOCK_FAIL=false
 result="$(with_lock custom_sites_transact_run)"
 printf '%s\n' "$result" | grep -q '"ok":true' || fail_test "async runner result was not passed through"

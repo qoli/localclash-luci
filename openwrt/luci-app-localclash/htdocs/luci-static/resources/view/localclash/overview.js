@@ -1301,7 +1301,7 @@ function preserveCustomSitesIndicator() {
 		}),
 		E('span', { 'class': 'localclash-inline-check-title' }, [ _('保留用戶自訂網站列表') ]),
 		E('span', { 'class': 'localclash-inline-check-help' }, [
-			_('固定保留“自訂代理網站”和“自訂直連網站”，不受默认策略同步影响。')
+			_('固定保留自定义代理、直连和禁止访问网站列表，不受默认策略同步影响。')
 		])
 	]);
 }

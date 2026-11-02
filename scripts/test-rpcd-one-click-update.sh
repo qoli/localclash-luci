@@ -111,11 +111,17 @@ case "$expr" in
 	@.custom_sites.direct_count)
 		printf '%s\n' "$content" | sed -n 's/.*"direct_count"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p'
 		;;
+	@.custom_sites.reject_count)
+		printf '%s\n' "$content" | sed -n 's/.*"reject_count"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p'
+		;;
 	@.custom_sites.proxy_sha256)
 		printf '%s\n' "$content" | sed -n 's/.*"proxy_sha256"[[:space:]]*:[[:space:]]*"\([0-9a-f]*\)".*/\1/p'
 		;;
 	@.custom_sites.direct_sha256)
 		printf '%s\n' "$content" | sed -n 's/.*"direct_sha256"[[:space:]]*:[[:space:]]*"\([0-9a-f]*\)".*/\1/p'
+		;;
+	@.custom_sites.reject_sha256)
+		printf '%s\n' "$content" | sed -n 's/.*"reject_sha256"[[:space:]]*:[[:space:]]*"\([0-9a-f]*\)".*/\1/p'
 		;;
 	@.status.configured)
 		json_bool configured
@@ -319,16 +325,20 @@ call_core() {
 			;;
 		"custom-sites list --json")
 			if [ "${MOCK_CUSTOM_SITES_INVALID:-0}" = "1" ]; then
-				printf '{"ok":true,"custom_sites":{"initialized":true,"proxy":[],"direct":[],"proxy_count":1,"direct_count":1}}\n'
+				printf '{"ok":true,"custom_sites":{"initialized":true,"proxy":[],"direct":[],"reject":[],"proxy_count":1,"direct_count":1}}\n'
 				return 0
 			fi
 			custom_sites_read_count="$(cat "${tmp_dir}/custom-sites-read-count" 2>/dev/null || printf '0')"
 			custom_sites_read_count=$((custom_sites_read_count + 1))
 			printf '%s\n' "$custom_sites_read_count" > "${tmp_dir}/custom-sites-read-count"
 			if [ "${MOCK_CUSTOM_SITES_CHANGED_AFTER_SYNC:-0}" = "1" ] && [ "$custom_sites_read_count" -gt 1 ]; then
-				printf '{"ok":true,"custom_sites":{"initialized":true,"proxy":[],"direct":[],"proxy_count":2,"direct_count":1,"proxy_sha256":"%064d","direct_sha256":"%064d"}}\n' 3 2
-			else
+				printf '{"ok":true,"custom_sites":{"initialized":true,"proxy":[],"direct":[],"reject":[],"proxy_count":2,"direct_count":1,"reject_count":1,"proxy_sha256":"%064d","direct_sha256":"%064d","reject_sha256":"%064d"}}\n' 3 2 3
+			elif [ "${MOCK_REJECT_CHANGED_AFTER_SYNC:-0}" = "1" ] && [ "$custom_sites_read_count" -gt 1 ]; then
+				printf '{"ok":true,"custom_sites":{"initialized":true,"proxy":[],"direct":[],"reject":[],"proxy_count":1,"direct_count":1,"reject_count":1,"proxy_sha256":"%064d","direct_sha256":"%064d","reject_sha256":"%064d"}}\n' 1 2 4
+			elif [ "${MOCK_REJECT_FIELDS_MISSING:-0}" = "1" ]; then
 				printf '{"ok":true,"custom_sites":{"initialized":true,"proxy":[],"direct":[],"proxy_count":1,"direct_count":1,"proxy_sha256":"%064d","direct_sha256":"%064d"}}\n' 1 2
+			else
+				printf '{"ok":true,"custom_sites":{"initialized":true,"proxy":[],"direct":[],"reject":[],"proxy_count":1,"direct_count":1,"reject_count":1,"proxy_sha256":"%064d","direct_sha256":"%064d","reject_sha256":"%064d"}}\n' 1 2 3
 			fi
 			;;
 		"subscription status --json")
@@ -716,6 +726,8 @@ printf '%s\n' "$result" | grep -q '"policy_template_sync"' || fail_test "policy 
 printf '%s\n' "$result" | grep -q '"custom_sites_preservation":{"verified":true' || fail_test "custom-site preservation evidence missing: ${result}"
 printf '%s\n' "$result" | grep -q '"proxy_count":1' || fail_test "custom-site proxy count evidence missing: ${result}"
 printf '%s\n' "$result" | grep -q '"direct_count":1' || fail_test "custom-site direct count evidence missing: ${result}"
+printf '%s\n' "$result" | grep -q '"reject_count":1' || fail_test "custom-site reject count evidence missing: ${result}"
+printf '%s\n' "$result" | grep -q '"reject_sha256"' || fail_test "custom-site reject hash evidence missing: ${result}"
 grep -q '"sync_default_policy":true' "${STATE_DIR}/luci-preferences.json" || fail_test "one-click run did not persist true sync preference"
 grep -q '"reset_patches":[[:space:]]*true' "${tmp_dir}/template-sync-input.json" || fail_test "template sync did not request a complete patch reset"
 grep -q '"refresh_subscription":[[:space:]]*true' "${tmp_dir}/template-sync-input.json" || fail_test "template sync did not request an atomic subscription refresh"
@@ -762,6 +774,23 @@ unset MOCK_CUSTOM_SITES_CHANGED_AFTER_SYNC
 assert_json "$result"
 [ "$result_rc" -ne 0 ] || fail_test "changed custom-site snapshot returned success"
 printf '%s\n' "$result" | grep -q '"code":"custom_sites_preservation_failed"' || fail_test "custom-site preservation mismatch was not explicit: ${result}"
+
+for reject_case in MOCK_REJECT_CHANGED_AFTER_SYNC MOCK_REJECT_FIELDS_MISSING; do
+	: > "${tmp_dir}/trace"
+	rm -f "${tmp_dir}/custom-sites-read-count"
+	set_task_input '{"version":1,"sync_default_policy":true}'
+	export "$reject_case=1"
+	capture_one_click_update
+	clear_task_input
+	unset "$reject_case"
+	assert_json "$result"
+	[ "$result_rc" -ne 0 ] || fail_test "$reject_case returned success"
+	case "$reject_case" in
+		MOCK_REJECT_CHANGED_AFTER_SYNC) expected_code=custom_sites_preservation_failed ;;
+		MOCK_REJECT_FIELDS_MISSING) expected_code=custom_sites_preservation_snapshot_invalid ;;
+	esac
+	printf '%s\n' "$result" | grep -q "\"code\":\"$expected_code\"" || fail_test "$reject_case was not explicit: ${result}"
+done
 
 : > "${tmp_dir}/trace"
 rm -f "${tmp_dir}/custom-sites-read-count"

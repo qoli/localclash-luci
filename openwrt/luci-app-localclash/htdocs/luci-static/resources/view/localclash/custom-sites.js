@@ -65,9 +65,12 @@ function validateEntry(entry, route) {
 function validateSnapshot(customSites) {
 	if (!customSites || !Array.isArray(customSites.proxy) || !Array.isArray(customSites.direct))
 		throw new Error(_('Core 返回的 custom_sites.proxy/direct 列表无效。'));
+	if (!Array.isArray(customSites.reject))
+		throw new Error(_('Core 未返回禁止访问列表，请先更新 Core 以支持禁止访问分组。'));
 
 	customSites.proxy.forEach(function(entry) { validateEntry(entry, _('代理')); });
 	customSites.direct.forEach(function(entry) { validateEntry(entry, _('直连')); });
+	customSites.reject.forEach(function(entry) { validateEntry(entry, _('禁止访问')); });
 	return customSites;
 }
 
@@ -174,13 +177,14 @@ function showAddDialog() {
 	});
 	var proxy = E('input', { 'type': 'radio', 'name': 'localclash-custom-site-route', 'value': 'proxy', 'checked': 'checked' });
 	var direct = E('input', { 'type': 'radio', 'name': 'localclash-custom-site-route', 'value': 'direct' });
+	var reject = E('input', { 'type': 'radio', 'name': 'localclash-custom-site-route', 'value': 'reject' });
 	var saveLabel = _('保存');
 	var save = E('button', {
 		'type': 'button',
 		'class': 'btn cbi-button cbi-button-apply',
 		'click': function() {
 			var pattern = input.value.trim();
-			var route = direct.checked ? 'direct' : 'proxy';
+			var route = reject.checked ? 'reject' : (direct.checked ? 'direct' : 'proxy');
 
 			if (!pattern) {
 				ui.addNotification(null, E('p', {}, [ _('请输入网站。') ]), 'danger');
@@ -205,7 +209,8 @@ function showAddDialog() {
 			E('fieldset', { 'class': 'localclash-route-choice' }, [
 				E('legend', {}, [ _('策略') ]),
 				E('label', {}, [ proxy, E('span', {}, [ _('代理出口') ]) ]),
-				E('label', {}, [ direct, E('span', {}, [ _('直连') ]) ])
+				E('label', {}, [ direct, E('span', {}, [ _('直连') ]) ]),
+				E('label', {}, [ reject, E('span', {}, [ _('禁止访问') ]) ])
 			])
 		]),
 		E('div', { 'class': 'right' }, [
@@ -286,7 +291,8 @@ function customSiteLists(customSites) {
 	var duplicateIDs = customSitesUI.crossListDuplicateIDs(customSites);
 	return E('div', {}, [
 		siteList(_('自訂代理網站'), _('通过“自訂代理網站”策略组选择自动、手动或可用的 GEO 地区出口。'), customSites.proxy, duplicateIDs),
-		siteList(_('自訂直連網站'), _('这些网站通过仅包含 DIRECT 的“自訂直連網站”策略组连接。'), customSites.direct, duplicateIDs)
+		siteList(_('自訂直連網站'), _('这些网站通过仅包含 DIRECT 的“自訂直連網站”策略组连接。'), customSites.direct, duplicateIDs),
+		siteList(_('自定义禁止访问网站'), _('这些网站通过仅包含 REJECT 的策略组拒绝连接；三个列表统一按最后加入的规则优先。'), customSites.reject, duplicateIDs)
 	]);
 }
 
@@ -303,7 +309,7 @@ return view.extend({
 				E('div', { 'class': 'localclash-custom-sites-header-copy' }, [
 					E('h2', {}, [ _('网站分流') ]),
 					E('div', { 'class': 'cbi-map-descr' }, [
-						_('添加一个完整域名或 Mihomo 通配符域名，并选择代理或直连。最后成功加入的自定义规则优先。')
+						_('添加一个完整域名或 Mihomo 通配符域名，并选择代理、直连或禁止访问。最后成功加入的自定义规则优先。')
 					])
 				]),
 				E('button', { 'type': 'button', 'class': 'btn cbi-button cbi-button-add', 'click': showAddDialog }, [ _('新增网站') ])

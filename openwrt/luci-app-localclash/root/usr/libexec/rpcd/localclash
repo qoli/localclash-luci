@@ -559,14 +559,16 @@ json_bool_required() {
 }
 
 custom_sites_preservation_fields() {
-	local file ok_value initialized proxy_count direct_count proxy_sha direct_sha
+	local file ok_value initialized proxy_count direct_count reject_count proxy_sha direct_sha reject_sha
 	file="$1"
 	ok_value="$(jsonfilter -i "$file" -e '@.ok' 2>/dev/null || true)"
 	initialized="$(jsonfilter -i "$file" -e '@.custom_sites.initialized' 2>/dev/null || true)"
 	proxy_count="$(jsonfilter -i "$file" -e '@.custom_sites.proxy_count' 2>/dev/null || true)"
 	direct_count="$(jsonfilter -i "$file" -e '@.custom_sites.direct_count' 2>/dev/null || true)"
+	reject_count="$(jsonfilter -i "$file" -e '@.custom_sites.reject_count' 2>/dev/null || true)"
 	proxy_sha="$(jsonfilter -i "$file" -e '@.custom_sites.proxy_sha256' 2>/dev/null || true)"
 	direct_sha="$(jsonfilter -i "$file" -e '@.custom_sites.direct_sha256' 2>/dev/null || true)"
+	reject_sha="$(jsonfilter -i "$file" -e '@.custom_sites.reject_sha256' 2>/dev/null || true)"
 
 	if [ "$ok_value" != "true" ]; then
 		fail_with_details "custom_sites_preservation_snapshot_invalid" "无法确认用户自定义网站列表状态。" '"path":"'"$(json_escape "$file")"'","field":"ok","value":"'"$(json_escape "$ok_value")"'"'
@@ -584,6 +586,10 @@ custom_sites_preservation_fields() {
 		fail_with_details "custom_sites_preservation_snapshot_invalid" "自訂直連網站数量无效。" '"path":"'"$(json_escape "$file")"'","value":"'"$(json_escape "$direct_count")"'"'
 		return 1
 	;; esac
+	case "$reject_count" in ''|*[!0-9]*)
+		fail_with_details "custom_sites_preservation_snapshot_invalid" "自定义禁止访问网站数量无效，请确认 Core 已更新。" '"path":"'"$(json_escape "$file")"'","value":"'"$(json_escape "$reject_count")"'"'
+		return 1
+	;; esac
 	if [ "$initialized" = "true" ]; then
 		if ! printf '%s\n' "$proxy_sha" | grep -Eq '^[0-9a-f]{64}$'; then
 			fail_with_details "custom_sites_preservation_snapshot_invalid" "自訂代理網站 SHA256 无效。" '"path":"'"$(json_escape "$file")"'","value":"'"$(json_escape "$proxy_sha")"'"'
@@ -593,22 +599,26 @@ custom_sites_preservation_fields() {
 			fail_with_details "custom_sites_preservation_snapshot_invalid" "自訂直連網站 SHA256 无效。" '"path":"'"$(json_escape "$file")"'","value":"'"$(json_escape "$direct_sha")"'"'
 			return 1
 		fi
-	elif [ "$proxy_count" != "0" ] || [ "$direct_count" != "0" ] || [ -n "$proxy_sha" ] || [ -n "$direct_sha" ]; then
+		if ! printf '%s\n' "$reject_sha" | grep -Eq '^[0-9a-f]{64}$'; then
+			fail_with_details "custom_sites_preservation_snapshot_invalid" "自定义禁止访问网站 SHA256 无效。" '"path":"'"$(json_escape "$file")"'","value":"'"$(json_escape "$reject_sha")"'"'
+			return 1
+		fi
+	elif [ "$proxy_count" != "0" ] || [ "$direct_count" != "0" ] || [ "$reject_count" != "0" ] || [ -n "$proxy_sha" ] || [ -n "$direct_sha" ] || [ -n "$reject_sha" ]; then
 		fail_with_details "custom_sites_preservation_snapshot_invalid" "未初始化的用户自定义网站列表包含不一致的计数或 SHA256。" '"path":"'"$(json_escape "$file")"'"'
 		return 1
 	fi
 
-	printf '%s|%s|%s|%s|%s\n' "$initialized" "$proxy_count" "$direct_count" "$proxy_sha" "$direct_sha"
+	printf '%s|%s|%s|%s|%s|%s|%s\n' "$initialized" "$proxy_count" "$direct_count" "$reject_count" "$proxy_sha" "$direct_sha" "$reject_sha"
 }
 
 custom_sites_preservation_json() {
-	local fields initialized proxy_count direct_count proxy_sha direct_sha
+	local fields initialized proxy_count direct_count reject_count proxy_sha direct_sha reject_sha
 	fields="$1"
-	IFS='|' read -r initialized proxy_count direct_count proxy_sha direct_sha <<EOF
+	IFS='|' read -r initialized proxy_count direct_count reject_count proxy_sha direct_sha reject_sha <<EOF
 $fields
 EOF
-	printf '{"initialized":%s,"proxy_count":%s,"direct_count":%s,"proxy_sha256":"%s","direct_sha256":"%s"}' \
-		"$initialized" "$proxy_count" "$direct_count" "$(json_escape "$proxy_sha")" "$(json_escape "$direct_sha")"
+	printf '{"initialized":%s,"proxy_count":%s,"direct_count":%s,"reject_count":%s,"proxy_sha256":"%s","direct_sha256":"%s","reject_sha256":"%s"}' \
+		"$initialized" "$proxy_count" "$direct_count" "$reject_count" "$(json_escape "$proxy_sha")" "$(json_escape "$direct_sha")" "$(json_escape "$reject_sha")"
 }
 
 core_update_check() {
