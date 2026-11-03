@@ -45,7 +45,7 @@ jobs:
           python3 -m py_compile scripts/generate-release-notes.py
           python3 -m py_compile scripts/resolve-core-release.py
           python3 -m unittest scripts/test_generate_release_notes.py scripts/test_resolve_core_release.py
-          release_tag="$(awk -F':=' '/^PKG_VERSION:=/ { version=$2 } /^PKG_RELEASE:=/ { release=$2 } END { print "v" version "-" release }' openwrt/luci-app-localclash/Makefile)"
+          release_tag="$(python3 scripts/generate-release-notes.py --print-tag)"
           scripts/generate-release-notes.py "$release_tag" /tmp/localclash-luci-release-notes.md
           git diff --check
 
@@ -63,7 +63,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tag="$(awk -F':=' '/^PKG_VERSION:=/ { version=$2 } /^PKG_RELEASE:=/ { release=$2 } END { print "v" version "-" release }' openwrt/luci-app-localclash/Makefile)"
+          tag="$(python3 scripts/generate-release-notes.py --print-tag)"
           export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
           scripts/build-release-assets.sh "$tag"
 
