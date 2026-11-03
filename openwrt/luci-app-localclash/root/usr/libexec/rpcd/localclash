@@ -11,6 +11,7 @@ LUCI_RPCD_RELOAD_REQUIRED="${LOCALCLASH_LUCI_RPCD_RELOAD_REQUIRED:-/tmp/localcla
 LUCI_SUBSCRIPTION_SCHEDULER_RESTART_REQUIRED="${LOCALCLASH_SUBSCRIPTION_SCHEDULER_RESTART_REQUIRED:-/tmp/localclash-update/subscription-scheduler-restart-required}"
 LOG="/tmp/localclash-helper.log"
 TAKEOVER_LOG="${LOCALCLASH_TAKEOVER_LOG:-$STATE_DIR/logs/takeover-events.jsonl}"
+TAKEOVER_LAST_FAILURE="${LOCALCLASH_TAKEOVER_LAST_FAILURE:-}"
 TAKEOVER_LOG_MAX_BYTES="${LOCALCLASH_TAKEOVER_LOG_MAX_BYTES:-262144}"
 TAKEOVER_LOG_KEEP_BYTES="${LOCALCLASH_TAKEOVER_LOG_KEEP_BYTES:-131072}"
 TAKEOVER_LOG_LOCK_DIR="${LOCALCLASH_TAKEOVER_LOG_LOCK_DIR:-/tmp/localclash-takeover-events.lock}"
@@ -195,6 +196,53 @@ takeover_error_log_fields() {
 	message="$(jsonfilter -i "$path" -e '@.message' 2>/dev/null || true)"
 	message="$(printf '%s' "$message" | redact_diagnostic_stream | cut -c1-240)"
 	printf '%s\n%s\n' "${code:-unknown}" "${message:-unavailable}"
+}
+
+# Keep the original failing result independently of subsequent hotplug events
+# and cleanup. This records evidence only; it never changes recovery policy.
+takeover_record_failure() {
+	local source stage rc result tmp valid failure_path evidence_dir runtime_rc runtime_dir runtime_log supervised_log
+	source="$1"
+	stage="$2"
+	rc="$3"
+	result="$4"
+	failure_path="${TAKEOVER_LAST_FAILURE:-$STATE_DIR/logs/takeover-last-failure.json}"
+	tmp="${failure_path}.tmp.$$"
+	valid=false
+	if [ -s "$result" ] && jsonfilter -i "$result" -e '@.ok' >/dev/null 2>&1; then
+		valid=true
+	fi
+	if ! (
+		umask 077
+		mkdir -p "$(dirname "$failure_path")" || exit 1
+		evidence_dir="$(mktemp -d "$(dirname "$failure_path")/.takeover-failure.XXXXXX")" || exit 1
+		if call_core runtime status --json > "$evidence_dir/runtime.json"; then runtime_rc=0; else runtime_rc=$?; fi
+		runtime_dir="$(jsonfilter -i "$evidence_dir/runtime.json" -e '@.status.runtime_dir' 2>/dev/null || true)"
+		runtime_log="$(jsonfilter -i "$evidence_dir/runtime.json" -e '@.status.log_file' 2>/dev/null || true)"
+		if [ -n "$runtime_dir" ]; then
+			supervised_log="$(jsonfilter -i "$runtime_dir/runtime-supervision.json" -e '@.log_path' 2>/dev/null || true)"
+			[ -z "$supervised_log" ] || runtime_log="$supervised_log"
+		fi
+		printf '{"timestamp":"%s","boot_id":"%s","event_id":"%s","source":"%s","stage":"%s","exit_code":%s,"result_json_valid":%s,"result":' \
+			"$(json_escape "$(date -Iseconds)")" "$(json_escape "$(cat "$BOOT_ID_FILE" 2>/dev/null || printf unknown)")" \
+			"$(json_escape "${LOCALCLASH_TAKEOVER_EVENT_ID:-}")" "$(json_escape "$source")" "$(json_escape "$stage")" "$rc" "$valid" > "$tmp" || exit 1
+		if [ "$valid" = true ]; then cat "$result" >> "$tmp"; else printf 'null' >> "$tmp"; fi
+		printf ',"output":' >> "$tmp"
+		file_lines_json "$result" >> "$tmp"
+		printf ',"evidence":{"runtime_status":' >> "$tmp"
+		takeover_file_evidence "$evidence_dir/runtime.json" "$evidence_dir/runtime.copy" 0 "$runtime_rc" >> "$tmp"
+		printf ',"mihomo_log":' >> "$tmp"
+		takeover_file_evidence "$runtime_log" "$evidence_dir/mihomo.copy" 200 >> "$tmp"
+		printf '}}\n' >> "$tmp"
+		mv -f "$tmp" "$failure_path"
+		rc=$?
+		rm -rf "$evidence_dir"
+		exit "$rc"
+	); then
+		rm -f "$tmp"
+		log_line "网络接管诊断：原始失败结果保存失败 path=$failure_path"
+	fi
+	return 0
 }
 
 takeover_skip_enabled() {
@@ -1904,6 +1952,7 @@ runtime_restart_continuity_run() {
 		rc=$?
 	fi
 	if [ "$rc" -ne 0 ]; then
+		takeover_record_failure "$source" preflight_status "$rc" "$tmpdir/before.json"
 		details="$(runtime_continuity_core_error_details "$tmpdir/before.json")"
 		takeover_log_event_safe "$source" "runtime_restart_finished" "result" "failure" "stage" "preflight_status" "exit_code" "$rc" >/dev/null 2>&1 || true
 		runtime_continuity_fail "runtime_restart_preflight_status_failed" "重启前无法读取网络接管状态，未执行重启。" "preflight_status" false false "$details"
@@ -1955,6 +2004,7 @@ runtime_restart_continuity_run() {
 		rc=$?
 	fi
 	if [ "$rc" -ne 0 ]; then
+		takeover_record_failure "$source" runtime_restart "$rc" "$tmpdir/runtime.json"
 		details="$(runtime_continuity_core_error_details "$tmpdir/runtime.json")"
 		takeover_log_event_safe "$source" "runtime_restart_finished" "result" "failure" "stage" "runtime_restart" "exit_code" "$rc" >/dev/null 2>&1 || true
 		runtime_continuity_fail "runtime_restart_failed" "运行时重启失败；网络接管恢复未执行。" "runtime_restart" true true "$details"
@@ -1975,6 +2025,7 @@ runtime_restart_continuity_run() {
 		rc=$?
 	fi
 	if [ "$rc" -ne 0 ]; then
+		takeover_record_failure "$source" runtime_verify "$rc" "$tmpdir/runtime-after.json"
 		details="$(runtime_continuity_core_error_details "$tmpdir/runtime-after.json")"
 		runtime_continuity_fail "runtime_restart_postflight_runtime_failed" "运行时已执行重启，但无法读取重启后的运行状态。" "runtime_verify" true true "$details"
 		rm -rf "$tmpdir"
@@ -1997,6 +2048,7 @@ runtime_restart_continuity_run() {
 			rc=$?
 		fi
 		if [ "$rc" -ne 0 ]; then
+			takeover_record_failure "$source" takeover_restore "$rc" "$tmpdir/takeover-apply.json"
 			details="$(runtime_continuity_core_error_details "$tmpdir/takeover-apply.json")"
 			takeover_log_event_safe "$source" "runtime_restart_finished" "result" "failure" "stage" "takeover_restore" "exit_code" "$rc" >/dev/null 2>&1 || true
 			runtime_continuity_fail "takeover_restore_failed" "运行时已重启，但网络接管恢复失败。" "takeover_restore" true true "$details"
@@ -2019,6 +2071,7 @@ runtime_restart_continuity_run() {
 		rc=$?
 	fi
 	if [ "$rc" -ne 0 ]; then
+		takeover_record_failure "$source" takeover_verify "$rc" "$tmpdir/after.json"
 		details="$(runtime_continuity_core_error_details "$tmpdir/after.json")"
 		runtime_continuity_fail "runtime_restart_postflight_status_failed" "运行时已重启，但无法验证最终网络接管状态。" "takeover_verify" true true "$details"
 		rm -rf "$tmpdir"
@@ -4882,9 +4935,16 @@ runtime_start_takeover_run() {
 	}
 
 	log_line "运行时接管：正在启动运行时"
-	if ! run_with_heartbeat "运行时接管：正在启动运行时" "$tmpdir/runtime.json" call_core runtime start --json; then
+	if run_with_heartbeat "运行时接管：正在启动运行时" "$tmpdir/runtime.json" call_core runtime start --json; then
+		rc=0
+	else
+		rc=$?
 		log_line "运行时接管：运行时启动失败"
-		takeover_log_event_safe "$source" "runtime_takeover_finished" "result" "failure" "stage" "runtime_start"
+		takeover_record_failure "$source" runtime_start "$rc" "$tmpdir/runtime.json"
+		error_fields="$(takeover_error_log_fields "$tmpdir/runtime.json")"
+		error_code="$(printf '%s\n' "$error_fields" | sed -n '1p')"
+		error_message="$(printf '%s\n' "$error_fields" | sed -n '2p')"
+		takeover_log_event_safe "$source" "runtime_takeover_finished" "result" "failure" "stage" "runtime_start" "exit_code" "$rc" "core_code" "$error_code" "message" "$error_message"
 		cat "$tmpdir/runtime.json"
 		rm -rf "$tmpdir"
 		return 1
@@ -4893,7 +4953,9 @@ runtime_start_takeover_run() {
 	if ! runtime_running; then
 		log_line "运行时接管：运行时启动命令已返回成功，但进程没有保持运行"
 		takeover_log_event_safe "$source" "runtime_takeover_finished" "result" "failure" "stage" "runtime_liveness"
-		fail "runtime_not_running_after_start" "运行时启动命令已返回，但进程没有保持运行。请查看运行日志；常见原因是端口被 OpenClash 或其他服务占用。"
+		fail "runtime_not_running_after_start" "运行时启动命令已返回，但进程没有保持运行。请查看报告中的 Mihomo 日志。" > "$tmpdir/liveness.json"
+		takeover_record_failure "$source" runtime_liveness 1 "$tmpdir/liveness.json"
+		cat "$tmpdir/liveness.json"
 		rm -rf "$tmpdir"
 		return 1
 	fi
@@ -4911,6 +4973,7 @@ runtime_start_takeover_run() {
 	rc=$?
 	if [ "$rc" -ne 0 ]; then
 		log_line "运行时接管：网络接管应用失败"
+		takeover_record_failure "$source" takeover_apply "$rc" "$tmpdir/takeover.json"
 		error_fields="$(takeover_error_log_fields "$tmpdir/takeover.json")"
 		error_code="$(printf '%s\n' "$error_fields" | sed -n '1p')"
 		error_message="$(printf '%s\n' "$error_fields" | sed -n '2p')"
@@ -4959,6 +5022,7 @@ takeover_apply() {
 		return 0
 	fi
 	error_fields="$(takeover_error_log_fields "$tmp")"
+	takeover_record_failure "$source" takeover_apply "$rc" "$tmp"
 	error_code="$(printf '%s\n' "$error_fields" | sed -n '1p')"
 	error_message="$(printf '%s\n' "$error_fields" | sed -n '2p')"
 	takeover_log_event_safe "$source" "apply_finished" "result" "failure" "exit_code" "$rc" "core_code" "$error_code" "message" "$error_message"
@@ -4982,6 +5046,7 @@ takeover_stop() {
 		return 0
 	fi
 	error_fields="$(takeover_error_log_fields "$tmp")"
+	takeover_record_failure "$source" takeover_stop "$rc" "$tmp"
 	error_code="$(printf '%s\n' "$error_fields" | sed -n '1p')"
 	error_message="$(printf '%s\n' "$error_fields" | sed -n '2p')"
 	takeover_log_event_safe "$source" "stop_finished" "result" "failure" "exit_code" "$rc" "core_code" "$error_code" "message" "$error_message"
@@ -5126,6 +5191,7 @@ takeover_restore_run() {
 	else
 		rc=$?
 		log_line "网络接管恢复：状态检查失败"
+		takeover_record_failure "$source" takeover_status "$rc" "$tmpdir/status.json"
 		error_fields="$(takeover_error_log_fields "$tmpdir/status.json")"
 		error_code="$(printf '%s\n' "$error_fields" | sed -n '1p')"
 		error_message="$(printf '%s\n' "$error_fields" | sed -n '2p')"
@@ -5146,6 +5212,7 @@ takeover_restore_run() {
 		rc=$?
 		if [ "$rc" -ne 0 ]; then
 			log_line "网络接管恢复：当前规则有效，但修复状态协调失败"
+			takeover_record_failure "$source" takeover_reconcile "$rc" "$tmpdir/reconcile.json"
 			cat "$tmpdir/reconcile.json" 2>/dev/null || true
 			rm -rf "$tmpdir"
 			return "$rc"
@@ -5172,6 +5239,7 @@ takeover_restore_run() {
 		else
 			rc=$?
 			log_line "网络接管恢复：重新应用接管失败"
+			takeover_record_failure "$source" takeover_apply "$rc" "$tmpdir/apply.json"
 			error_fields="$(takeover_error_log_fields "$tmpdir/apply.json")"
 			error_code="$(printf '%s\n' "$error_fields" | sed -n '1p')"
 			error_message="$(printf '%s\n' "$error_fields" | sed -n '2p')"
@@ -5273,6 +5341,7 @@ takeover_snapshot() {
 	: > "$errors" || return 1
 
 	printf '[policy-rules-v4]\n' >> "$output"
+	printf '$ ip rule show\n' >> "$output"
 	if command -v ip >/dev/null 2>&1; then
 		if ip rule show >> "$output" 2>&1; then
 			:
@@ -5287,6 +5356,7 @@ takeover_snapshot() {
 	fi
 
 	printf '[route-table-%s-v4]\n' "$TAKEOVER_ROUTE_TABLE" >> "$output"
+	printf '$ ip route show table %s\n' "$TAKEOVER_ROUTE_TABLE" >> "$output"
 	if command -v ip >/dev/null 2>&1; then
 		if ip route show table "$TAKEOVER_ROUTE_TABLE" >> "$output" 2>&1; then
 			:
@@ -5300,6 +5370,7 @@ takeover_snapshot() {
 	fi
 
 	printf '[policy-rules-v6]\n' >> "$output"
+	printf '$ ip -6 rule show\n' >> "$output"
 	if command -v ip >/dev/null 2>&1; then
 		if ip -6 rule show >> "$output" 2>&1; then
 			:
@@ -5313,6 +5384,7 @@ takeover_snapshot() {
 	fi
 
 	printf '[route-table-%s-v6]\n' "$TAKEOVER_ROUTE_TABLE" >> "$output"
+	printf '$ ip -6 route show table %s\n' "$TAKEOVER_ROUTE_TABLE" >> "$output"
 	if command -v ip >/dev/null 2>&1; then
 		if ip -6 route show table "$TAKEOVER_ROUTE_TABLE" >> "$output" 2>&1; then
 			:
@@ -5326,6 +5398,7 @@ takeover_snapshot() {
 	fi
 
 	printf '[tun-utun]\n' >> "$output"
+	printf '$ ip -details link show utun\n' >> "$output"
 	if command -v ip >/dev/null 2>&1; then
 		if ip -details link show utun >> "$output" 2>&1; then
 			:
@@ -5338,11 +5411,11 @@ takeover_snapshot() {
 		printf 'ip unavailable\n' >> "$output"
 	fi
 
-	printf '[fw4-localclash-rules]\n' >> "$output"
+	printf '[fw4-rules]\n$ nft -a list table inet fw4\n' >> "$output"
 	if command -v nft >/dev/null 2>&1; then
 		raw="${output}.nft"
 		if nft -a list table inet fw4 > "$raw" 2>&1; then
-			awk '/local[Cc]lash/ { print; found=1 } END { if (!found) print "no localClash rules observed" }' "$raw" >> "$output"
+			cat "$raw" >> "$output"
 		else
 			rc=$?
 			cat "$raw" >> "$output"
@@ -5355,11 +5428,12 @@ takeover_snapshot() {
 		printf 'nft_unavailable\n' >> "$errors"
 	fi
 
-	printf '[listeners-7874-7892-9090]\n' >> "$output"
+	printf '[listeners]\n' >> "$output"
 	if command -v ss >/dev/null 2>&1; then
 		raw="${output}.listeners"
 		if ss -lntup > "$raw" 2>&1; then
-			awk 'NR == 1 || /:(7874|7892|9090)([[:space:]]|$)/' "$raw" >> "$output"
+			printf '$ ss -lntup\n' >> "$output"
+			cat "$raw" >> "$output"
 		else
 			cat "$raw" >> "$output"
 			printf 'listener_snapshot_failed\n' >> "$errors"
@@ -5368,7 +5442,8 @@ takeover_snapshot() {
 	elif command -v netstat >/dev/null 2>&1; then
 		raw="${output}.listeners"
 		if netstat -lntup > "$raw" 2>&1; then
-			awk 'NR <= 2 || /:(7874|7892|9090)([[:space:]]|$)/' "$raw" >> "$output"
+			printf '$ netstat -lntup\n' >> "$output"
+			cat "$raw" >> "$output"
 		else
 			cat "$raw" >> "$output"
 			printf 'listener_snapshot_failed\n' >> "$errors"
@@ -5382,61 +5457,96 @@ takeover_snapshot() {
 	[ ! -s "$errors" ]
 }
 
+# Capture each source without filtering error text. Only the long-running
+# program/system logs use the existing 200-line window, with omitted counts.
+takeover_file_evidence() {
+	local input buffer limit command_rc available rc reason total omitted
+	input="$1"
+	buffer="$2"
+	limit="${3:-0}"
+	command_rc="${4:-0}"
+	available=false
+	rc=1
+	reason=file_missing
+	[ -n "$input" ] || reason=path_not_reported
+	total=0
+	omitted=0
+	if [ -f "$input" ]; then
+		if cp "$input" "$buffer" 2>"$buffer.error"; then
+			available=true
+			rc="$command_rc"
+			reason=""
+			[ "$rc" -eq 0 ] || reason=command_failed
+			total="$(awk 'END { print NR+0 }' "$buffer")"
+			if [ "$limit" -gt 0 ] && [ "$total" -gt "$limit" ]; then
+				omitted=$((total - limit))
+				if tail -n "$limit" "$buffer" > "$buffer.tail" 2>>"$buffer.error" && mv "$buffer.tail" "$buffer" 2>>"$buffer.error"; then
+					:
+				else
+					rc=$?
+					reason=file_read_failed
+					available=false
+				fi
+			fi
+		else
+			rc=$?
+			reason=file_read_failed
+		fi
+	fi
+	printf '{"path":"%s","available":%s,"exit_code":%s,"reason":"%s","total_lines":%s,"omitted_lines":%s,"lines":' \
+		"$(json_escape "$input")" "$available" "$rc" "$reason" "$total" "$omitted"
+	if [ "$available" = true ]; then file_lines_json "$buffer"; else printf '[]'; fi
+	printf ',"read_errors":'
+	file_lines_json "$buffer.error"
+	printf '}'
+}
+
 takeover_logs() {
-	local tmpdir status_rc boot_id uptime repair_ticket runtime_state boot_restore snapshot_rc system_events_available status_json_valid complete
+	local tmpdir status_rc boot_id uptime repair_ticket runtime_state boot_restore snapshot_rc system_rc status_json_valid complete runtime_rc component_rc runtime_dir runtime_log supervised_log collected_at
 	tmpdir="$(mktemp -d /tmp/localclash-takeover-logs.XXXXXX)" || {
 		fail "tmpdir_failed" "无法创建网络接管诊断临时目录。"
 		return 1
 	}
 
-	# Preserve kernel/firewall facts before Core bootstrap can create missing
-	# workspace defaults, so the report starts from the first observed state.
-	if takeover_snapshot "$tmpdir/snapshot.log" "$tmpdir/snapshot-errors.log"; then
-		snapshot_rc=0
-	else
-		snapshot_rc=1
-	fi
-	if redact_diagnostic_stream < "$tmpdir/snapshot.log" > "$tmpdir/snapshot-redacted.log"; then
-		mv -f "$tmpdir/snapshot-redacted.log" "$tmpdir/snapshot.log"
-	else
-		printf 'snapshot_redaction_failed\n' >> "$tmpdir/snapshot-errors.log"
-		snapshot_rc=1
-	fi
-	system_events_available=false
+	# Capture host facts first, before any Core bootstrap. Missing tables/devices
+	# are observations, and their stderr must remain in the report.
+	if takeover_snapshot "$tmpdir/snapshot.log" "$tmpdir/snapshot-errors.log"; then snapshot_rc=0; else snapshot_rc=1; fi
 	if command -v logread >/dev/null 2>&1; then
-		if logread > "$tmpdir/logread.raw" 2>/dev/null; then
-			if awk 'tolower($0) ~ /(localclash|firewall|fw4|netifd)/' "$tmpdir/logread.raw" > "$tmpdir/system-events.filtered" &&
-				tail -n 200 "$tmpdir/system-events.filtered" > "$tmpdir/system-events.tail" &&
-				redact_diagnostic_stream < "$tmpdir/system-events.tail" > "$tmpdir/system-events.log"; then
-				system_events_available=true
-			else
-				: > "$tmpdir/system-events.log" 2>/dev/null || true
-			fi
-		else
-			: > "$tmpdir/system-events.log" 2>/dev/null || true
-		fi
+		if logread > "$tmpdir/system.log" 2>&1; then system_rc=0; else system_rc=$?; fi
 	else
-		: > "$tmpdir/system-events.log" 2>/dev/null || true
+		system_rc=127
+		printf 'logread unavailable\n' > "$tmpdir/system.log"
 	fi
-
-	if call_takeover status --json > "$tmpdir/current-status.json"; then
-		status_rc=0
-	else
-		status_rc=$?
-	fi
+	if call_takeover status --json > "$tmpdir/current-status.json"; then status_rc=0; else status_rc=$?; fi
 	status_json_valid=false
-	if [ -s "$tmpdir/current-status.json" ] && jsonfilter -i "$tmpdir/current-status.json" -e '@.ok' >/dev/null 2>&1; then
-		status_json_valid=true
+	if [ -s "$tmpdir/current-status.json" ] && jsonfilter -i "$tmpdir/current-status.json" -e '@.ok' >/dev/null 2>&1; then status_json_valid=true; fi
+
+	if call_core runtime status --json > "$tmpdir/runtime-status.json"; then runtime_rc=0; else runtime_rc=$?; fi
+	if call_core component status --json > "$tmpdir/component-status.json"; then component_rc=0; else component_rc=$?; fi
+	runtime_dir="$(jsonfilter -i "$tmpdir/runtime-status.json" -e '@.status.runtime_dir' 2>/dev/null || true)"
+	runtime_log="$(jsonfilter -i "$tmpdir/runtime-status.json" -e '@.status.log_file' 2>/dev/null || true)"
+	# The status API owns runtime paths; do not scan arbitrary user files.
+	if [ -n "$runtime_dir" ]; then
+		supervised_log="$(jsonfilter -i "$runtime_dir/runtime-supervision.json" -e '@.log_path' 2>/dev/null || true)"
+		[ -z "$supervised_log" ] || runtime_log="$supervised_log"
 	fi
+	takeover_file_evidence "$LOG" "$tmpdir/helper.copy" > "$tmpdir/evidence-helper.json"
+	takeover_file_evidence "$TASK_STATUS" "$tmpdir/task-status.copy" > "$tmpdir/evidence-task-status.json"
+	takeover_file_evidence "$TASK_RESULT" "$tmpdir/task-result.copy" > "$tmpdir/evidence-task-result.json"
+	takeover_file_evidence "${TAKEOVER_LAST_FAILURE:-$STATE_DIR/logs/takeover-last-failure.json}" "$tmpdir/failure.copy" > "$tmpdir/evidence-failure.json"
+	takeover_file_evidence "$tmpdir/runtime-status.json" "$tmpdir/runtime.copy" 0 "$runtime_rc" > "$tmpdir/evidence-runtime.json"
+	takeover_file_evidence "$tmpdir/component-status.json" "$tmpdir/components.copy" 0 "$component_rc" > "$tmpdir/evidence-components.json"
+	takeover_file_evidence "$runtime_log" "$tmpdir/mihomo.copy" 200 > "$tmpdir/evidence-mihomo.json"
+	takeover_file_evidence "${runtime_dir:+$runtime_dir/runtime-supervision.json}" "$tmpdir/supervision.copy" > "$tmpdir/evidence-supervision.json"
+	takeover_file_evidence "${runtime_dir:+$runtime_dir/../logs/watchdog.jsonl}" "$tmpdir/watchdog.copy" 200 > "$tmpdir/evidence-watchdog.json"
+	takeover_file_evidence "$tmpdir/system.log" "$tmpdir/system.copy" 200 "$system_rc" > "$tmpdir/evidence-system.json"
+
 	complete=false
-	if [ "$snapshot_rc" -eq 0 ] && [ "$system_events_available" = true ] && [ "$status_rc" -eq 0 ] && [ "$status_json_valid" = true ]; then
-		complete=true
-	fi
+	if [ "$snapshot_rc" -eq 0 ] && [ "$system_rc" -eq 0 ] && [ "$status_rc" -eq 0 ] && [ "$status_json_valid" = true ] && [ "$runtime_rc" -eq 0 ] && [ "$component_rc" -eq 0 ]; then complete=true; fi
 	boot_id="$(cat "$BOOT_ID_FILE" 2>/dev/null || printf 'unknown')"
 	uptime="$(cut -d. -f1 "$PROC_UPTIME" 2>/dev/null || printf '0')"
-	case "$uptime" in
-		''|*[!0-9]*) uptime=0 ;;
-	esac
+	case "$uptime" in ''|*[!0-9]*) uptime=0 ;; esac
+	collected_at="$(date -Iseconds)"
 	repair_ticket=false
 	runtime_state=false
 	boot_restore=false
@@ -5444,27 +5554,37 @@ takeover_logs() {
 	takeover_runtime_state_enabled && runtime_state=true
 	boot_auto_restore_enabled && boot_restore=true
 
-	printf '{"ok":true,"complete":%s,"privacy_notice":"诊断可能包含接口名、主机名或网络地址；复制给支持人员前请先检查。","path":"%s","boot_id":"%s","uptime_seconds":%s,"repair_ticket":%s,"runtime_state":%s,"boot_auto_restore":%s,"snapshot_exit_code":%s,"snapshot_errors":' "$complete" "$(json_escape "$TAKEOVER_LOG")" "$(json_escape "$boot_id")" "$uptime" "$repair_ticket" "$runtime_state" "$boot_restore" "$snapshot_rc"
+	printf '{"ok":true,"schema_version":2,"collected_at":"%s","complete":%s,"privacy_notice":"公开报告遮蔽订阅链接与认证凭据，保留排障所需的地址、端口、接口和错误；提交前请检查。","path":"%s","boot_id":"%s","uptime_seconds":%s,"repair_ticket":%s,"runtime_state":%s,"boot_auto_restore":%s,"snapshot_exit_code":%s,"snapshot_errors":' \
+		"$(json_escape "$collected_at")" "$complete" "$(json_escape "$TAKEOVER_LOG")" "$(json_escape "$boot_id")" "$uptime" "$repair_ticket" "$runtime_state" "$boot_restore" "$snapshot_rc"
 	file_lines_json "$tmpdir/snapshot-errors.log"
+	printf ',"events_available":'
+	if [ -f "$TAKEOVER_LOG" ]; then printf true; else printf false; fi
 	printf ',"events":'
 	file_lines_json "$TAKEOVER_LOG"
 	printf ',"current_snapshot":'
 	file_lines_json "$tmpdir/snapshot.log"
-	printf ',"system_events_available":%s,"recent_system_events":' "$system_events_available"
-	file_lines_json "$tmpdir/system-events.log"
+	printf ',"system_events_available":'
+	if [ "$system_rc" -eq 0 ]; then printf true; else printf false; fi
+	printf ',"recent_system_events":'
+	file_lines_json "$tmpdir/system.copy"
 	printf ',"current_status_exit_code":%s,"current_status_json_valid":%s,"current_status":' "$status_rc" "$status_json_valid"
-	if [ "$status_json_valid" = true ]; then
-		cat "$tmpdir/current-status.json"
-	else
-		printf 'null'
-	fi
+	if [ "$status_json_valid" = true ]; then cat "$tmpdir/current-status.json"; else printf null; fi
 	printf ',"current_status_output":'
-	if [ "$status_json_valid" = true ]; then
-		printf '[]'
-	else
-		file_lines_json "$tmpdir/current-status.json"
-	fi
-	printf '}\n'
+	file_lines_json "$tmpdir/current-status.json"
+	printf ',"environment":{"kernel":"%s",%s,"openwrt_release":' "$(json_escape "$(uname -srm)")" "$(luci_package_json)"
+	file_lines_json /etc/openwrt_release
+	printf '},"evidence":{'
+	printf '"helper_log":'; cat "$tmpdir/evidence-helper.json"
+	printf ',"task_status":'; cat "$tmpdir/evidence-task-status.json"
+	printf ',"task_result":'; cat "$tmpdir/evidence-task-result.json"
+	printf ',"last_failure":'; cat "$tmpdir/evidence-failure.json"
+	printf ',"runtime_status":'; cat "$tmpdir/evidence-runtime.json"
+	printf ',"component_status":'; cat "$tmpdir/evidence-components.json"
+	printf ',"mihomo_log":'; cat "$tmpdir/evidence-mihomo.json"
+	printf ',"runtime_supervision":'; cat "$tmpdir/evidence-supervision.json"
+	printf ',"watchdog_events":'; cat "$tmpdir/evidence-watchdog.json"
+	printf ',"system_log":'; cat "$tmpdir/evidence-system.json"
+	printf '}}\n'
 	rm -rf "$tmpdir"
 }
 

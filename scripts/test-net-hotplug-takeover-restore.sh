@@ -26,6 +26,7 @@ TAKEOVER_REPAIR_TICKET="$tmp_dir/ticket"
 TAKEOVER_STATE_STATUS="$tmp_dir/status"
 TAKEOVER_SKIP_FILE="$tmp_dir/skip"
 LOG="$tmp_dir/log"
+STATE_DIR="$tmp_dir/state"
 TAKEOVER_LOG="$tmp_dir/events"
 takeover_log_event_safe() { printf '%s\n' "$*" >> "$TAKEOVER_LOG"; }
 takeover_event_scope() { :; }

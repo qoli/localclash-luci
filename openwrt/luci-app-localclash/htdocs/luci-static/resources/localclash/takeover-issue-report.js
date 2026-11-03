@@ -3,195 +3,176 @@
 'require baseclass';
 
 var GITHUB_NEW_ISSUE_URL = 'https://github.com/qoli/localclash-luci/issues/new';
-var GITHUB_ISSUE_URL_MAX = 7500;
 
-function clipped(value, limit) {
-	var text = value === null || value === undefined ? '' : String(value);
-	return text.length > limit ? text.slice(0, limit) + '…' : text;
+function validateReport(logs) {
+	if (logs && logs.ok === false)
+		throw new Error('Takeover 诊断采集失败：' + (logs.code || '') + ' ' + (logs.message || '') + '\n' + JSON.stringify(logs, null, 2));
+	if (!logs || logs.ok !== true || typeof logs.complete !== 'boolean' ||
+		typeof logs.boot_id !== 'string' || typeof logs.uptime_seconds !== 'number' ||
+		!Array.isArray(logs.events) || !Array.isArray(logs.current_snapshot) ||
+		!Array.isArray(logs.snapshot_errors) || !Array.isArray(logs.recent_system_events) ||
+		typeof logs.current_status_json_valid !== 'boolean')
+		throw new Error('未取得有效的 Takeover 诊断。请检查 rpcd 错误和 LuCI/helper 版本；空响应不能生成问题报告。');
+	return logs;
 }
 
-function stringArray(value) {
-	if (!Array.isArray(value))
-		return [];
-	return value.map(function(item) { return clipped(item, 600); });
+// Keep addresses, ports, interfaces and error text: they explain the failure.
+// Only the public report is sanitized; source evidence is never summarized away.
+function publicReport(logs) {
+	validateReport(logs);
+	function text(value) {
+		return value.replace(/\b(?:ssr?|vmess|vless|trojan|hysteria2?|hy2|tuic):\/\/[^\s"'<>]+/gi, '<proxy-uri>')
+			.replace(/https?:\/\/[^\s"'<>\\]+/gi, function(url) {
+				var parts = url.match(/^(https?:\/\/)([^/?#]+)(.*)$/i);
+				if (!parts)
+					return '<invalid-url>';
+				var host = parts[2].replace(/^.*@/, '');
+				var path = parts[3].split(/[?#]/)[0];
+				var local = /^(localhost|127\.[\d.]+|\[::1\])(:\d+)?$/i.test(host);
+				return parts[1] + host + (local ? path : (path ? '/<path>' : '')) + (/[?#]/.test(parts[3]) ? '?<redacted>' : '');
+			})
+			.replace(/\b((?:proxy-)?authorization\s*:\s*)(?:Basic|Bearer)\s+[^\s"']+/gi, '$1<redacted>')
+			.replace(/\b(Bearer\s+)[A-Za-z0-9._~+\/-]+=*/gi, '$1<redacted>')
+			.replace(/\b(password|passwd|secret|access_token|refresh_token|api[_-]?key|authorization|token)(["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}]+)/gi, function(all, key, separator, value) {
+				if (/^token$/i.test(key) && /^["']?\d+["']?$/.test(value))
+					return all;
+				var quote = /^["']/.test(value) ? value.charAt(0) : '';
+				return key + separator + quote + '<redacted>' + quote;
+			});
+	}
+	function clean(value, key) {
+		if (/^(password|passwd|secret|authorization|access_token|refresh_token|api[_-]?key|uris|subscription_urls)$/i.test(key || ''))
+			return '<redacted>';
+		if (/^token$/i.test(key || '') && !/^\d+$/.test(String(value)))
+			return '<redacted>';
+		if (typeof value === 'string') {
+			// Parse JSON text before sanitizing values to retain valid event JSONL.
+			try {
+				var parsed = JSON.parse(value);
+				if (parsed && typeof parsed === 'object')
+					return JSON.stringify(clean(parsed));
+			}
+			catch (e) {}
+			return text(value);
+		}
+		if (Array.isArray(value))
+			return value.map(function(item) { return clean(item); });
+		if (value && typeof value === 'object') {
+			var result = {};
+			Object.keys(value).forEach(function(name) { result[name] = clean(value[name], name); });
+			return result;
+		}
+		return value;
+	}
+	return clean(logs);
 }
 
-function tail(value, count) {
-	var items = stringArray(value);
-	return items.slice(Math.max(0, items.length - count));
+function failedChecks(envelope) {
+	var status = envelope && envelope.status || {};
+	var checks = status.checks || {};
+	if (Array.isArray(checks))
+		return checks.filter(function(check) { return check && check.ok === false; }).map(function(check) { return check.name || check.id || check.code; });
+	return Object.keys(checks).filter(function(name) { return checks[name] === false; });
 }
 
-function compactSnapshot(value) {
-	var important = stringArray(value).filter(function(line) {
-		return /^\[/.test(line) || /localclash|0x6c63|0x162|fwmark|utun|7874|7892|9090|failed|unavailable|no localclash/i.test(line);
+function evidenceJSON(source) {
+	try { return JSON.parse(source.lines.join('\n')); }
+	catch (e) { return null; }
+}
+
+function reportSummary(logs) {
+	var lines = [ '## 已记录的失败与采集缺口', '' ];
+	var evidence = logs.evidence || {};
+	var failure = evidenceJSON(evidence.last_failure);
+	if (failure) {
+		lines.push('- 最近失败：' + failure.timestamp + '；来源 ' + failure.source + '；阶段 ' + failure.stage + '；退出码 ' + failure.exit_code + '。');
+		if (failure.boot_id !== logs.boot_id)
+			lines.push('- 该失败来自另一轮开机：' + failure.boot_id + '，请勿当作当前开机的根因。');
+		var result = failure.result || {};
+		if (result.code || result.message)
+			lines.push('- 原始错误：' + (result.code || '') + ' ' + (result.message || ''));
+		var output = result.details && (result.details.output || result.details.stderr);
+		if (typeof output === 'string')
+			lines.push('- 原始命令输出：\n\n    ' + output.split('\n').join('\n    '));
+	}
+	var task = evidenceJSON(evidence.task_result);
+	if (task && task.ok === false)
+		lines.push('- 最近任务错误：' + (task.code || '') + ' ' + (task.message || ''));
+	var checks = failedChecks(logs.current_status);
+	if (checks.length)
+		lines.push('- 当前未通过的检查：' + checks.join('、') + '。');
+	if (logs.current_status && logs.current_status.ok === false)
+		lines.push('- 接管状态读取失败：' + (logs.current_status.code || '') + ' ' + (logs.current_status.message || ''));
+	if (logs.snapshot_errors.length)
+		lines.push('- 快照命令失败：' + logs.snapshot_errors.join('、') + '；原始 stderr 和退出码见下方完整诊断。');
+	if (logs.events_available === false)
+		lines.push('- 未取得接管事件文件，不能由当前状态重建此前发生的操作。');
+	var invalidEvents = logs.events.filter(function(line) {
+		try { JSON.parse(line); return false; } catch (e) { return true; }
 	});
-	return important.slice(0, 80);
+	if (invalidEvents.length)
+		lines.push('- 有 ' + invalidEvents.length + ' 条事件不是完整 JSON，原文已保留，无法据此补全事件。');
+	Object.keys(evidence).forEach(function(name) {
+		var source = evidence[name];
+		if (!source.available || source.exit_code)
+			lines.push('- 证据源 ' + name + '：' + (source.reason || '命令失败') + '；退出码 ' + source.exit_code + '。');
+		if (source.omitted_lines)
+			lines.push('- 证据源 ' + name + ' 保留最近 ' + source.lines.length + ' 行，明确省略较早的 ' + source.omitted_lines + ' 行。');
+	});
+	if (lines.length === 2)
+		lines.push('- 未记录明确失败；请结合下方完整诊断和复现描述判断，不能据此认定网络正常。');
+	return lines.join('\n') + '\n\n';
 }
 
-function summarizedStatus(value) {
-	var envelope = value && typeof value === 'object' ? value : {};
-	var status = envelope.status && typeof envelope.status === 'object' ? envelope.status : envelope;
-	var checks = Array.isArray(status.checks) ? status.checks.filter(function(check) {
-		return !check || check.ok === false;
-	}).slice(0, 12).map(function(check) {
-		check = check && typeof check === 'object' ? check : {};
-		return clipped(check.name || check.id || check.code || 'unknown_check', 120);
-	}) : [];
-
-	return {
-		ok: envelope.ok,
-		profile_mode: clipped(status.profile_mode, 80),
-		runtime_running: status.runtime_running,
-		effective: status.effective,
-		tun_device: clipped(status.tun_device, 80),
-		dns_port: status.dns_port,
-		redir_port: status.redir_port,
-		failed_checks: checks,
-		warning_count: Array.isArray(status.warnings) ? status.warnings.length : 0
-	};
-}
-
-function reportPreamble(logs) {
+function fullReport(logs) {
+	logs = publicReport(logs);
 	return [
-		'## 问题描述',
-		'<!-- 请描述客户端何时失去网络接管，以及受影响的设备或流量。 -->',
+		'# localClash 网络接管诊断报告',
+		'- 采集时间：' + (logs.collected_at || '旧版 helper 未提供采集时间'),
+		'- 采集完整：' + logs.complete + '（表示证据采集情况，不表示网络健康）',
+		'- Boot ID：' + logs.boot_id,
+		'- Uptime：' + logs.uptime_seconds + ' 秒',
 		'',
-		'## 触发方式',
-		'- [ ] 路由器开机后',
-		'- [ ] WAN 断线或重新拨号后',
-		'- [ ] 修改网络或防火墙设置后',
-		'- [ ] 更新或重启 localClash 后',
-		'- [ ] 其他：',
+		'> 已遮蔽订阅链接与认证凭据，保留排障所需的地址、端口、接口和错误。提交前请检查。',
 		'',
-		'## 预期行为',
-		'<!-- 应该发生什么？ -->',
-		'',
-		'## 实际行为',
-		'<!-- 实际发生了什么？是否可以通过“应用接管”暂时恢复？ -->',
-		'',
-		'## Takeover 诊断',
-		'- 生成时间：' + new Date().toISOString(),
-		'- 报告完整：' + String(logs && logs.complete === true),
-		'- Boot ID：' + clipped(logs && logs.boot_id || 'unknown', 80),
-		'- Uptime：' + String(logs && logs.uptime_seconds || 0) + ' 秒',
-		'',
-		'> 诊断由 LuCI 自动生成并经过地址遮罩；提交前仍请检查接口名、主机名或其他环境信息。',
-		''
-	].join('\n');
-}
-
-function diagnosticBlock(diagnostics, note) {
-	return [
-		note ? '> ' + note : '',
-		note ? '' : '',
+		reportSummary(logs),
 		'<details open>',
-		'<summary>Takeover diagnostic log</summary>',
+		'<summary>完整诊断：事件、命令输出、任务结果与程序日志</summary>',
 		'',
-		'```json',
-		JSON.stringify(diagnostics, null, 2),
-		'```',
+		String.fromCharCode(96).repeat(3) + 'json',
+		JSON.stringify(logs, null, 2),
+		String.fromCharCode(96).repeat(3),
 		'',
 		'</details>',
 		''
 	].join('\n');
 }
 
-function fullReport(logs) {
-	return reportPreamble(logs || {}) + diagnosticBlock(logs || {}, '以下是完整 LuCI takeover 诊断。');
-}
-
-function compactDiagnostics(logs) {
-	logs = logs || {};
-	return {
-		complete: logs.complete === true,
-		privacy_notice: clipped(logs.privacy_notice || '', 240),
-		boot_id: clipped(logs.boot_id || 'unknown', 80),
-		uptime_seconds: logs.uptime_seconds || 0,
-		repair_ticket: logs.repair_ticket === true,
-		runtime_state: logs.runtime_state === true,
-		boot_auto_restore: logs.boot_auto_restore === true,
-		snapshot_exit_code: logs.snapshot_exit_code,
-		snapshot_errors: stringArray(logs.snapshot_errors),
-		events: tail(logs.events, 12),
-		current_snapshot: compactSnapshot(logs.current_snapshot),
-		system_events_available: logs.system_events_available === true,
-		recent_system_events: tail(logs.recent_system_events, 24),
-		current_status_exit_code: logs.current_status_exit_code,
-		current_status_json_valid: logs.current_status_json_valid === true,
-		current_status: summarizedStatus(logs.current_status)
-	};
-}
-
-function issueTitle(logs) {
-	var boot = clipped(logs && logs.boot_id || 'unknown', 8);
-	return '[Takeover] 网络接管失效 - boot ' + boot;
-}
-
-function issueURL(title, body) {
-	return GITHUB_NEW_ISSUE_URL + '?template=takeover-report.md&title=' + encodeURIComponent(title) + '&body=' + encodeURIComponent(body);
-}
-
 function buildGitHubIssue(logs) {
-	var title = issueTitle(logs);
-	var diagnostics = compactDiagnostics(logs);
-	var note = '以下为适合 GitHub New Issue URL 的最近诊断；LuCI 会另外尝试把完整报告复制到剪贴板。';
-	var body = reportPreamble(logs || {}) + diagnosticBlock(diagnostics, note);
-	var url = issueURL(title, body);
-
-	while (url.length > GITHUB_ISSUE_URL_MAX) {
-		if (diagnostics.recent_system_events.length > 4)
-			diagnostics.recent_system_events.shift();
-		else if (diagnostics.events.length > 4)
-			diagnostics.events.shift();
-		else if (diagnostics.current_snapshot.length > 10)
-			diagnostics.current_snapshot.pop();
-		else
-			break;
-
-		body = reportPreamble(logs || {}) + diagnosticBlock(diagnostics, note);
-		url = issueURL(title, body);
-	}
-
-	if (url.length > GITHUB_ISSUE_URL_MAX) {
-		diagnostics = {
-			complete: diagnostics.complete,
-			boot_id: diagnostics.boot_id,
-			uptime_seconds: diagnostics.uptime_seconds,
-			snapshot_errors: diagnostics.snapshot_errors.slice(0, 4),
-			events: diagnostics.events.slice(-1),
-			current_snapshot: diagnostics.current_snapshot.slice(0, 4),
-			recent_system_events: diagnostics.recent_system_events.slice(-1),
-			current_status: summarizedStatus(logs && logs.current_status)
-		};
-		note = 'GitHub URL 长度受限，已贴入最小诊断摘要；可使用 LuCI 的复制按钮取得完整报告。';
-		body = reportPreamble(logs || {}) + diagnosticBlock(diagnostics, note);
-		url = issueURL(title, body);
-	}
-
-	if (url.length > GITHUB_ISSUE_URL_MAX) {
-		note = 'GitHub URL 长度受限，只能贴入最后一条有界事件；可使用 LuCI 的复制按钮取得完整报告。';
-		body = reportPreamble({
-			complete: logs && logs.complete,
-			boot_id: clipped(logs && logs.boot_id || 'unknown', 80),
-			uptime_seconds: logs && logs.uptime_seconds
-		}) + diagnosticBlock({
-			complete: logs && logs.complete === true,
-			last_event: clipped(tail(logs && logs.events, 1)[0] || 'unavailable', 300)
-		}, note);
-		url = issueURL(title, body);
-	}
-
+	validateReport(logs);
+	var title = '[Takeover] 网络接管问题 - boot ' + logs.boot_id.slice(0, 8);
+	var instructions = [
+		'## 问题描述',
+		'<!-- 请补充发生时间、受影响设备、实际现象和预期行为。 -->',
+		'',
+		'## 触发操作',
+		'<!-- 例如开机、更新、启动并接管、应用接管、WAN 重新拨号。 -->',
+		'',
+		'## 完整诊断报告',
+		'此草稿尚未包含诊断。请将 LuCI 下载的完整 .txt 报告拖入正文作为附件上传，确认附件已上传后再提交。请保留完整文件，不要为了正文长度删减日志。'
+	].join('\n');
+	// No diagnostics in the query string: paste the full report or attach its file.
 	return {
 		title: title,
-		body: body,
-		url: url,
+		url: GITHUB_NEW_ISSUE_URL + '?template=takeover-report.md&title=' + encodeURIComponent(title) + '&body=' + encodeURIComponent(instructions),
 		full_report: fullReport(logs),
-		url_length: url.length,
-		url_limit: GITHUB_ISSUE_URL_MAX
+		filename: 'localclash-takeover-' + logs.boot_id.replace(/[^a-zA-Z0-9-]/g, '_') + '.txt'
 	};
 }
 
 return baseclass.extend({
+	validateReport: validateReport,
+	buildPublicReport: publicReport,
 	buildFullReport: fullReport,
 	buildGitHubIssue: buildGitHubIssue
 });

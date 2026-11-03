@@ -248,6 +248,13 @@ assert_json "$result"
 printf '%s\n' "$result" | grep -q '"code":"runtime_restart_failed"' || fail_test "restart failure code missing: $result"
 printf '%s\n' "$result" | grep -q '"partial":true' || fail_test "restart failure did not report partial state: $result"
 grep -q 'takeover apply' "${tmp_dir}/trace" && fail_test "takeover apply ran after restart failure"
+python3 - "$STATE_DIR/logs/takeover-last-failure.json" <<'PY' || fail_test "restart original failure was not retained"
+import json, sys
+failure = json.load(open(sys.argv[1]))
+assert failure["stage"] == "runtime_restart" and failure["exit_code"] == 19
+assert failure["result"]["code"] == "mock_restart_failed"
+assert failure["result"]["message"] == "restart failed"
+PY
 
 reset_case
 MOCK_RUNTIME_AFTER=false
