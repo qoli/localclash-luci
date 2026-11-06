@@ -36,9 +36,9 @@ LuCI 面向用户的表达语言维持为简体中文。
 
 ## 功能测试与发布选测
 
-从相邻 Core 仓库的 `docs/istoreos-test-features.md` 和
-[测试 Skill](https://github.com/qoli/localClash/blob/main/.codex/skills/localclash-istoreos-test/SKILL.md) 开始：维护每个功能最后实际测试版本、结果和证据，
-按变更影响选择回归，核对后沿用未受影响功能的历史结果。发布不自动触发全表重测。
+按 Core 的
+[测试 Skill](https://github.com/qoli/localClash/blob/main/.codex/skills/localclash-istoreos-test/SKILL.md)
+选择受改动影响的验收，把结果与实际受测版本及该次运行证据一起保存。沿用历史结果前核对原始证据。
 
 ## 集成约束
 
