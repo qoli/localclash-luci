@@ -2,6 +2,10 @@
 
 跟着图在 OpenWrt 后台安装并启动 localClash。先用电脑连上这台路由器，在浏览器打开路由器的管理地址并登录。确认路由器能联网，再准备一条服务商提供的订阅地址或节点链接。图例使用 iStoreOS 上的 LuCI v0.88。
 
+> localClash 是独立维护的开源项目。如果它帮你省了配置 Mihomo 或接管路由器网络的时间，可以请作者喝杯咖啡，支持项目继续维护。
+>
+> **[查看自愿赞助方式](https://github.com/qoli/localClash#支持-localclash)**
+
 ## 第 1 步：下载安装包
 
 ![GitHub 发布页的 Assets 列表，标出 apk 和 opkg 各自使用的安装包](assets/readme/01-download.png)
