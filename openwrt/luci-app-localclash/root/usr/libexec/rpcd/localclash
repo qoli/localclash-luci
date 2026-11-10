@@ -6,6 +6,7 @@ DNS_GUARD="${LOCALCLASH_DNS_GUARD:-/usr/libexec/localclash/dns-guard}"
 STATE_DIR="${LOCALCLASH_STATE_DIR:-/root/localclash}"
 SERVICE="/etc/init.d/localclash-mcp"
 SUBSCRIPTION_SCHEDULER_SERVICE="${LOCALCLASH_SUBSCRIPTION_SCHEDULER_SERVICE:-/etc/init.d/localclash-subscription-scheduler}"
+POOL_SCHEDULER_SERVICE="${LOCALCLASH_POOL_SCHEDULER_SERVICE:-/etc/init.d/localclash-pool-scheduler}"
 RPCD_SERVICE="${LOCALCLASH_RPCD_SERVICE:-/etc/init.d/rpcd}"
 LUCI_RPCD_RELOAD_REQUIRED="${LOCALCLASH_LUCI_RPCD_RELOAD_REQUIRED:-/tmp/localclash-update/rpcd-reload-required}"
 LUCI_SUBSCRIPTION_SCHEDULER_RESTART_REQUIRED="${LOCALCLASH_SUBSCRIPTION_SCHEDULER_RESTART_REQUIRED:-/tmp/localclash-update/subscription-scheduler-restart-required}"
@@ -3399,7 +3400,7 @@ one_click_update_continue_execute() {
 		fi
 		subscription_refresh_json="$(cat "$tmpdir/subscription-refresh.json")"
 	elif [ "$subscription_ready" = "true" ]; then
-		subscription_refresh_json='{"ok":true,"changed":false,"deferred":true,"summary":"订阅刷新将与默认策略和能力快照在同一材料事务中提交。"}'
+		subscription_refresh_json='{"ok":true,"changed":false,"deferred":true,"summary":"订阅刷新和线路池准备将随默认策略一起处理。"}'
 		log_line "一键更新：订阅刷新已并入默认策略材料事务"
 	else
 		subscription_refresh_json='{"ok":true,"changed":false,"summary":"未配置订阅，跳过订阅和配置材料检查点。","skipped":true}'
@@ -3909,6 +3910,128 @@ custom_sites_transact_run() {
 	fi
 	log_line "自訂網站：开始验证、渲染和运行时应用"
 	custom_sites_transact < "$TASK_INPUT"
+}
+
+pool_schedule_config_value() {
+	"$UCI_BIN" -q get "localclash.pool_schedule.$1" 2>/dev/null || printf '%s\n' "$2"
+}
+
+pool_schedule_period_valid() {
+	case "$1" in 5m|15m|30m|1h|daily-08) return 0 ;; esac
+	return 1
+}
+
+pool_schedule_get() {
+	local enabled period available arch status_file next_run last_run outcome
+	command -v "$UCI_BIN" >/dev/null 2>&1 || {
+		fail "uci_missing" "缺少 uci，无法读取线路池定时更新设置。"
+		return 1
+	}
+	enabled="$(pool_schedule_config_value enabled 0)"
+	period="$(pool_schedule_config_value period 15m)"
+	case "$enabled" in
+		0) enabled=false ;;
+		1) enabled=true ;;
+		*) fail "pool_schedule_enabled_invalid" "线路池定时更新配置无效。"; return 1 ;;
+	esac
+	pool_schedule_period_valid "$period" || {
+		fail "pool_schedule_period_invalid" "线路池更新周期无效。"
+		return 1
+	}
+	available=false
+	if arch="$(router_arch)" && [ -x "$STATE_DIR/bin/linux-$arch/localclash-pools" ]; then
+		available=true
+	fi
+	status_file="$STATE_DIR/.runtime/mihomo/qualified-pools/schedule.json"
+	outcome=
+	if [ -r "$status_file" ]; then
+		next_run="$(jsonfilter -i "$status_file" -e '@.next_run_at' 2>/dev/null || true)"
+		last_run="$(jsonfilter -i "$status_file" -e '@.last_run_at' 2>/dev/null || true)"
+		if [ -n "$last_run" ]; then
+			outcome=success
+			if [ -n "$(jsonfilter -i "$status_file" -e '@.error' 2>/dev/null || true)" ]; then
+				outcome=error
+			fi
+		fi
+	fi
+	if [ "$enabled" != true ] || ! "$POOL_SCHEDULER_SERVICE" running >/dev/null 2>&1; then
+		next_run=
+	fi
+	printf '{"ok":true,"available":%s,"schedule":{"enabled":%s,"period":"%s"},"next_run_at":"%s","last_run_at":"%s","outcome":"%s"}\n' \
+		"$available" "$enabled" "$period" "$(json_escape "$next_run")" "$(json_escape "$last_run")" "$outcome"
+}
+
+pool_schedule_service_apply() {
+	if [ "$1" = 1 ]; then
+		LOCALCLASH_STATE_DIR="$STATE_DIR" "$POOL_SCHEDULER_SERVICE" enable &&
+			LOCALCLASH_STATE_DIR="$STATE_DIR" "$POOL_SCHEDULER_SERVICE" restart
+	else
+		if "$POOL_SCHEDULER_SERVICE" running; then
+			"$POOL_SCHEDULER_SERVICE" stop || return 1
+		fi
+		"$POOL_SCHEDULER_SERVICE" disable
+	fi
+}
+
+pool_schedule_set() {
+	local payload enabled period arch previous_section previous_enabled previous_period rollback_rc
+	payload="$(strip_ubus_rpc_session "$(cat)")"
+	enabled="$(jsonfilter -s "$payload" -e '@.enabled' 2>/dev/null || true)"
+	period="$(jsonfilter -s "$payload" -e '@.period' 2>/dev/null || true)"
+	case "$enabled" in
+		true) enabled=1 ;;
+		false) enabled=0 ;;
+		*) fail "pool_schedule_enabled_invalid" "请选择是否启用线路池定时更新。"; return 1 ;;
+	esac
+	pool_schedule_period_valid "$period" || {
+		fail "pool_schedule_period_invalid" "请选择支持的线路池更新周期。"
+		return 1
+	}
+	[ -x "$POOL_SCHEDULER_SERVICE" ] && command -v "$UCI_BIN" >/dev/null 2>&1 || {
+		fail "pool_scheduler_service_missing" "线路池定时更新服务未安装。"
+		return 1
+	}
+	if [ "$enabled" = 1 ]; then
+		if ! arch="$(router_arch)" || [ ! -x "$STATE_DIR/bin/linux-$arch/localclash-pools" ]; then
+			fail "pool_worker_missing" "请先更新 localClash 核心和基础资产，再启用线路池定时更新。"
+			return 1
+		fi
+	fi
+	previous_section="$("$UCI_BIN" -q get localclash.pool_schedule 2>/dev/null)" || previous_section=
+	previous_enabled="$("$UCI_BIN" -q get localclash.pool_schedule.enabled 2>/dev/null)" || previous_enabled=
+	previous_period="$("$UCI_BIN" -q get localclash.pool_schedule.period 2>/dev/null)" || previous_period=
+	if "$UCI_BIN" -q set localclash.pool_schedule=pool_schedule &&
+		"$UCI_BIN" -q set "localclash.pool_schedule.enabled=$enabled" &&
+		"$UCI_BIN" -q set "localclash.pool_schedule.period=$period" &&
+		"$UCI_BIN" -q commit localclash &&
+		pool_schedule_service_apply "$enabled" >/dev/null 2>&1; then
+		pool_schedule_get
+		return $?
+	fi
+	rollback_rc=0
+	if [ -n "$previous_section" ]; then
+		"$UCI_BIN" -q set "localclash.pool_schedule=$previous_section" || rollback_rc=1
+		if [ -n "$previous_enabled" ]; then
+			"$UCI_BIN" -q set "localclash.pool_schedule.enabled=$previous_enabled" || rollback_rc=1
+		else
+			"$UCI_BIN" -q delete localclash.pool_schedule.enabled || true
+		fi
+		if [ -n "$previous_period" ]; then
+			"$UCI_BIN" -q set "localclash.pool_schedule.period=$previous_period" || rollback_rc=1
+		else
+			"$UCI_BIN" -q delete localclash.pool_schedule.period || true
+		fi
+	else
+		"$UCI_BIN" -q delete localclash.pool_schedule || true
+	fi
+	"$UCI_BIN" -q commit localclash || rollback_rc=1
+	pool_schedule_service_apply "${previous_enabled:-0}" >/dev/null 2>&1 || rollback_rc=1
+	if [ "$rollback_rc" = 0 ]; then
+		fail "pool_schedule_save_failed" "线路池定时更新设置保存失败，已恢复原设置。"
+	else
+		fail "pool_schedule_rollback_failed" "线路池定时更新设置保存失败，原设置恢复不完整。"
+	fi
+	return 1
 }
 
 subscription_schedule_config() {
@@ -4645,6 +4768,13 @@ install_base_assets() {
 		cat "$output"
 		rm -f "$output"
 		return 1
+	fi
+	if [ -x "$POOL_SCHEDULER_SERVICE" ] && [ "$(pool_schedule_config_value enabled 0)" = 1 ]; then
+		if ! pool_schedule_service_apply 1 >/dev/null 2>&1; then
+			rm -f "$output"
+			fail "pool_scheduler_restart_failed" "基础文件已更新，但线路池定时更新服务重启失败。"
+			return 1
+		fi
 	fi
 	log_line "基础文件初始化：已由 localClash 核心安装"
 	rm -f "$output"
@@ -5606,6 +5736,8 @@ case "$method" in
 	  "subscription_schedule_get": {},
 	  "subscription_schedule_set": { "enabled": false, "update_hour": 0 },
 	  "subscription_schedule_run_now": {},
+	  "pool_schedule_get": {},
+	  "pool_schedule_set": { "enabled": false, "period": "" },
 	  "custom_sites_get": {},
 	  "custom_sites_transact": { "operation": "", "pattern": "", "route": "", "id": "" },
 	  "custom_sites_transact_async": { "operation": "", "pattern": "", "route": "", "id": "" },
@@ -5660,6 +5792,8 @@ JSON
 	subscription_schedule_get) subscription_schedule_get ;;
 	subscription_schedule_set) with_lock subscription_schedule_set ;;
 	subscription_schedule_run_now) start_subscription_schedule_run ;;
+	pool_schedule_get) pool_schedule_get ;;
+	pool_schedule_set) with_lock pool_schedule_set ;;
 	subscription_schedule_run_task) subscription_schedule_run_task "${3:-}" ;;
 	subscription_schedule_tick) subscription_schedule_tick ;;
 	custom_sites_get) custom_sites_get ;;

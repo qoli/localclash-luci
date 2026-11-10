@@ -100,13 +100,17 @@ download_verified "$core_url" "$core_sha" "$core_size" "$build_dir/payload/bin/l
 download_verified "$base_url" "$base_sha" "$base_size" "$build_dir/payload/assets/localclash-base-assets.tar.gz"
 chmod 755 "$build_dir/payload/bin/localclash"
 
-python3 - "$build_dir/payload/assets/localclash-base-assets.tar.gz" <<'PY'
+python3 - "$build_dir/payload/assets/localclash-base-assets.tar.gz" "$bundle_arch" <<'PY'
 import pathlib
+import struct
 import sys
 import tarfile
 
 archive = pathlib.Path(sys.argv[1])
+goarch, machine = {"x86_64": ("amd64", 62), "aarch64": ("arm64", 183)}[sys.argv[2]]
+worker = f"bin/linux-{goarch}/localclash-pools"
 required = {
+    worker,
     "policy-templates/localclash-default.json",
     ".runtime/mihomo/Country.mmdb",
     ".runtime/mihomo/geoip.dat",
@@ -125,6 +129,15 @@ with tarfile.open(archive, "r:gz") as handle:
         name = normalized.as_posix().removeprefix("./")
         if name in required and member.isfile():
             found.add(name)
+        if name == worker:
+            if not member.isfile() or member.mode & 0o111 == 0:
+                raise SystemExit(f"base-assets pool worker is not executable: {name}")
+            with handle.extractfile(member) as binary:
+                header = binary.read(20)
+            if len(header) < 20 or header[:6] != b"\x7fELF\x02\x01":
+                raise SystemExit(f"base-assets pool worker is not a 64-bit little-endian ELF: {name}")
+            if struct.unpack_from("<H", header, 18)[0] != machine:
+                raise SystemExit(f"base-assets pool worker architecture mismatch: {name}")
         if (
             member.isfile()
             and len(normalized.parts) == 2

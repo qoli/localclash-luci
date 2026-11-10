@@ -36,6 +36,19 @@ var callSubscriptionScheduleRunNow = rpc.declare({
 	expect: { '': {} }
 });
 
+var callPoolScheduleGet = rpc.declare({
+	object: 'localclash',
+	method: 'pool_schedule_get',
+	expect: { '': {} }
+});
+
+var callPoolScheduleSet = rpc.declare({
+	object: 'localclash',
+	method: 'pool_schedule_set',
+	params: [ 'enabled', 'period' ],
+	expect: { '': {} }
+});
+
 var callTaskStatus = rpc.declare({
 	object: 'localclash',
 	method: 'task_status',
@@ -344,12 +357,95 @@ function scheduleStatusText(result) {
 	return lines.join('\n');
 }
 
+function poolScheduleStatusText(result) {
+	if (!result || result.ok !== true)
+		return result && result.message || _('暂时无法读取线路池定时更新设置。');
+
+	var lines = [];
+	if (!result.available)
+		lines.push(_('更新 localClash 核心和基础资产后即可启用。'));
+	if (result.last_run_at) {
+		lines.push(formatText(_('上次执行于 %s'), result.last_run_at));
+		lines.push(result.outcome === 'error' ? _('上次更新未全部完成，请查看路由器系统日志。') : _('上次更新成功。'));
+	}
+	if (result.next_run_at)
+		lines.push(formatText(_('预计下次于 %s 执行'), result.next_run_at));
+	else if (result.schedule.enabled && result.available)
+		lines.push(_('当前未读取到下次执行时间。'));
+	return lines.join('\n');
+}
+
+function renderPoolSchedule(result) {
+	var schedule = result && result.schedule || {};
+	var enabled = E('input', {
+		'id': 'localclash-pool-schedule-enabled',
+		'type': 'checkbox',
+		'checked': schedule.enabled === true ? '' : null,
+		'disabled': result && (result.available || schedule.enabled) ? null : ''
+	});
+	var options = [
+		[ '5m', _('5 分钟') ],
+		[ '15m', _('15 分钟') ],
+		[ '30m', _('30 分钟') ],
+		[ '1h', _('1 小时') ],
+		[ 'daily-08', _('每天 08:00') ]
+	];
+	var period = E('select', { 'id': 'localclash-pool-schedule-period', 'class': 'cbi-input-select' },
+		options.map(function(option) {
+			return E('option', {
+				'value': option[0],
+				'selected': (schedule.period || '15m') === option[0] ? '' : null
+			}, [ option[1] ]);
+		}));
+	var status = E('pre', { 'class': 'localclash-schedule-status', 'aria-live': 'polite' }, [ poolScheduleStatusText(result) ]);
+
+	return E('div', { 'class': 'cbi-section localclash-section' }, [
+		E('h3', {}, [ _('线路池定时更新') ]),
+		E('p', {}, [ _('定时检测并更新「⚡ 自动选择」和「ChatGPT-available」的线路。首次应用订阅时会建立线路池。每天 08:00 按路由器本地时间执行。') ]),
+		E('div', { 'class': 'localclash-schedule-grid' }, [
+			E('label', { 'class': 'localclash-schedule-enabled', 'for': enabled.id }, [
+				enabled, E('span', {}, [ _('启用线路池定时更新') ])
+			]),
+			E('label', { 'class': 'localclash-schedule-hour', 'for': period.id }, [
+				E('span', {}, [ _('更新周期') ]), period
+			])
+		]),
+		status,
+		actionRow([
+			E('button', {
+				'type': 'button',
+				'class': 'btn cbi-button cbi-button-save localclash-button',
+				'click': function(ev) {
+					var button = ev.currentTarget;
+					button.disabled = true;
+					callPoolScheduleSet(enabled.checked, period.value).then(function(updated) {
+						if (!updated || updated.ok !== true)
+							throw new Error(updated && updated.message || _('无法保存线路池定时更新设置。'));
+						enabled.checked = updated.schedule.enabled;
+						period.value = updated.schedule.period;
+						enabled.disabled = !updated.available && !updated.schedule.enabled;
+						status.textContent = [ _('线路池定时设置已保存。'), poolScheduleStatusText(updated) ].filter(Boolean).join('\n');
+					}).catch(function(err) {
+						status.textContent = formatText(_('保存线路池定时设置失败（%s）'), err.message || String(err));
+					}).finally(function() {
+						button.disabled = false;
+					});
+				}
+			}, [ _('保存线路池定时设置') ])
+		])
+	]);
+}
+
 return view.extend({
 	load: function() {
-		return callSubscriptionScheduleGet();
+		return Promise.all([
+			callSubscriptionScheduleGet(),
+			callPoolScheduleGet().catch(function(err) { return { ok: false, message: err.message }; })
+		]);
 	},
 
-	render: function(scheduleResult) {
+	render: function(data) {
+		var scheduleResult = data[0];
 		var schedule = scheduleResult && scheduleResult.schedule || {};
 		var selectedHour = Number(schedule.update_hour);
 		var hourOptions = [];
@@ -377,7 +473,7 @@ return view.extend({
 		return E('div', { 'class': 'cbi-map localclash-view localclash-subscription' }, [
 			localclashStyle.stylesheet(),
 			E('h2', {}, [ _('订阅') ]),
-			E('div', { 'class': 'cbi-map-descr' }, [ _('管理订阅来源与每日自动更新。') ]),
+			E('div', { 'class': 'cbi-map-descr' }, [ _('管理订阅来源、订阅自动更新与线路池定时更新。') ]),
 			E('div', { 'class': 'cbi-section localclash-section' }, [
 				E('h3', {}, [ _('订阅来源') ]),
 					E('textarea', {
@@ -442,7 +538,8 @@ return view.extend({
 							return callSubscriptionScheduleRunNow();
 						})
 					])
-				])
+				]),
+				renderPoolSchedule(data[1])
 			]);
 	}
 });

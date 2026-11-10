@@ -1,0 +1,40 @@
+#!/bin/sh /etc/rc.common
+
+START=97
+STOP=8
+USE_PROCD=1
+
+start_service() {
+	local enabled period arch state worker zone
+	enabled="$(uci -q get localclash.pool_schedule.enabled 2>/dev/null)" || enabled=0
+	[ "$enabled" = 1 ] || return 0
+	period="$(uci -q get localclash.pool_schedule.period 2>/dev/null)" || period=15m
+	case "$period" in
+		5m|15m|30m|1h|daily-08) ;;
+		*) echo "localClash 线路池更新周期无效" >&2; return 1 ;;
+	esac
+	case "$(uname -m)" in
+		aarch64|arm64) arch=arm64 ;;
+		x86_64|amd64) arch=amd64 ;;
+		*) echo "localClash 线路池更新服务不支持此架构" >&2; return 1 ;;
+	esac
+	state="$(cd "${LOCALCLASH_STATE_DIR:-/root/localclash}" && pwd -P)" || return 1
+	worker="$state/bin/linux-$arch/localclash-pools"
+	[ -x "$worker" ] || {
+		echo "localClash 线路池更新组件缺失" >&2
+		return 1
+	}
+
+	procd_open_instance pool_scheduler
+	procd_set_param command "$worker" schedule --runtime "$state/.runtime/mihomo" --period "$period"
+	zone="$(uci -q get system.@system[0].zonename 2>/dev/null)" || zone=
+	[ -z "$zone" ] || procd_set_param env "TZ=$zone"
+	procd_set_param respawn
+	procd_set_param term_timeout 20
+	procd_set_param stderr 1
+	procd_close_instance
+}
+
+service_triggers() {
+	procd_add_reload_trigger localclash system
+}

@@ -20,6 +20,11 @@ assert(source.includes("+ String(hour) + ':00'"));
 assert(source.includes("_('每天更新时间（路由器本地时间）')"));
 assert(source.includes('updateHour < 0 || updateHour > 23'));
 assert(source.includes("_('每天更新时间必须是 00:00 到 23:00 的整点。')"));
+assert(source.includes("method: 'pool_schedule_get'"));
+assert(source.includes("method: 'pool_schedule_set'"));
+assert(source.includes("params: [ 'enabled', 'period' ]"));
+for (const period of [ '5m', '15m', '30m', '1h', 'daily-08' ])
+	assert(source.includes("[ '" + period + "', _("));
 assert(source.includes('if (task && task.cancellable === false)'));
 assert(source.includes("modal.cancelButton.style.display = 'none'"));
 assert(!source.includes('g204'), 'removed g204 controls must not remain in the subscription UI');

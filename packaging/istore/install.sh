@@ -34,8 +34,8 @@ sha256sum -c checksums.sha256 >/dev/null || die "bundle SHA-256 校验失败。"
 [ -n "${LUCI_IPK:-}" ] || die "bundle 未声明 LuCI IPK。"
 
 case "$(uname -m)" in
-	x86_64|amd64) router_arch=x86_64 ;;
-	aarch64|arm64) router_arch=aarch64 ;;
+	x86_64|amd64) router_arch=x86_64; worker_arch=amd64 ;;
+	aarch64|arm64) router_arch=aarch64; worker_arch=arm64 ;;
 	*) die "不支持的路由器架构：$(uname -m)" ;;
 esac
 [ "$router_arch" = "$BUNDLE_ARCH" ] || die "架构不匹配：本机为 $router_arch，安装包为 $BUNDLE_ARCH。"
@@ -43,6 +43,7 @@ esac
 
 install_tmp="/tmp/localclash-istore-install.$$"
 state_dir=/root/localclash
+pool_worker="bin/linux-$worker_arch/localclash-pools"
 cleanup() {
 	rm -rf "$install_tmp"
 }
@@ -67,6 +68,8 @@ for required_path in \
 	.runtime/mihomo/ASN.mmdb; do
 	[ -f "$install_tmp/assets/$required_path" ] || die "基础文件不完整：$required_path"
 done
+[ -f "$install_tmp/assets/$pool_worker" ] && [ -x "$install_tmp/assets/$pool_worker" ] ||
+	die "基础文件缺少可执行的线路池组件 $pool_worker。"
 [ -d "$install_tmp/assets/rule-sources" ] || die "基础文件不完整：rule-sources"
 rule_source_found=false
 for rule_source in "$install_tmp/assets/rule-sources"/*.json; do
@@ -88,7 +91,10 @@ done
 
 opkg install "packages/$LUCI_IPK" || die "opkg 无法安装 LuCI IPK；不会联网下载替代包。"
 
-mkdir -p /usr/local/bin "$state_dir/.runtime/mihomo"
+mkdir -p /usr/local/bin "$state_dir/.runtime/mihomo" "$(dirname "$state_dir/$pool_worker")"
+cp "$install_tmp/assets/$pool_worker" "$state_dir/$pool_worker.new.$$"
+chmod 755 "$state_dir/$pool_worker.new.$$"
+mv "$state_dir/$pool_worker.new.$$" "$state_dir/$pool_worker" || die "无法安装线路池组件。"
 cp "$install_tmp/stage/usr/local/bin/localclash" "/usr/local/bin/localclash.new.$$"
 chmod 755 "/usr/local/bin/localclash.new.$$"
 mv "/usr/local/bin/localclash.new.$$" "/usr/local/bin/localclash" || die "无法安装 localclash。"
