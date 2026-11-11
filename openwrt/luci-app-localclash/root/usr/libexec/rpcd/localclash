@@ -1365,25 +1365,26 @@ fetch_single_url() {
 		[ "$remaining" -ge "$timeout" ] || timeout="$remaining"
 	fi
 	rm -f "$stderr_file" "$output"
-	if command -v uclient-fetch >/dev/null 2>&1; then
+	if [ -n "${https_proxy:-}${HTTPS_PROXY:-}${http_proxy:-}${all_proxy:-}${ALL_PROXY:-}" ] && command -v curl >/dev/null 2>&1; then
+		# curl supports HTTPS downloads through the configured HTTP proxy.
+		downloader="curl"
+	elif command -v uclient-fetch >/dev/null 2>&1; then
 		downloader="uclient-fetch"
-		log_line "下载：开始 downloader=$downloader host=$host timeout=${timeout}s"
-		fetch_with_watchdog "$url" "$timeout" uclient-fetch -T "$timeout" -q -O "$output" "$url" 2>"$stderr_file"
-		rc=$?
 	elif command -v wget >/dev/null 2>&1; then
 		downloader="wget"
-		log_line "下载：开始 downloader=$downloader host=$host timeout=${timeout}s"
-		fetch_with_watchdog "$url" "$timeout" wget -T "$timeout" -q -O "$output" "$url" 2>"$stderr_file"
-		rc=$?
 	elif command -v curl >/dev/null 2>&1; then
 		downloader="curl"
-		log_line "下载：开始 downloader=$downloader host=$host timeout=${timeout}s"
-		fetch_with_watchdog "$url" "$timeout" curl --max-time "$timeout" -fsSL "$url" -o "$output" 2>"$stderr_file"
-		rc=$?
 	else
 		log_line "下载：失败 reason=downloader_missing host=$host"
 		return 1
 	fi
+	case "$downloader" in
+		curl) set -- curl --disable --max-time "$timeout" -fsSL "$url" -o "$output" ;;
+		*) set -- "$downloader" -T "$timeout" -q -O "$output" "$url" ;;
+	esac
+	log_line "下载：开始 downloader=$downloader host=$host timeout=${timeout}s"
+	fetch_with_watchdog "$url" "$timeout" "$@" 2>"$stderr_file"
+	rc=$?
 	if [ -s "$stderr_file" ]; then
 		while IFS= read -r line; do
 			log_line "下载器[$downloader]：$line"

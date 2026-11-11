@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+unset http_proxy https_proxy HTTPS_PROXY all_proxy ALL_PROXY
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 helper="${repo_root}/openwrt/luci-app-localclash/root/usr/libexec/rpcd/localclash"
@@ -109,6 +110,36 @@ fi
 unset MOCK_FETCH_MODE
 grep -q '下载：超时 https://example.invalid/release.json timeout=1s' "$LOG"
 grep -q '下载：失败 downloader=uclient-fetch host=example.invalid .* bytes=0 exit_code=124' "$LOG"
+
+cat > "${tmp_dir}/bin/curl" <<'EOF'
+#!/usr/bin/env sh
+[ "${HTTPS_PROXY:-}" = http://127.0.0.1:7894 ] || exit 64
+[ "$1 $2 $3 $4 $5 $6" = "--disable --max-time 2 -fsSL https://example.invalid/release.json -o" ] || exit 64
+[ "${MOCK_CURL_FAIL:-0}" = 0 ] || exit 28
+printf 'release payload\n' > "$7"
+EOF
+chmod +x "${tmp_dir}/bin/curl"
+(
+	export HTTPS_PROXY=http://127.0.0.1:7894
+	: > "$LOG"
+	FETCH_TIMEOUT=120
+	bounded_stage_deadline=102
+	now_epoch() { printf '100\n'; }
+	fetch_single_url "https://example.invalid/release.json" "$output"
+	grep -Fxq 'release payload' "$output"
+	grep -q '下载：成功 downloader=curl host=example.invalid .* bytes=16 exit_code=0' "$LOG"
+
+	export MOCK_CURL_FAIL=1
+	if fetch_single_url "https://example.invalid/release.json" "$output"; then
+		printf 'test-rpcd-download-logging: failed proxy download unexpectedly succeeded\n' >&2
+		exit 1
+	fi
+	grep -q '下载：失败 downloader=curl host=example.invalid .* bytes=0 exit_code=28' "$LOG"
+	if grep -q 'downloader=uclient-fetch' "$LOG"; then
+		printf 'test-rpcd-download-logging: configured proxy download used uclient-fetch\n' >&2
+		exit 1
+	fi
+)
 
 : > "$LOG"
 printf 'payload\n' > "${tmp_dir}/commit-source"
