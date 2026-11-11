@@ -320,6 +320,7 @@ function formatEpoch(value) {
 }
 
 function scheduleStatusText(result) {
+	var schedule = result && result.schedule;
 	var lastRun = result && result.last_run;
 	var runtime = result && result.runtime;
 	var lines = [];
@@ -331,8 +332,12 @@ function scheduleStatusText(result) {
 	else
 		lines.push(_('尚未执行订阅定时更新。'));
 
-	if (runtime && runtime.running)
-		lines.push(formatText(_('下次执行：%s'), formatEpoch(runtime.next_run_at)));
+	if (schedule && schedule.enabled) {
+		if (runtime && runtime.running && runtime.update_hour === schedule.update_hour)
+			lines.push(formatText(_('下次执行：%s'), formatEpoch(runtime.next_run_at)));
+		else
+			lines.push(_('暂未读取到下次执行时间。'));
+	}
 	return lines.join('\n');
 }
 
@@ -530,10 +535,13 @@ return view.extend({
 									return;
 								}
 								button.disabled = true;
-								callSubscriptionScheduleSet(scheduleEnabled.checked, updateHour).then(function() {
-									return callSubscriptionScheduleGet();
-								}).then(function(updated) {
-									scheduleStatus.textContent = scheduleStatusText(updated);
+								return callSubscriptionScheduleSet(scheduleEnabled.checked, updateHour).then(function(updated) {
+									if (!updated || updated.ok !== true)
+										throw new Error(updated && (updated.message || updated.code) || _('未知错误'));
+									scheduleStatus.textContent = [
+										updated.summary || _('订阅定时更新配置已保存。'),
+										scheduleStatusText(updated)
+									].join('\n');
 								}).catch(function(err) {
 									scheduleStatus.textContent = formatText(_('保存定时更新设置失败：%s'), err.message || String(err));
 								}).finally(function() {

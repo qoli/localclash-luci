@@ -4334,7 +4334,8 @@ subscription_schedule_json_file() {
 }
 
 subscription_schedule_get() {
-	local config last_run runtime runtime_pid
+	local config last_run runtime runtime_pid saved_fields
+	saved_fields="${1:-}"
 	config="$(subscription_schedule_config)" || {
 		printf '%s\n' "$config"
 		return 1
@@ -4354,7 +4355,7 @@ subscription_schedule_get() {
 			*) kill -0 "$runtime_pid" 2>/dev/null || { rm -f "$SUBSCRIPTION_SCHEDULE_RUNTIME"; runtime=null; } ;;
 		esac
 	fi
-	printf '{"ok":true,"schedule":%s,"last_run":%s,"runtime":%s}\n' "$config" "$last_run" "$runtime"
+	ok "${saved_fields}\"schedule\":$config,\"last_run\":$last_run,\"runtime\":$runtime"
 }
 
 subscription_schedule_write_file() {
@@ -4705,7 +4706,7 @@ subscription_schedule_set() {
 		fi
 		return 1
 	fi
-	printf '{"ok":true,"changed":true,"schedule":{"enabled":%s,"update_hour":%s},"summary":"订阅定时更新配置已保存。"}\n' "$enabled" "$update_hour"
+	subscription_schedule_get '"changed":true,"summary":"订阅定时更新配置已保存。",'
 }
 
 start_subscription_schedule_run() {

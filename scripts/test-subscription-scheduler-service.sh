@@ -84,13 +84,22 @@ awk '/^method="\$\{1:-\}"/ { exit } { print }' "$helper" > "${tmp_dir}/functions
 
 UCI_BIN="${tmp_dir}/bin/uci"
 SUBSCRIPTION_SCHEDULER_SERVICE="${tmp_dir}/scheduler-service"
+SUBSCRIPTION_SCHEDULE_STATUS="${tmp_dir}/schedule-status.json"
 SUBSCRIPTION_SCHEDULE_RUNTIME="${tmp_dir}/schedule-runtime.json"
 service_status() {
 	printf '{"ok":true,"mcp":{"healthy":true}}\n'
 }
 
+printf '{"version":1,"outcome":"reloaded","completed_at":123}\n' > "$SUBSCRIPTION_SCHEDULE_STATUS"
+printf '{"version":1,"running":true,"pid":%s,"next_run_at":456}\n' "$$" > "$SUBSCRIPTION_SCHEDULE_RUNTIME"
 result="$(printf '{"enabled":true,"update_hour":23}\n' | subscription_schedule_set)"
-printf '%s\n' "$result" | grep -q '"enabled":true' || { printf 'enable result mismatch: %s\n' "$result" >&2; exit 1; }
+python3 -c 'import json,sys
+result = json.load(sys.stdin)
+assert result["ok"] and result["changed"]
+assert result["schedule"] == {"enabled": True, "update_hour": 23}
+assert result["last_run"]["outcome"] == "reloaded"
+assert result["runtime"]["next_run_at"] == 456
+' <<< "$result"
 [ "$(sed -n '1p' "$MOCK_UCI_STATE")" = 1 ] || { printf 'enabled UCI state not saved\n' >&2; exit 1; }
 [ "$(sed -n '2p' "$MOCK_UCI_STATE")" = 23 ] || { printf 'update hour UCI state not saved\n' >&2; exit 1; }
 grep -qx enable "$MOCK_SERVICE_TRACE" || { printf 'scheduler service was not enabled\n' >&2; exit 1; }
@@ -98,7 +107,13 @@ grep -qx restart "$MOCK_SERVICE_TRACE" || { printf 'scheduler service was not re
 
 : > "$MOCK_SERVICE_TRACE"
 result="$(printf '{"enabled":false,"update_hour":7}\n' | subscription_schedule_set)"
-printf '%s\n' "$result" | grep -q '"enabled":false' || { printf 'disable result mismatch: %s\n' "$result" >&2; exit 1; }
+python3 -c 'import json,sys
+result = json.load(sys.stdin)
+assert result["ok"] and result["changed"]
+assert result["schedule"] == {"enabled": False, "update_hour": 7}
+assert result["last_run"]["outcome"] == "reloaded"
+assert result["runtime"] is None
+' <<< "$result"
 grep -qx stop "$MOCK_SERVICE_TRACE" || { printf 'scheduler service was not stopped\n' >&2; exit 1; }
 grep -qx disable "$MOCK_SERVICE_TRACE" || { printf 'scheduler service was not disabled\n' >&2; exit 1; }
 

@@ -34,4 +34,61 @@ assert(source.includes('if (task && task.cancellable === false)'));
 assert(source.includes("modal.cancelButton.style.display = 'none'"));
 assert(!source.includes('g204'), 'removed g204 controls must not remain in the subscription UI');
 
-process.stdout.write('subscription UI tests passed\n');
+async function testScheduleSave() {
+	const calls = [];
+	const byID = new Map();
+	let save;
+	let response;
+	const E = (tag, attrs, children) => {
+		const node = { attrs, children, id: attrs.id, textContent: '', disabled: false };
+		if (node.id)
+			byID.set(node.id, node);
+		if (tag === 'button' && children[0] === '保存定时设置')
+			save = node;
+		return node;
+	};
+	const rpc = {
+		declare: spec => async (...args) => {
+			calls.push({ method: spec.method, args });
+			return response;
+		}
+	};
+	const view = new Function('view', 'rpc', 'localclashStyle', 'E', '_', 'window', source)(
+		{ extend: value => value }, rpc, { stylesheet: () => ({}) }, E, value => value, { setTimeout() {} }
+	);
+	view.render([{ ok: true, schedule: { enabled: false, update_hour: 7 } }, {}, {}]);
+	byID.get('localclash-subscription-schedule-enabled').checked = true;
+	byID.get('localclash-subscription-schedule-hour').value = '23';
+	const status = byID.get('localclash-subscription-schedule-status');
+	const click = () => save.attrs.click({ currentTarget: save });
+
+	response = {
+		ok: true,
+		schedule: { enabled: true, update_hour: 23 },
+		last_run: { outcome: 'reloaded', completed_at: 123 },
+		runtime: { running: true, update_hour: 7, next_run_at: 456 }
+	};
+	await click();
+	assert.deepStrictEqual(calls, [{ method: 'subscription_schedule_set', args: [true, 23] }]);
+	assert.match(status.textContent, /配置已保存/);
+	assert.match(status.textContent, /reloaded/);
+	assert.doesNotMatch(status.textContent, /下次执行：/, 'a previous scheduler instance must not show its old time');
+	assert.strictEqual(save.disabled, false);
+
+	response.runtime.update_hour = 23;
+	await click();
+	assert.match(status.textContent, /下次执行：/);
+
+	response = { ok: false, code: 'mcp_service_unhealthy', message: 'localClash MCP 服务必须健康。' };
+	await click();
+	assert.match(status.textContent, /保存定时更新设置失败.*MCP 服务必须健康/);
+	assert.strictEqual(calls.length, 3);
+	assert.strictEqual(save.disabled, false);
+}
+
+testScheduleSave().then(function() {
+	process.stdout.write('subscription UI tests passed\n');
+}).catch(function(error) {
+	console.error(error);
+	process.exitCode = 1;
+});
