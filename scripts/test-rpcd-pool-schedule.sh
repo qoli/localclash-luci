@@ -9,6 +9,7 @@ trap 'rm -rf "$test_dir"' EXIT
 export test_dir
 awk '/^method="\$\{1:-\}"/ { exit } { print }' "$helper" > "$test_dir/helper.sh"
 . "$test_dir/helper.sh"
+LOG="$test_dir/log"
 
 mkdir "$test_dir/workspace"
 STATE_DIR="$(cd "$test_dir/workspace" && pwd -P)"
@@ -102,7 +103,33 @@ grep -qx pool_scheduler "$test_dir/instance"
 printf '%s\n' command "$worker" schedule --runtime "$STATE_DIR/.runtime/mihomo" --period daily-08 | cmp - "$test_dir/command"
 grep -qx 'TZ=Asia/Shanghai' "$test_dir/env"
 
+call_core() {
+	[ "$1:$2" = config:pools ] || return 1
+	local enabled=true profile="$STATE_DIR/localclash-runtime.json"
+	if [ "$3" = --enabled ]; then
+		enabled="$4"
+		jq -n --argjson enabled "$enabled" '{pools_disabled: ($enabled | not)}' > "$profile"
+	elif [ -f "$profile" ]; then
+		enabled="$(jq -r '.pools_disabled | not' "$profile")"
+	fi
+	jq -n --argjson enabled "$enabled" '{ok:true,status:{enabled:$enabled}}'
+}
+pool_capability_get | jq -e '.status.enabled == true' >/dev/null
+apply_pool_capability false | jq -e '.status.enabled == false' >/dev/null
+[ ! -f "$test_dir/enabled" ] && [ ! -f "$test_dir/running" ]
+pool_schedule_get | jq -e '.schedule == {"enabled":true,"period":"daily-08"} and .next_run_at == ""' >/dev/null
+rm "$test_dir/instance"
+start_service
+[ ! -f "$test_dir/instance" ]
+printf '{"enabled":true,"period":"30m"}\n' | pool_schedule_set | jq -e '.schedule.period == "30m"' >/dev/null
+[ ! -f "$test_dir/running" ]
+apply_pool_capability true | jq -e '.status.enabled == true' >/dev/null
+[ -f "$test_dir/enabled" ] && [ -f "$test_dir/running" ]
+pool_schedule_get | jq -e '.schedule == {"enabled":true,"period":"30m"}' >/dev/null
+
 result="$(printf '{"enabled":false,"period":"15m"}\n' | pool_schedule_set)"
 printf '%s\n' "$result" | jq -e '.schedule == {"enabled":false,"period":"15m"}' >/dev/null
+[ ! -f "$test_dir/enabled" ] && [ ! -f "$test_dir/running" ]
+apply_pool_capability true | jq -e '.status.enabled == true' >/dev/null
 [ ! -f "$test_dir/enabled" ] && [ ! -f "$test_dir/running" ]
 printf 'pool scheduler service tests passed\n'

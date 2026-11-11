@@ -22,6 +22,11 @@ assert(source.includes('updateHour < 0 || updateHour > 23'));
 assert(source.includes("_('每天更新时间必须是 00:00 到 23:00 的整点。')"));
 assert(source.includes("method: 'pool_schedule_get'"));
 assert(source.includes("method: 'pool_schedule_set'"));
+assert(source.includes("method: 'pool_capability_get'"));
+assert(source.includes("method: 'pool_capability_set_async'"));
+assert(source.includes('return callPoolCapabilitySetAsync(enabled.checked);'));
+assert(source.includes('callPoolScheduleSet(enabled.checked, period.value)'));
+assert(source.includes("id': 'localclash-pool-capability-enabled'"));
 assert(source.includes("params: [ 'enabled', 'period' ]"));
 for (const period of [ '5m', '15m', '30m', '1h', 'daily-08' ])
 	assert(source.includes("[ '" + period + "', _("));

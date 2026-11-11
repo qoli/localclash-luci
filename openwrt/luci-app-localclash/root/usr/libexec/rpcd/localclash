@@ -984,7 +984,7 @@ write_task_running() {
 	summary="$1"
 	task="${2:-task}"
 	extra=""
-	if [ "$task" = runtime_restart ] || [ "$task" = subscription_schedule ]; then
+	if [ "$task" = runtime_restart ] || [ "$task" = subscription_schedule ] || [ "$task" = pool_capability ]; then
 		extra=',"cancellable":false,"task_id":"'"$(json_escape "$3")"'"'
 	fi
 	printf '{"ok":true,"running":true,"done":false,"started_at":%s,"task":"%s","summary":"%s"%s}\n' "$(now_epoch)" "$(json_escape "$task")" "$(json_escape "$summary")" "$extra" > "${TASK_STATUS}.tmp.$$" && mv "${TASK_STATUS}.tmp.$$" "$TASK_STATUS"
@@ -1238,6 +1238,8 @@ task_cancel() {
 				fail "task_not_cancellable" "订阅已进入运行时重启和网络接管验证阶段，不能中途取消；关闭页面不会停止任务。"
 			elif [ "$task" = subscription_schedule ]; then
 				fail "task_not_cancellable" "订阅更新和热加载任务不能中途取消；关闭页面不会停止任务。"
+			elif [ "$task" = pool_capability ]; then
+				fail "task_not_cancellable" "线路池设置正在应用。关闭页面后任务会继续执行。"
 			else
 				fail "task_not_cancellable" "重启正在恢复运行时和网络接管，不能中途取消；关闭页面不会停止任务。"
 			fi
@@ -4035,6 +4037,106 @@ pool_schedule_config_value() {
 	"$UCI_BIN" -q get "localclash.pool_schedule.$1" 2>/dev/null || printf '%s\n' "$2"
 }
 
+pool_capability_disabled() {
+	[ "$(jsonfilter -i "$STATE_DIR/localclash-runtime.json" -e '@.pools_disabled' 2>/dev/null)" = true ]
+}
+
+pool_capability_get() {
+	local result enabled
+	if result="$(call_core config pools --json)"; then
+		enabled="$(jsonfilter -s "$result" -e '@.status.enabled' 2>/dev/null)"
+		case "$enabled" in
+			true|false) printf '%s\n' "$result"; return 0 ;;
+		esac
+	fi
+	if [ "$(jsonfilter -s "$result" -e '@.ok' 2>/dev/null)" = false ]; then
+		printf '%s\n' "$result"
+		return 1
+	fi
+	fail "pool_capability_unavailable" "更新 localClash 核心后可设置线路池开关。"
+	return 1
+}
+
+start_pool_capability_set() {
+	local payload enabled task_id bg_pid
+	payload="$(strip_ubus_rpc_session "$(cat)")"
+	enabled="$(jsonfilter -s "$payload" -e '@.enabled' 2>/dev/null)"
+	case "$enabled" in
+		true|false) ;;
+		*) fail "pool_capability_enabled_invalid" "请选择是否启用线路池。"; return 1 ;;
+	esac
+	clear_stale_lock
+	if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+		fail "task_locked" "另一个 localClash 操作正在运行，请稍后再试。"
+		return 1
+	fi
+	printf '%s\n' "$$" > "$LOCK_DIR/pid"
+	if task_pid_alive; then
+		rm -rf "$LOCK_DIR"
+		fail "task_locked" "另一个 localClash 后台任务正在收尾，请稍后再试。"
+		return 1
+	fi
+	task_id="$(now_epoch)-$$"
+	rm -f "$TASK_RESULT" "$TASK_INPUT" "$TASK_PID"
+	: > "$LOG"
+	if ! write_task_running "正在应用线路池设置。" pool_capability "$task_id"; then
+		rm -rf "$LOCK_DIR"
+		fail "task_status_write_failed" "无法记录线路池任务。"
+		return 1
+	fi
+	"$HELPER_SELF" call pool_capability_set_run "$task_id" "$enabled" </dev/null >>"$LOG" 2>&1 &
+	bg_pid="$!"
+	write_task_pid "$bg_pid"
+	printf '%s\n' "$bg_pid" > "$LOCK_DIR/pid"
+	ok '"started":true,"running":true,"task":"pool_capability","task_id":"'"$task_id"'","cancellable":false'
+}
+
+apply_pool_capability() {
+	local result enabled
+	enabled="$1"
+	if ! result="$(call_core config pools --enabled "$enabled" --json)"; then
+		if [ "$(jsonfilter -s "$result" -e '@.ok' 2>/dev/null)" = false ]; then
+			printf '%s\n' "$result"
+		else
+			fail "pool_capability_apply_failed" "应用线路池设置失败，请检查任务日志。"
+		fi
+		return 1
+	fi
+	if [ "$(jsonfilter -s "$result" -e '@.status.enabled' 2>/dev/null)" != "$enabled" ]; then
+		fail "pool_capability_readback_failed" "无法确认线路池设置已应用。"
+		return 1
+	fi
+	if [ -x "$POOL_SCHEDULER_SERVICE" ] &&
+		! pool_schedule_service_apply "$(pool_schedule_config_value enabled 0)" >>"$LOG" 2>&1; then
+		ok '"summary":"线路池设置已应用，定时更新服务未能同步。","schedule_applied":false,"pool_config":'"$result"
+		return 0
+	fi
+	printf '%s\n' "$result"
+}
+
+pool_capability_set_run() {
+	local task_id enabled waited result rc
+	task_id="$1"
+	enabled="$2"
+	waited=0
+	while [ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" != "$$" ]; do
+		[ "$waited" -lt 5 ] || return 1
+		waited=$((waited + 1))
+		sleep 1
+	done
+	trap '[ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" != "$$" ] || rm -rf "$LOCK_DIR"' EXIT
+	trap 'exit 143' INT TERM
+	[ -n "$task_id" ] && [ "$(jsonfilter -i "$TASK_STATUS" -e '@.task_id' 2>/dev/null)" = "$task_id" ] || return 1
+	case "$enabled" in true|false) ;; *) return 1 ;; esac
+	log_line "线路池：正在应用能力开关"
+	result="$(apply_pool_capability "$enabled")"
+	rc=$?
+	printf '%s\n' "$result" > "$TASK_RESULT"
+	write_task_done "$rc" "$result"
+	rm -f "$TASK_PID"
+	return "$rc"
+}
+
 pool_schedule_period_valid() {
 	case "$1" in 5m|15m|30m|1h|daily-08) return 0 ;; esac
 	return 1
@@ -4073,7 +4175,7 @@ pool_schedule_get() {
 			fi
 		fi
 	fi
-	if [ "$enabled" != true ] || ! "$POOL_SCHEDULER_SERVICE" running >/dev/null 2>&1; then
+	if [ "$enabled" != true ] || pool_capability_disabled || ! "$POOL_SCHEDULER_SERVICE" running >/dev/null 2>&1; then
 		next_run=
 	fi
 	printf '{"ok":true,"available":%s,"schedule":{"enabled":%s,"period":"%s"},"next_run_at":"%s","last_run_at":"%s","outcome":"%s"}\n' \
@@ -4081,7 +4183,7 @@ pool_schedule_get() {
 }
 
 pool_schedule_service_apply() {
-	if [ "$1" = 1 ]; then
+	if [ "$1" = 1 ] && ! pool_capability_disabled; then
 		LOCALCLASH_STATE_DIR="$STATE_DIR" "$POOL_SCHEDULER_SERVICE" enable &&
 			LOCALCLASH_STATE_DIR="$STATE_DIR" "$POOL_SCHEDULER_SERVICE" restart
 	else
@@ -4110,7 +4212,7 @@ pool_schedule_set() {
 		fail "pool_scheduler_service_missing" "线路池定时更新服务未安装。"
 		return 1
 	}
-	if [ "$enabled" = 1 ]; then
+	if [ "$enabled" = 1 ] && ! pool_capability_disabled; then
 		if ! arch="$(router_arch)" || [ ! -x "$STATE_DIR/bin/linux-$arch/localclash-pools" ]; then
 			fail "pool_worker_missing" "请先更新 localClash 核心和基础资产，再启用线路池定时更新。"
 			return 1
@@ -5867,6 +5969,8 @@ case "$method" in
 	  "subscription_schedule_get": {},
 	  "subscription_schedule_set": { "enabled": false, "update_hour": 0 },
 	  "subscription_schedule_run_now": {},
+	  "pool_capability_get": {},
+	  "pool_capability_set_async": { "enabled": false },
 	  "pool_schedule_get": {},
 	  "pool_schedule_set": { "enabled": false, "period": "" },
 	  "custom_sites_get": {},
@@ -5923,6 +6027,9 @@ JSON
 	subscription_schedule_get) subscription_schedule_get ;;
 	subscription_schedule_set) with_lock subscription_schedule_set ;;
 	subscription_schedule_run_now) start_subscription_schedule_run ;;
+	pool_capability_get) pool_capability_get ;;
+	pool_capability_set_async) start_pool_capability_set ;;
+	pool_capability_set_run) pool_capability_set_run "${3:-}" "${4:-}" ;;
 	pool_schedule_get) pool_schedule_get ;;
 	pool_schedule_set) with_lock pool_schedule_set ;;
 	subscription_schedule_run_task) subscription_schedule_run_task "${3:-}" ;;

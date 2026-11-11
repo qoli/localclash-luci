@@ -19,6 +19,7 @@ start_service() {
 		*) echo "localClash 线路池更新服务不支持此架构" >&2; return 1 ;;
 	esac
 	state="$(cd "${LOCALCLASH_STATE_DIR:-/root/localclash}" && pwd -P)" || return 1
+	[ "$(jsonfilter -i "$state/localclash-runtime.json" -e '@.pools_disabled' 2>/dev/null)" != true ] || return 0
 	worker="$state/bin/linux-$arch/localclash-pools"
 	[ -x "$worker" ] || {
 		echo "localClash 线路池更新组件缺失" >&2

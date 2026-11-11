@@ -36,6 +36,19 @@ var callSubscriptionScheduleRunNow = rpc.declare({
 	expect: { '': {} }
 });
 
+var callPoolCapabilityGet = rpc.declare({
+	object: 'localclash',
+	method: 'pool_capability_get',
+	expect: { '': {} }
+});
+
+var callPoolCapabilitySetAsync = rpc.declare({
+	object: 'localclash',
+	method: 'pool_capability_set_async',
+	params: [ 'enabled' ],
+	expect: { '': {} }
+});
+
 var callPoolScheduleGet = rpc.declare({
 	object: 'localclash',
 	method: 'pool_schedule_get',
@@ -357,25 +370,52 @@ function scheduleStatusText(result) {
 	return lines.join('\n');
 }
 
-function poolScheduleStatusText(result) {
+function renderPoolCapability(result) {
+	var available = result && result.ok === true && result.status && typeof result.status.enabled === 'boolean';
+	var enabled = E('input', {
+		'id': 'localclash-pool-capability-enabled',
+		'type': 'checkbox',
+		'checked': available && result.status.enabled ? '' : null,
+		'disabled': available ? null : ''
+	});
+	var save = liveTaskButton(_('应用线路池设置'), function() {
+		return callPoolCapabilitySetAsync(enabled.checked);
+	}, 'cbi-button-apply');
+	save.disabled = !available;
+
+	return E('div', { 'class': 'cbi-section localclash-section' }, [
+		E('h3', {}, [ _('线路池') ]),
+		E('p', {}, [ _('启用后，订阅刷新时为「⚡ 自动选择」和「ChatGPT-available」准备合格线路。关闭后，「自动选择」使用全部可选订阅线路，服务资格专用组暂停。') ]),
+		E('label', { 'class': 'localclash-schedule-enabled', 'for': enabled.id }, [
+			enabled, E('span', {}, [ _('启用线路池') ])
+		]),
+		available ? null : E('p', {}, [ result && result.message || _('更新 localClash 核心后可设置线路池开关。') ]),
+		actionRow([ save ])
+	].filter(Boolean));
+}
+
+function poolScheduleStatusText(result, capability) {
 	if (!result || result.ok !== true)
 		return result && result.message || _('暂时无法读取线路池定时更新设置。');
 
 	var lines = [];
 	if (!result.available)
 		lines.push(_('更新 localClash 核心和基础资产后即可启用。'));
+	var paused = capability && capability.ok === true && capability.status && capability.status.enabled === false;
+	if (paused && result.schedule.enabled)
+		lines.push(_('定时更新已暂停，重新启用线路池后恢复。'));
 	if (result.last_run_at) {
 		lines.push(formatText(_('上次执行于 %s'), result.last_run_at));
 		lines.push(result.outcome === 'error' ? _('上次更新未全部完成，请查看路由器系统日志。') : _('上次更新成功。'));
 	}
 	if (result.next_run_at)
 		lines.push(formatText(_('预计下次于 %s 执行'), result.next_run_at));
-	else if (result.schedule.enabled && result.available)
+	else if (result.schedule.enabled && result.available && !paused)
 		lines.push(_('当前未读取到下次执行时间。'));
 	return lines.join('\n');
 }
 
-function renderPoolSchedule(result) {
+function renderPoolSchedule(result, capability) {
 	var schedule = result && result.schedule || {};
 	var enabled = E('input', {
 		'id': 'localclash-pool-schedule-enabled',
@@ -397,11 +437,11 @@ function renderPoolSchedule(result) {
 				'selected': (schedule.period || '15m') === option[0] ? '' : null
 			}, [ option[1] ]);
 		}));
-	var status = E('pre', { 'class': 'localclash-schedule-status', 'aria-live': 'polite' }, [ poolScheduleStatusText(result) ]);
+	var status = E('pre', { 'class': 'localclash-schedule-status', 'aria-live': 'polite' }, [ poolScheduleStatusText(result, capability) ]);
 
 	return E('div', { 'class': 'cbi-section localclash-section' }, [
 		E('h3', {}, [ _('线路池定时更新') ]),
-		E('p', {}, [ _('定时检测并更新「⚡ 自动选择」和「ChatGPT-available」的线路。首次应用订阅时会建立线路池。每天 08:00 按路由器本地时间执行。') ]),
+		E('p', {}, [ _('线路池启用时按所选周期复检。每天 08:00 按路由器本地时间执行。') ]),
 		E('div', { 'class': 'localclash-schedule-grid' }, [
 			E('label', { 'class': 'localclash-schedule-enabled', 'for': enabled.id }, [
 				enabled, E('span', {}, [ _('启用线路池定时更新') ])
@@ -424,7 +464,7 @@ function renderPoolSchedule(result) {
 						enabled.checked = updated.schedule.enabled;
 						period.value = updated.schedule.period;
 						enabled.disabled = !updated.available && !updated.schedule.enabled;
-						status.textContent = [ _('线路池定时设置已保存。'), poolScheduleStatusText(updated) ].filter(Boolean).join('\n');
+						status.textContent = [ _('线路池定时设置已保存。'), poolScheduleStatusText(updated, capability) ].filter(Boolean).join('\n');
 					}).catch(function(err) {
 						status.textContent = formatText(_('保存线路池定时设置失败（%s）'), err.message || String(err));
 					}).finally(function() {
@@ -440,7 +480,8 @@ return view.extend({
 	load: function() {
 		return Promise.all([
 			callSubscriptionScheduleGet(),
-			callPoolScheduleGet().catch(function(err) { return { ok: false, message: err.message }; })
+			callPoolScheduleGet().catch(function(err) { return { ok: false, message: err.message }; }),
+			callPoolCapabilityGet().catch(function(err) { return { ok: false, message: err.message }; })
 		]);
 	},
 
@@ -539,7 +580,8 @@ return view.extend({
 						})
 					])
 				]),
-				renderPoolSchedule(data[1])
+				renderPoolCapability(data[2]),
+				renderPoolSchedule(data[1], data[2])
 			]);
 	}
 });
