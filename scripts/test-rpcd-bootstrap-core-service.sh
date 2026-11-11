@@ -19,7 +19,7 @@ while [ "$#" -gt 0 ]; do
 done
 case "$expr" in
 	*.url) printf 'https://example.invalid/localclash\n' ;;
-	*.sha256) printf 'fixture-sha\n' ;;
+	*.sha256) printf '%s\n' "${TEST_EXPECTED_CORE_SHA:-fixture-sha}" ;;
 	@.version) printf 'v-test\n' ;;
 	*) exit 1 ;;
 esac
@@ -101,5 +101,18 @@ set -e
 printf '%s\n' "$result" | grep -q '"code":"assets_failed"' || fail_test "base asset failure was not preserved: $result"
 printf 'service\nassets\n' > "${tmp_dir}/expected-order"
 diff -u "${tmp_dir}/expected-order" "${tmp_dir}/order" || fail_test "service was not restarted before a base asset failure"
+
+export TEST_EXPECTED_CORE_SHA="$(sha256sum "$CORE" | cut -d ' ' -f 1)"
+fetch_url_verified() {
+	fail_test "a matching installed binary triggered a download"
+}
+install_base_assets() {
+	[ -f "$1" ] || fail_test "the verified release manifest was not handed to the asset step"
+	printf 'assets\n' >> "${tmp_dir}/order"
+}
+: > "${tmp_dir}/order"
+result="$(bootstrap_core)"
+printf '%s\n' "$result" | grep -q '"changed":false' || fail_test "matching core was not reported as current"
+diff -u "${tmp_dir}/expected-order" "${tmp_dir}/order" || fail_test "matching core skipped service or asset verification"
 
 printf 'rpcd bootstrap core service tests passed\n'

@@ -4768,7 +4768,7 @@ reset() {
 }
 
 bootstrap_core() {
-	local arch tmpdir manifest binary asset_url asset_sha asset_version tmp_core service_result
+	local arch tmpdir manifest binary asset_url asset_sha asset_version tmp_core service_result changed summary
 	log_line "核心初始化：开始"
 	if ! command -v jsonfilter >/dev/null 2>&1; then
 		log_line "核心初始化：缺少 jsonfilter"
@@ -4802,24 +4802,31 @@ bootstrap_core() {
 		fail "manifest_asset_missing" "Release 清单中没有匹配此路由器的 Linux 二进制文件。"
 		return 1
 	fi
-	log_line "核心初始化：正在下载 localClash 核心 ${asset_version}（${arch}）"
-	if ! fetch_url_verified "$asset_url" "$binary" "$asset_sha"; then
-		rm -rf "$tmpdir"
-		log_line "核心初始化：核心下载失败"
-		fail "core_download_failed" "无法下载 localClash 核心二进制文件。"
-		return 1
-	fi
-	log_line "核心初始化：sha256 校验通过"
-	chmod 755 "$binary"
-	mkdir -p "$(dirname "$CORE")"
-	tmp_core="$CORE.tmp.$$"
-	log_line "核心初始化：正在安装 localClash 核心"
-	if ! cp "$binary" "$tmp_core" || ! chmod 755 "$tmp_core" || ! mv "$tmp_core" "$CORE"; then
-		rm -f "$tmp_core"
-		rm -rf "$tmpdir"
-		log_line "核心初始化：核心安装失败"
-		fail "core_install_failed" "无法安装 localClash 核心二进制文件。"
-		return 1
+	if core_installed && [ "$(sha256sum "$CORE" 2>/dev/null | cut -d ' ' -f 1)" = "$asset_sha" ]; then
+		changed=false
+		summary="localClash 核心已是当前版本。"
+		log_line "核心初始化：已安装的核心与 Release SHA-256 一致"
+	else
+		changed=true
+		summary="localClash 核心已安装。"
+		log_line "核心初始化：正在下载 localClash 核心 ${asset_version}（${arch}）"
+		if ! fetch_url_verified "$asset_url" "$binary" "$asset_sha"; then
+			rm -rf "$tmpdir"
+			log_line "核心初始化：核心下载失败"
+			fail "core_download_failed" "无法下载 localClash 核心二进制文件。"
+			return 1
+		fi
+		log_line "核心初始化：sha256 校验通过"
+		mkdir -p "$(dirname "$CORE")"
+		tmp_core="$CORE.tmp.$$"
+		log_line "核心初始化：正在安装 localClash 核心"
+		if ! cp "$binary" "$tmp_core" || ! chmod 755 "$tmp_core" || ! mv "$tmp_core" "$CORE"; then
+			rm -f "$tmp_core"
+			rm -rf "$tmpdir"
+			log_line "核心初始化：核心安装失败"
+			fail "core_install_failed" "无法安装 localClash 核心二进制文件。"
+			return 1
+		fi
 	fi
 	service_result="$(service_start)" || {
 		rm -rf "$tmpdir"
@@ -4836,12 +4843,12 @@ bootstrap_core() {
 		return 1
 	fi
 	rm -rf "$tmpdir"
-	log_line "已安装 localClash 核心 ${asset_version}（${arch}）"
-	ok "\"changed\":true,\"summary\":\"localClash 核心已安装。\",\"core\":{\"installed\":true,\"path\":\"$CORE\",\"version\":\"$(json_escape "$asset_version")\",\"arch\":\"$arch\"}"
+	log_line "$summary ${asset_version}（${arch}）"
+	ok "\"changed\":$changed,\"summary\":\"$summary\",\"core\":{\"installed\":true,\"path\":\"$CORE\",\"version\":\"$(json_escape "$asset_version")\",\"arch\":\"$arch\"}"
 }
 
 install_base_assets() {
-	local output
+	local output assets_changed
 	output="/tmp/localclash-base-assets.$$.json"
 	if ! core_installed; then
 		fail "bootstrap_core_missing" "localClash 核心尚未安装，无法初始化基础文件。"
@@ -4849,12 +4856,13 @@ install_base_assets() {
 	fi
 	mkdir -p "$STATE_DIR"
 	log_line "基础文件初始化：交由 localClash 核心安装基础文件"
-	if ! call_core component update assets --json > "$output"; then
+	if ! LOCALCLASH_RELEASE_MANIFEST_FILE="${1:-}" call_core component update assets --json > "$output"; then
 		log_line "基础文件初始化：核心安装基础文件失败"
 		cat "$output"
 		rm -f "$output"
 		return 1
 	fi
+	assets_changed="$(jsonfilter -i "$output" -e '@.changed' 2>/dev/null || true)"
 	if [ -x "$POOL_SCHEDULER_SERVICE" ] && [ "$(pool_schedule_config_value enabled 0)" = 1 ]; then
 		if ! pool_schedule_service_apply 1 >/dev/null 2>&1; then
 			rm -f "$output"
@@ -4862,7 +4870,11 @@ install_base_assets() {
 			return 1
 		fi
 	fi
-	log_line "基础文件初始化：已由 localClash 核心安装"
+	if [ "$assets_changed" = false ]; then
+		log_line "基础文件初始化：已安装文件与 Release 一致"
+	else
+		log_line "基础文件初始化：已由 localClash 核心安装"
+	fi
 	rm -f "$output"
 	return 0
 }
