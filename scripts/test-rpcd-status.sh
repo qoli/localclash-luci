@@ -25,39 +25,48 @@ fail_test() {
 }
 
 jsonfilter() {
+	printf '%s\n' call >> "${tmp_dir}/status-jsonfilter-calls"
 	python3 - "$@" <<'PY'
 import json
+import shlex
 import sys
 
 args = iter(sys.argv[1:])
-value, expression = None, ""
+document, expressions = None, []
 for arg in args:
     if arg == "-i":
         with open(next(args), encoding="utf-8") as source:
-            value = json.load(source)
+            document = json.load(source)
     elif arg == "-s":
-        value = json.loads(next(args))
+        document = json.loads(next(args))
     elif arg == "-e":
-        expression = next(args)
+        expressions.append(next(args))
 
-for field in expression.removeprefix("@.").split("."):
-    wildcard = field.endswith("[*]")
-    if wildcard:
-        field = field[:-3]
-    if not isinstance(value, dict) or field not in value:
-        sys.exit(0)
-    value = value[field]
-    if wildcard:
-        if not isinstance(value, list):
-            sys.exit(0)
-        for item in value:
-            print(item)
-        sys.exit(0)
+def matches(expression):
+    value = document
+    for field in expression.removeprefix("@.").split("."):
+        wildcard = field.endswith("[*]")
+        field = field[:-3] if wildcard else field
+        if not isinstance(value, dict) or field not in value:
+            return []
+        value = value[field]
+        if wildcard:
+            return value if isinstance(value, list) else []
+    return [] if value is None else [value]
 
-if isinstance(value, bool):
-    print("true" if value else "false")
-elif value is not None:
-    print(value)
+rc = 0
+for expression in expressions:
+    name, sep, selector = expression.partition("=")
+    values = matches(selector if sep else name)
+    if not values:
+        rc = 1
+    elif sep:
+        serialized = r"\ ".join(shlex.quote(str(int(v) if isinstance(v, bool) else v)) for v in values)
+        print(f"export {name}={serialized}; ", end="")
+    else:
+        for value in values:
+            print(json.dumps(value) if isinstance(value, bool) else value)
+sys.exit(rc)
 PY
 }
 
@@ -68,9 +77,11 @@ core_installed() {
 call_core_product_status() {
 	printf '%s\n' call >> "${tmp_dir}/core-status-calls"
 	case "$MOCK_CORE_MODE" in
-		success)
+		success|numeric_boolean)
+			local running=true
+			if [ "$MOCK_CORE_MODE" = numeric_boolean ]; then running=1; fi
 			cat <<JSON
-{"ok":true,"status":{"components":{"base_assets":{"installed":true,"path":"${STATE_DIR}","missing":[],"default_template":"${STATE_DIR}/policy-templates/localclash-default.json","rule_source_dir":"${STATE_DIR}/rule-sources","default_patch_count":12,"default_patches_installed":true},"mihomo":{"installed":true},"dashboard":{"installed":true}},"config":{"runtime_profile":{"path":"${STATE_DIR}/localclash-runtime.json","exists":true,"mode":"router","core":"smart","core_path":"bin/linux-arm64/lc-mihomo-smart","runtime_source":"file","user_profile_path":"${STATE_DIR}/localclash-user.json","user_profile_exists":false}},"subscription":{"configured":true,"merged":{"exists":true}},"runtime":{"running":true}}}
+{"ok":true,"status":{"components":{"base_assets":{"installed":true,"path":"${STATE_DIR}","missing":["cache","provider with spaces"],"default_template":"${STATE_DIR}/policy-templates/localclash-default.json","rule_source_dir":"${STATE_DIR}/owner's rules","default_patch_count":12,"default_patches_installed":true},"mihomo":{"installed":true},"dashboard":{"installed":true}},"config":{"runtime_profile":{"path":"${STATE_DIR}/localclash-runtime.json","exists":true,"mode":"router","core":"smart","core_path":"bin/linux-arm64/lc-mihomo-smart","runtime_source":"file","user_profile_path":"${STATE_DIR}/localclash-user.json","user_profile_exists":false}},"subscription":{"configured":true,"merged":{"exists":true}},"runtime":{"running":$running}}}
 JSON
 			;;
 		crash)
@@ -108,6 +119,7 @@ base_assets_body() {
 }
 
 : > "${tmp_dir}/core-status-calls"
+: > "${tmp_dir}/status-jsonfilter-calls"
 result="$(status)" || fail_test "valid Core status returned failure: ${result}"
 python3 -c 'import json,sys
 value=json.loads(sys.stdin.read())
@@ -115,11 +127,16 @@ assert value["ok"] is True
 assert value["core"]["installed"] is True
 assert value["base_assets"]["installed"] is True
 assert value["base_assets"]["default_patch_count"] == 12
+assert value["base_assets"]["default_patches_installed"] is True
+assert value["base_assets"]["missing"] == "cache provider with spaces"
+assert value["base_assets"]["rule_source_dir"].endswith("/owner" + chr(39) + "s rules")
+assert value["core"]["version"] == ""
 assert value["runtime_profile"]["core"] == "smart"
 assert value["status"]["components"]["mihomo"]["installed"] is True
 assert value["status"]["subscription"]["configured"] is True
 assert value["status"]["runtime"]["running"] is True' <<<"${result}" || fail_test "valid Core status was mapped incorrectly: ${result}"
 [ "$(wc -l < "${tmp_dir}/core-status-calls")" -eq 1 ] || fail_test "status must call the Core exactly once"
+[ "$(wc -l < "${tmp_dir}/status-jsonfilter-calls")" -eq 2 ] || fail_test "status must extract Core flags and optional fields in two passes"
 
 MOCK_CORE_MODE=crash
 if result="$(status)"; then
@@ -137,16 +154,17 @@ assert "工作区未被判定为已重置" in value["message"]
 assert "status" not in value
 assert "base_assets" not in value' <<<"${result}" || fail_test "crashed Core was exposed as missing state: ${result}"
 
-MOCK_CORE_MODE=invalid
-if result="$(status)"; then
-	fail_test "incomplete Core status returned success"
-fi
-python3 -c 'import json,sys
+for MOCK_CORE_MODE in invalid numeric_boolean; do
+	if result="$(status)"; then
+		fail_test "$MOCK_CORE_MODE Core status returned success"
+	fi
+	python3 -c 'import json,sys
 value=json.loads(sys.stdin.read())
 assert value["ok"] is False
 assert value["code"] == "core_status_invalid"
 assert "状态均未知" in value["message"]
-assert "status" not in value' <<<"${result}" || fail_test "incomplete Core status was not rejected explicitly: ${result}"
+assert "status" not in value' <<<"${result}" || fail_test "$MOCK_CORE_MODE Core status was not rejected explicitly: ${result}"
+done
 
 MOCK_CORE_MODE=typed_failure
 if result="$(status)"; then
