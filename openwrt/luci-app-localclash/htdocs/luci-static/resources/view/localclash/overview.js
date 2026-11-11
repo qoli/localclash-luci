@@ -473,23 +473,19 @@ function trackTask(title, startPromise, options) {
 
 var taskResumeChecked = false;
 
-function resumeTaskIfNeeded() {
-	if (taskResumeChecked)
+function resumeTaskIfNeeded(task) {
+	if (taskResumeChecked || !task || !task.task || task.running !== true)
 		return Promise.resolve();
 	taskResumeChecked = true;
 
-	return callBootstrapTaskStatus().then(function(task) {
-		if (!task || !task.task)
-			return null;
-		if (task.running === true)
-			return trackTask(taskLabel(task), Promise.resolve({ started: true }), {
-				resume: true,
-				task: task,
-				startedAt: task.started_at || 0,
-				cancellable: task.cancellable !== false
-			});
-		return null;
-	}).catch(function() {
+	return trackTask(taskLabel(task), Promise.resolve({ started: true }), {
+		resume: true,
+		task: task,
+		startedAt: task.started_at || 0,
+		cancellable: task.cancellable !== false
+	}).then(function() {
+		return callBootstrapTaskStatus();
+	}).then(updateOneClickUpdateButton).catch(function() {
 		return null;
 	});
 }
@@ -1024,6 +1020,10 @@ function refreshOverviewStatus() {
 		}),
 		callBootstrapTaskStatus().catch(function(err) {
 			return { ok: false, running: false, done: false, message: err.message || String(err) };
+		}).then(function(task) {
+			updateOneClickUpdateButton(task);
+			resumeTaskIfNeeded(task);
+			return task;
 		})
 	]).then(function(results) {
 		var data = results[0] || {};
@@ -1046,9 +1046,7 @@ function refreshOverviewStatus() {
 		updateBootstrapStartButton();
 		lastOverviewStatusData = data.ok === false ? null : data;
 		replaceContent('localclash-overview-summary-body', data.ok === false ? summaryErrorTable(statusFailureMessage(data)) : summaryTable(data, takeover, task, state));
-		return refreshTakeoverStatus().then(function() {
-			return refreshOneClickUpdateCheck(lastOverviewStatusData, task);
-		});
+		return Promise.all([ refreshTakeoverStatus(), refreshOneClickUpdateCheck(lastOverviewStatusData) ]);
 	});
 }
 
@@ -1382,33 +1380,26 @@ function oneClickUpdateSummary(luciCheck, coreCheck) {
 	return _('正在检查更新…');
 }
 
-function applyOneClickUpdateCheck(luciCheck, coreCheck, task) {
-	var status = document.getElementById('localclash-one-click-update-status');
+function updateOneClickUpdateButton(task) {
 	var button = document.getElementById('localclash-one-click-update-button');
-	var enabled = !(task && task.running === true);
 
-	if (status)
-		status.textContent = oneClickUpdateSummary(luciCheck, coreCheck);
-	if (button)
-		button.disabled = !enabled;
+	if (button && button.getAttribute('aria-busy') !== 'true')
+		button.disabled = !!(task && task.running === true);
 }
 
-function refreshOneClickUpdateCheck(data, task) {
+function refreshOneClickUpdateCheck(data) {
 	var versions = document.getElementById('localclash-current-versions');
 	var status = document.getElementById('localclash-one-click-update-status');
-	var button = document.getElementById('localclash-one-click-update-button');
 
 	if (!status)
 		return Promise.resolve();
 	if (versions)
 		versions.textContent = currentVersionsSummary(data);
 	if (!data) {
-		applyOneClickUpdateCheck({ ok: false, message: _('状态数据未加载') }, null);
+		status.textContent = oneClickUpdateSummary({ ok: false, message: _('状态数据未加载') }, null);
 		return Promise.resolve();
 	}
 
-	if (button)
-		button.disabled = true;
 	status.textContent = _('正在检查更新…');
 
 	return Promise.all([
@@ -1419,7 +1410,7 @@ function refreshOneClickUpdateCheck(data, task) {
 			return { ok: false, message: err.message || String(err) };
 		})
 	]).then(function(results) {
-		applyOneClickUpdateCheck(results[0] || {}, results[1] || {}, task);
+		status.textContent = oneClickUpdateSummary(results[0] || {}, results[1] || {});
 	});
 }
 
@@ -1727,10 +1718,7 @@ return view.extend({
 
 		oneClickUpdatePreferencesData = results[0] || null;
 		dashboardURL = results[1];
-		deferAfterPaint(function() {
-			refreshOverviewStatus();
-			resumeTaskIfNeeded();
-		}, 600);
+		deferAfterPaint(refreshOverviewStatus, 600);
 		deferAfterPaint(refreshMcpGuidance, 1200);
 
 		return E('main', {
