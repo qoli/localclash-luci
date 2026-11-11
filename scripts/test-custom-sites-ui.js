@@ -8,6 +8,7 @@ const repoRoot = path.resolve(__dirname, '..');
 const helperPath = path.join(repoRoot, 'openwrt/luci-app-localclash/htdocs/luci-static/resources/localclash/custom-sites.js');
 const viewPath = path.join(repoRoot, 'openwrt/luci-app-localclash/htdocs/luci-static/resources/view/localclash/custom-sites.js');
 const overviewPath = path.join(repoRoot, 'openwrt/luci-app-localclash/htdocs/luci-static/resources/view/localclash/overview.js');
+const logsPath = path.join(path.dirname(helperPath), 'task-logs.js');
 const helperSource = fs.readFileSync(helperPath, 'utf8');
 const viewSource = fs.readFileSync(viewPath, 'utf8');
 const overviewSource = fs.readFileSync(overviewPath, 'utf8');
@@ -60,7 +61,7 @@ assert(viewSource.includes("_('直连')"));
 assert(viewSource.includes("_('禁止访问')"));
 assert(viewSource.includes("method: 'custom_sites_transact_async'"));
 assert(viewSource.includes("method: 'task_status'"));
-assert(viewSource.includes("method: 'bootstrap_logs'"));
+assert(viewSource.includes('taskLogs.monitor('));
 assert(viewSource.includes('runMutationTask'));
 assert(viewSource.includes("_('任务执行中，已等待 %s 秒。')"));
 assert(!viewSource.includes('callLongCustomSitesTransaction'));
@@ -118,13 +119,15 @@ function viewHarness(snapshot) {
 		}
 	};
 	const window = {
-		setTimeout: function(callback) { callback(); },
-		setInterval: function() { return 1; },
-		clearInterval: function() {},
+		setTimeout: function(callback, delay) { return setTimeout(callback, delay); },
+		clearTimeout: function(id) { clearTimeout(id); },
 		confirm: function() { return true; }
 	};
-	const view = new Function('view', 'rpc', 'ui', 'localclashStyle', 'customSitesUI', 'E', '_', 'document', 'window', viewSource)(
-		{ extend: value => value }, rpc, ui, { stylesheet: () => E('style') }, helper, E,
+	const taskLogs = new Function('baseclass', 'rpc', 'window', '_', fs.readFileSync(logsPath, 'utf8'))(
+		{ extend: value => value }, rpc, window, value => value
+	);
+	const view = new Function('view', 'rpc', 'ui', 'localclashStyle', 'customSitesUI', 'taskLogs', 'E', '_', 'document', 'window', viewSource)(
+		{ extend: value => value }, rpc, ui, { stylesheet: () => E('style') }, helper, taskLogs, E,
 		value => value, { getElementById: id => nodesByID[id] }, window
 	);
 	return { view, calls, nodesByID, get modal() { return modal; } };

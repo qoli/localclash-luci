@@ -3,6 +3,7 @@
 'require rpc';
 'require ui';
 'require localclash.style as localclashStyle';
+'require localclash.task-logs as taskLogs';
 'require localclash.dashboard as dashboardAccess';
 'require localclash.takeover-issue-report as takeoverIssueReport';
 
@@ -31,12 +32,6 @@ var callBootstrapDefault = rpc.declare({
 	object: 'localclash',
 	method: 'bootstrap_default',
 	params: [ 'uris', 'core', 'template' ],
-	expect: { '': {} }
-});
-
-var callBootstrapLogs = rpc.declare({
-	object: 'localclash',
-	method: 'bootstrap_logs',
 	expect: { '': {} }
 });
 
@@ -233,13 +228,6 @@ function showError(err) {
 	ui.addNotification(null, E('p', {}, [ err.message || String(err) ]), 'danger');
 }
 
-function formatLogLines(lines) {
-	if (!lines || !lines.length)
-		return _('等待任务输出…');
-
-	return lines.join('\n');
-}
-
 function formatText(text) {
 	var args = Array.prototype.slice.call(arguments, 1);
 	var index = 0;
@@ -381,22 +369,17 @@ function trackTask(title, startPromise, options) {
 	var startedAt = options.startedAt ? options.startedAt * 1000 : Date.now();
 	var modal = showTaskModal(title, options.cancellable !== false, options);
 	var taskId = options.task && options.task.task_id;
-	var timer;
+	var logs;
 
-	function updateLogs() {
-		return callBootstrapLogs().then(function(result) {
-			var elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
-			var lines = (result && result.logs) || [];
-			modal.statusLine.textContent = options.resume ? formatText(_('正在恢复任务进度，已等待 %s 秒。'), elapsed) : formatText(_('任务执行中，已等待 %s 秒。'), elapsed);
-			modal.logOutput.textContent = formatLogLines(lines);
-			modal.logOutput.scrollTop = modal.logOutput.scrollHeight;
-		}).catch(function(err) {
-			if (transientTaskRpcError(err)) {
-				modal.statusLine.textContent = _('暂时无法连接路由器或会话已过期；请等待连接恢复，或重新登录查看后台任务。');
-				return;
-			}
-			modal.statusLine.textContent = formatText(_('无法读取任务输出：%s'), err.message || String(err));
-		});
+	function showProgress() {
+		var elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+		modal.statusLine.textContent = options.resume ? formatText(_('正在恢复任务进度，已等待 %s 秒。'), elapsed) : formatText(_('任务执行中，已等待 %s 秒。'), elapsed);
+	}
+
+	function showLogError(err) {
+		modal.statusLine.textContent = transientTaskRpcError(err)
+			? _('暂时无法连接路由器或会话已过期；请等待连接恢复，或重新登录查看后台任务。')
+			: formatText(_('无法读取任务输出：%s'), err.message || String(err));
 	}
 
 	function waitForTaskCompletion() {
@@ -425,18 +408,14 @@ function trackTask(title, startPromise, options) {
 			taskId = result.task_id;
 		if (result && result.cancellable === false)
 			modal.cancelButton.style.display = 'none';
-		var completion = (result && (result.started || result.running)) ? waitForTaskCompletion() : Promise.resolve(result);
-
-		timer = window.setInterval(updateLogs, 1000);
-		return updateLogs().then(function() {
-			return completion;
-		});
+		logs = taskLogs.monitor(modal.logOutput, showProgress, showLogError);
+		if (result && (result.started || result.running)) {
+			logs.start();
+			return waitForTaskCompletion();
+		}
+		return result;
 	}).then(function(finalResult) {
-		window.clearInterval(timer);
-		return updateLogs().then(function() {
-			return finalResult;
-		});
-	}).then(function(finalResult) {
+		var finalLogs = logs.finish();
 		if (finalResult && finalResult.ok === false)
 			modal.statusLine.textContent = formatText(_('任务失败：%s'), finalResult.message || finalResult.code || _('未知错误'));
 		else {
@@ -445,16 +424,16 @@ function trackTask(title, startPromise, options) {
 		}
 		modal.cancelButton.disabled = true;
 		modal.resultOutput.textContent = JSON.stringify(finalResult, null, 2);
+		return finalLogs;
 	}).catch(function(err) {
-		window.clearInterval(timer);
-		if (!timer)
+		var finalLogs = logs && logs.finish();
+		if (!logs)
 			modal.logOutput.textContent = _('任务未启动。');
 
-		return (timer ? updateLogs() : Promise.resolve()).then(function() {
-			modal.statusLine.textContent = formatText(_('任务失败：%s'), err.message || String(err));
-			modal.resultOutput.textContent = JSON.stringify({ ok: false, message: err.message || String(err) }, null, 2);
-			modal.cancelButton.disabled = true;
-		});
+		modal.statusLine.textContent = formatText(_('任务失败：%s'), err.message || String(err));
+		modal.resultOutput.textContent = JSON.stringify({ ok: false, message: err.message || String(err) }, null, 2);
+		modal.cancelButton.disabled = true;
+		return finalLogs;
 	});
 }
 
@@ -1122,7 +1101,7 @@ function statePanelActions(state) {
 
 	if (state.id === 'status_failed')
 		return [
-			commandButton(_('查看日志'), callBootstrapLogs, 'cbi-button-apply', { keepOpen: true }),
+			commandButton(_('查看日志'), taskLogs.read, 'cbi-button-apply', { keepOpen: true }),
 			linkButton(_('进入进阶'), L.url('admin/services/localclash/advanced'))
 		];
 
@@ -1164,7 +1143,7 @@ function primaryActions(state) {
 		return [
 			bootstrapSetupPanel(false),
 			actionRow([
-				commandButton(_('查看日志'), callBootstrapLogs, null, { keepOpen: true })
+				commandButton(_('查看日志'), taskLogs.read, null, { keepOpen: true })
 			])
 		];
 	}

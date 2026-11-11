@@ -3,6 +3,7 @@
 'require rpc';
 'require ui';
 'require localclash.style as localclashStyle';
+'require localclash.task-logs as taskLogs';
 
 var callSubscriptionGet = rpc.declare({
 	object: 'localclash',
@@ -73,19 +74,6 @@ var callTaskCancel = rpc.declare({
 	method: 'task_cancel',
 	expect: { '': {} }
 });
-
-var callBootstrapLogs = rpc.declare({
-	object: 'localclash',
-	method: 'bootstrap_logs',
-	expect: { '': {} }
-});
-
-function formatLogLines(lines) {
-	if (!lines || !lines.length)
-		return _('等待任务输出…');
-
-	return lines.join('\n');
-}
 
 function formatText(text) {
 	var args = Array.prototype.slice.call(arguments, 1);
@@ -205,7 +193,7 @@ function liveTaskButton(label, handler, extraClass) {
 			var button = ev.currentTarget;
 			var startedAt = Date.now();
 			var modal;
-			var timer;
+			var logs;
 
 			if (button.disabled)
 				return null;
@@ -216,16 +204,13 @@ function liveTaskButton(label, handler, extraClass) {
 			button.textContent = _('查看任务输出…');
 			modal = showTaskModal(label, true);
 
-			function updateLogs() {
-				return callBootstrapLogs().then(function(result) {
-					var elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
-					var lines = (result && result.logs) || [];
-					modal.statusLine.textContent = formatText(_('任务执行中，已等待 %s 秒。'), elapsed);
-					modal.logOutput.textContent = formatLogLines(lines);
-					modal.logOutput.scrollTop = modal.logOutput.scrollHeight;
-				}).catch(function(err) {
-					modal.statusLine.textContent = formatText(_('无法读取任务输出：%s'), err.message || String(err));
-				});
+			function showProgress() {
+				var elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+				modal.statusLine.textContent = formatText(_('任务执行中，已等待 %s 秒。'), elapsed);
+			}
+
+			function showLogError(err) {
+				modal.statusLine.textContent = formatText(_('无法读取任务输出：%s'), err.message || String(err));
 			}
 
 			function waitForTaskCompletion() {
@@ -246,18 +231,14 @@ function liveTaskButton(label, handler, extraClass) {
 			}
 
 			return Promise.resolve().then(handler).then(function(result) {
-				var completion = (result && (result.started || result.running)) ? waitForTaskCompletion() : Promise.resolve(result);
-
-				timer = window.setInterval(updateLogs, 1000);
-				return updateLogs().then(function() {
-					return completion;
-				});
+				logs = taskLogs.monitor(modal.logOutput, showProgress, showLogError);
+				if (result && (result.started || result.running)) {
+					logs.start();
+					return waitForTaskCompletion();
+				}
+				return result;
 			}).then(function(finalResult) {
-				window.clearInterval(timer);
-				return updateLogs().then(function() {
-					return finalResult;
-				});
-			}).then(function(finalResult) {
+				var finalLogs = logs.finish();
 				if (finalResult && finalResult.ok === false)
 					modal.statusLine.textContent = formatText(_('任务失败：%s'), finalResult.message || finalResult.code || _('未知错误'));
 				else {
@@ -266,16 +247,16 @@ function liveTaskButton(label, handler, extraClass) {
 				}
 				modal.cancelButton.disabled = true;
 				modal.resultOutput.textContent = JSON.stringify(finalResult, null, 2);
+				return finalLogs;
 			}).catch(function(err) {
-				window.clearInterval(timer);
-				if (!timer)
+				var finalLogs = logs && logs.finish();
+				if (!logs)
 					modal.logOutput.textContent = _('任务未启动。');
 
-				return (timer ? updateLogs() : Promise.resolve()).then(function() {
-					modal.statusLine.textContent = formatText(_('任务失败：%s'), err.message || String(err));
-					modal.resultOutput.textContent = JSON.stringify({ ok: false, message: err.message || String(err) }, null, 2);
-					modal.cancelButton.disabled = true;
-				});
+				modal.statusLine.textContent = formatText(_('任务失败：%s'), err.message || String(err));
+				modal.resultOutput.textContent = JSON.stringify({ ok: false, message: err.message || String(err) }, null, 2);
+				modal.cancelButton.disabled = true;
+				return finalLogs;
 			}).finally(function() {
 				button.disabled = false;
 				button.removeAttribute('aria-busy');

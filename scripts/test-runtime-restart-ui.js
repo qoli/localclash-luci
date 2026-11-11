@@ -6,6 +6,7 @@ const path = require('path');
 const vm = require('vm');
 
 const viewRoot = path.resolve(__dirname, '../openwrt/luci-app-localclash/htdocs/luci-static/resources/view/localclash');
+const logsSource = fs.readFileSync(path.join(viewRoot, '../../localclash/task-logs.js'), 'utf8');
 
 function element(tag, attrs, children) {
 	return {
@@ -17,7 +18,7 @@ function element(tag, attrs, children) {
 	};
 }
 
-function loadView(view) {
+function loadView(view, readLogs = async () => ({ logs: ['restart phase'] })) {
 	const source = fs.readFileSync(path.join(viewRoot, view + '.js'), 'utf8');
 	const functions = ['taskLabel', 'trackTask', 'resumeTaskIfNeeded', 'liveTaskButton', 'recentTaskButton'];
 	const functionSource = functions.map(name => {
@@ -25,7 +26,27 @@ function loadView(view) {
 		assert(match, view + ': missing ' + name);
 		return match[0];
 	}).join('\n');
-	const state = { statuses: [], modals: [], statusCalls: 0, cleared: 0 };
+	const state = { statuses: [], modals: [], statusCalls: 0, logCalls: 0, timers: new Map() };
+	const window = {
+		setTimeout: callback => {
+			const id = Symbol('timer');
+			state.timers.set(id, callback);
+			return id;
+		},
+		clearTimeout: id => state.timers.delete(id)
+	};
+	const taskLogs = new Function('baseclass', 'rpc', 'window', '_', logsSource)(
+		{ extend: value => value },
+		{ declare: spec => {
+			assert.strictEqual(spec.method, 'bootstrap_logs');
+			assert.strictEqual(spec.nobatch, true, 'log and status requests must use separate XHRs');
+			return () => {
+				state.logCalls++;
+				return readLogs();
+			};
+		} },
+		window, value => value
+	);
 	const taskStatus = async () => {
 		state.statusCalls++;
 		assert(state.statuses.length, view + ': unexpected task status request');
@@ -39,14 +60,13 @@ function loadView(view) {
 		_: value => value,
 		E: element,
 		formatText: (text, ...args) => text.replace(/%s/g, () => String(args.shift())),
-		formatLogLines: lines => lines.join('\n'),
 		transientTaskRpcError: error => error.message === 'NetworkError',
 		delay: async () => {},
 		markTaskSeen: () => {},
 		callBootstrapTaskStatus: taskStatus,
 		callTaskStatus: taskStatus,
 		updateOneClickUpdateButton: task => { state.oneClickTask = task; },
-		callBootstrapLogs: async () => ({ logs: ['restart phase'] }),
+		taskLogs,
 		showTaskModal: (title, cancellable, options) => {
 			const modal = { title, cancellable, options };
 			for (const key of ['statusLine', 'logOutput', 'resultOutput', 'cancelButton', 'closeButton'])
@@ -55,10 +75,7 @@ function loadView(view) {
 			state.modals.push(modal);
 			return modal;
 		},
-		window: {
-			setInterval: () => 1,
-			clearInterval: () => { state.cleared++; }
-		}
+		window
 	});
 	vm.runInContext('var taskResumeChecked = false;\n' + functionSource, context);
 	return { source, state, context, modal: () => state.modals[state.modals.length - 1] };
@@ -165,6 +182,7 @@ async function testView(view) {
 	assert.strictEqual(test.modal().statusLine.textContent, '任务失败：最近重启失败');
 	assert.strictEqual(JSON.parse(test.modal().resultOutput.textContent).code, 'restore_failed');
 	assert.strictEqual(test.state.statusCalls, 1, view + ': completed recent task keeps polling');
+	assert.strictEqual(test.state.logCalls, 1, view + ': completed recent task reads the logs more than once');
 
 	test = loadView(view);
 	test.state.statuses.push({ running: false, done: false });
@@ -181,9 +199,36 @@ async function testView(view) {
 	process.stdout.write('PASS ' + view + ': restart task tracking, cancellation, identity, resume, recent results\n');
 }
 
+async function testSlowLogs() {
+	const logReplies = [];
+	const test = loadView('index', () => new Promise(resolve => { logReplies.push(resolve); }));
+	let finishStatus;
+	test.state.statuses.push(new Promise(resolve => { finishStatus = resolve; }));
+	const tracking = test.context.trackTask('重启', Promise.resolve({ started: true, task_id: 'restart-123' }));
+	const flush = () => new Promise(resolve => setImmediate(resolve));
+	await flush();
+	assert.strictEqual(test.state.logCalls, 1);
+	assert.strictEqual(test.state.timers.size, 0, 'no new log request should be scheduled while one is pending');
+	assert.strictEqual(test.state.statusCalls, 1, 'a pending log read must leave status polling independent');
+	finishStatus(task({ done: true, result: { ok: true } }));
+	await flush();
+	assert.strictEqual(test.modal().statusLine.textContent, '任务完成。');
+	assert.strictEqual(JSON.parse(test.modal().resultOutput.textContent).ok, true);
+	assert.strictEqual(test.state.logCalls, 1, 'the terminal log read must wait for the outstanding read');
+	logReplies.shift()({ logs: ['progress'] });
+	await flush();
+	assert.strictEqual(test.state.logCalls, 2);
+	logReplies.shift()({ logs: ['progress', 'completed'] });
+	await tracking;
+	assert.strictEqual(test.modal().statusLine.textContent, '任务完成。');
+	assert.strictEqual(test.modal().logOutput.textContent, 'progress\ncompleted');
+	assert.strictEqual(test.state.timers.size, 0);
+}
+
 (async () => {
 	await testView('overview');
 	await testView('index');
+	await testSlowLogs();
 	process.stdout.write('runtime restart UI tests passed\n');
 })().catch(error => {
 	console.error(error);

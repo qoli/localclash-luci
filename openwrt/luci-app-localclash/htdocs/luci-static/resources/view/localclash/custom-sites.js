@@ -3,6 +3,7 @@
 'require rpc';
 'require ui';
 'require localclash.style as localclashStyle';
+'require localclash.task-logs as taskLogs';
 'require localclash.custom-sites as customSitesUI';
 
 var callCustomSitesGet = rpc.declare({
@@ -21,12 +22,6 @@ var callCustomSitesTransactAsync = rpc.declare({
 var callTaskStatus = rpc.declare({
 	object: 'localclash',
 	method: 'task_status',
-	expect: { '': {} }
-});
-
-var callBootstrapLogs = rpc.declare({
-	object: 'localclash',
-	method: 'bootstrap_logs',
 	expect: { '': {} }
 });
 
@@ -99,13 +94,9 @@ function showMutationResult(result) {
 	ui.addNotification(null, E('p', {}, [ result.summary || _('自定义网站设置已保存。') ]), 'info');
 }
 
-function formatLogLines(lines) {
-	return lines && lines.length ? lines.join('\n') : _('等待任务输出…');
-}
-
 function runMutationTask(title, operation, pattern, route, id) {
 	var startedAt = Date.now();
-	var timer;
+	var logs;
 	var statusLine = E('p', { 'class': 'localclash-task-status' }, [ _('正在启动任务…') ]);
 	var logOutput = E('pre', { 'class': 'localclash-task-log' }, [ _('等待任务输出…') ]);
 	var resultOutput = E('pre', { 'class': 'localclash-result localclash-task-result' }, []);
@@ -123,13 +114,13 @@ function runMutationTask(title, operation, pattern, route, id) {
 		E('div', { 'class': 'right' }, [ closeButton ])
 	]);
 
-	function updateLogs() {
-		return callBootstrapLogs().then(function(result) {
-			var elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
-			statusLine.textContent = formatText(_('任务执行中，已等待 %s 秒。'), elapsed);
-			logOutput.textContent = formatLogLines((result && result.logs) || []);
-			logOutput.scrollTop = logOutput.scrollHeight;
-		});
+	function showProgress() {
+		var elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+		statusLine.textContent = formatText(_('任务执行中，已等待 %s 秒。'), elapsed);
+	}
+
+	function showLogError(err) {
+		statusLine.textContent = formatText(_('无法读取任务输出：%s'), err.message || String(err));
 	}
 
 	function waitForCompletion() {
@@ -145,23 +136,24 @@ function runMutationTask(title, operation, pattern, route, id) {
 	return callCustomSitesTransactAsync(operation, pattern || '', route || '', id || '').then(function(started) {
 		if (!started || started.started !== true)
 			throw resultError(started);
-		timer = window.setInterval(updateLogs, 1000);
-		return updateLogs().then(waitForCompletion);
+		logs = taskLogs.monitor(logOutput, showProgress, showLogError);
+		logs.start();
+		return waitForCompletion();
 	}).then(function(finalResult) {
-		window.clearInterval(timer);
-		return updateLogs().catch(function() {}).then(function() { return finalResult; });
-	}).then(function(finalResult) {
+		var finalLogs = logs.finish();
 		resultOutput.textContent = JSON.stringify(finalResult, null, 2);
 		if (!finalResult || finalResult.ok !== true) {
 			statusLine.textContent = formatText(_('任务失败：%s'), finalResult && (finalResult.message || finalResult.code) || _('未知错误'));
-			return;
+			return finalLogs;
 		}
 		showMutationResult(finalResult);
 		statusLine.textContent = _('任务完成，规则已经过验证并应用。');
+		return finalLogs;
 	}).catch(function(err) {
-		window.clearInterval(timer);
+		var finalLogs = logs && logs.finish();
 		statusLine.textContent = formatText(_('任务失败：%s'), err.message || String(err));
 		resultOutput.textContent = JSON.stringify({ ok: false, message: err.message || String(err) }, null, 2);
+		return finalLogs;
 	}).finally(function() {
 		closeButton.disabled = false;
 	});
