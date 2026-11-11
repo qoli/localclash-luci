@@ -1297,8 +1297,33 @@ bounded_stage_expired() {
 	[ -n "${bounded_stage_deadline:-}" ] && [ "$(now_epoch)" -ge "$bounded_stage_deadline" ]
 }
 
+stage_heartbeat() {
+	local stage_pid label started sleeper elapsed
+	stage_pid="$1"
+	label="$2"
+	started="$3"
+	sleeper=""
+	trap '
+		if [ -n "$sleeper" ]; then
+			kill "$sleeper" 2>/dev/null || true
+			wait "$sleeper" 2>/dev/null || true
+		fi
+		exit 0
+	' TERM
+	while kill -0 "$stage_pid" 2>/dev/null; do
+		sleep "$TASK_HEARTBEAT_INTERVAL" &
+		sleeper="$!"
+		wait "$sleeper" || return 0
+		sleeper=""
+		if kill -0 "$stage_pid" 2>/dev/null; then
+			elapsed=$(($(now_epoch) - started))
+			log_line "${label}：仍在执行（${elapsed}s）"
+		fi
+	done
+}
+
 run_with_heartbeat_timeout() {
-	local timeout label output tmp_output pid started elapsed delay remaining rc timed_out bounded_stage_deadline
+	local timeout label output tmp_output pid started elapsed delay remaining rc timed_out bounded_stage_deadline heartbeat_pid
 	timeout="$1"
 	label="$2"
 	output="$3"
@@ -1306,6 +1331,7 @@ run_with_heartbeat_timeout() {
 	started="$(now_epoch)"
 	timed_out=false
 	bounded_stage_deadline=""
+	heartbeat_pid=""
 	if [ "$timeout" -gt 0 ]; then
 		bounded_stage_deadline=$((started + timeout))
 	fi
@@ -1313,14 +1339,16 @@ run_with_heartbeat_timeout() {
 	rm -f "$tmp_output"
 	( "$@" > "$tmp_output" ) &
 	pid="$!"
-	while kill -0 "$pid" 2>/dev/null; do
-		delay="$TASK_HEARTBEAT_INTERVAL"
-		if [ -n "$bounded_stage_deadline" ]; then
+	if [ -z "$bounded_stage_deadline" ]; then
+		stage_heartbeat "$pid" "$label" "$started" </dev/null >/dev/null 2>&1 &
+		heartbeat_pid="$!"
+	else
+		while kill -0 "$pid" 2>/dev/null; do
+			delay="$TASK_HEARTBEAT_INTERVAL"
 			remaining=$((bounded_stage_deadline - $(now_epoch)))
 			[ "$remaining" -ge "$delay" ] || delay="$remaining"
-		fi
-		[ "$delay" -le 0 ] || sleep "$delay"
-		if kill -0 "$pid" 2>/dev/null; then
+			[ "$delay" -le 0 ] || sleep "$delay"
+			kill -0 "$pid" 2>/dev/null || break
 			elapsed=$(($(now_epoch) - started))
 			log_line "${label}：仍在执行（${elapsed}s）"
 			if bounded_stage_expired; then
@@ -1331,10 +1359,14 @@ run_with_heartbeat_timeout() {
 				kill_process_tree -KILL "$pid"
 				break
 			fi
-		fi
-	done
+		done
+	fi
 	rc=0
 	wait "$pid" || rc="$?"
+	if [ -n "$heartbeat_pid" ]; then
+		kill "$heartbeat_pid" 2>/dev/null || true
+		wait "$heartbeat_pid" 2>/dev/null || true
+	fi
 	if [ "$timed_out" = true ] || { [ "$rc" -ne 0 ] && bounded_stage_expired; }; then
 		rm -f "$tmp_output"
 		printf '{"ok":false,"code":"step_timeout","message":"%s 超时，请检查路由器是否能访问下载源，或稍后重试。","details":{"timeout_seconds":%s},"next_actions":["确认路由器可以访问下载源后重试。"]}\n' "$(json_escape "$label")" "$timeout" > "$output"

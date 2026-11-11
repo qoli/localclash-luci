@@ -17,10 +17,26 @@ output="${tmp_dir}/result.json"
 run_with_heartbeat_until_complete "订阅刷新测试" "$output" sh -c 'sleep 2; printf %s\\n "{\"ok\":true}"'
 
 grep -q '"ok":true' "$output"
+grep -q '订阅刷新测试：仍在执行' "$LOG"
 if grep -q 'step_timeout\|已停止等待' "$output" "$LOG" 2>/dev/null; then
 	printf 'test-rpcd-task-timeout: unbounded core-owned step was timed out\n' >&2
 	exit 1
 fi
+
+(
+	TASK_HEARTBEAT_INTERVAL=30
+	started="$(now_epoch)"
+	if run_with_heartbeat_until_complete "快速结束测试" "$output" sh -c 'printf "fixture failure\\n"; exit 7'; then
+		exit 1
+	else
+		[ "$?" -eq 7 ]
+	fi
+	grep -qx 'fixture failure' "$output"
+	if [ "$(( $(now_epoch) - started ))" -gt 2 ]; then
+		printf 'test-rpcd-task-timeout: completed step waited for the heartbeat\n' >&2
+		exit 1
+	fi
+)
 
 grep -q 'run_with_heartbeat_until_complete "一键更新：正在刷新订阅"' "$helper"
 grep -q 'run_with_heartbeat_until_complete "一键更新：正在同步最新默认策略"' "$helper"
