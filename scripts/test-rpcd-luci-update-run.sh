@@ -24,6 +24,65 @@ fail_test() {
 	exit 1
 }
 
+(
+	test_asset_url="https://github.com/qoli/localclash-luci/releases/download/v0.90/luci-app-localclash_0.90-1_all.ipk"
+	test_mirror_url="https://mirror.example/$test_asset_url"
+	package_sha="$(printf 'package bytes\n' | sha256sum | cut -d ' ' -f 1)"
+	asset_digest="sha256:$package_sha"
+	luci_package_manager() { printf 'opkg\n'; }
+	luci_installed_package_version() { printf '0.89-1\n'; }
+	luci_version_relation() { printf 'target_newer\n'; }
+	luci_package_json() { printf '"luci_package":{"installed":true}'; }
+	luci_clear_cache() { :; }
+	luci_update_validate_package() { :; }
+	luci_update_install_package() { printf 'installed\n' >> "$TRACE"; }
+	fetch_url() { printf '{}\n' > "$2"; }
+	github_download_candidates() { printf 'https://mirror.example/%s\n%s\n' "$1" "$1"; }
+	note_github_candidate_success() { :; }
+	note_github_candidate_failure() { :; }
+	jsonfilter() {
+		case "$4" in
+			'@.tag_name') printf 'v0.90\n' ;;
+			'@.assets[*].browser_download_url') printf '%s\n%s.sha256\n' "$test_asset_url" "$test_asset_url" ;;
+			'@.assets[*]') printf 'checksum-asset\nselected-package\n' ;;
+			'@.browser_download_url')
+				case "$2" in
+					checksum-asset) printf '%s.sha256\n' "$test_asset_url" ;;
+					selected-package) printf '%s\n' "$test_asset_url" ;;
+				esac
+				;;
+			'@.digest') printf '%s\n' "$asset_digest" ;;
+		esac
+	}
+	fetch_single_url() {
+		printf '%s\n' "$1" >> "$TRACE"
+		case "$1" in
+			"$test_mirror_url.sha256") printf '%s  package.ipk\n' "$package_sha" > "$2" ;;
+			"$test_asset_url"|"$test_mirror_url") printf 'package bytes\n' > "$2" ;;
+			*) return 1 ;;
+		esac
+	}
+
+	: > "$TRACE"
+	luci_update >/dev/null || fail_test "release digest update failed"
+	printf '%s\ninstalled\n' "$test_asset_url" > "${tmp_dir}/expected-downloads"
+	cmp -s "$TRACE" "${tmp_dir}/expected-downloads" || fail_test "release digest did not eliminate the checksum request"
+
+	asset_digest=""
+	: > "$TRACE"
+	luci_update >/dev/null || fail_test "legacy checksum update failed"
+	printf '%s.sha256\n%s.sha256\n%s\ninstalled\n' "$test_asset_url" "$test_mirror_url" "$test_mirror_url" > "${tmp_dir}/expected-downloads"
+	cmp -s "$TRACE" "${tmp_dir}/expected-downloads" || fail_test "package did not reuse the successful checksum route"
+
+	asset_digest="sha256:invalid"
+	: > "$TRACE"
+	if result="$(luci_update)"; then
+		fail_test "invalid release digest succeeded"
+	fi
+	printf '%s\n' "$result" | grep -q '"code":"luci_package_checksum_failed"' || fail_test "invalid release digest was not explicit"
+	[ ! -s "$TRACE" ] || fail_test "invalid release digest started a download"
+)
+
 for package_builder in "${repo_root}/scripts/build-openwrt-ipk.sh" "${repo_root}/scripts/build-openwrt-apk.sh"; do
 	if grep -q 'service_start' "$package_builder"; then
 		fail_test "package post-install must not own localclash-mcp restart: $package_builder"
