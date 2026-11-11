@@ -90,7 +90,7 @@ docker run --rm \
 			--info 'origin:localclash-luci' \
 			--info 'url:https://github.com/qoli/localclash-luci' \
 			--info 'maintainer:qoli' \
-		--info 'depends:luci-base luci-lib-nixio rpcd uclient-fetch curl ca-bundle jsonfilter firewall4 nftables ip-full kmod-tun kmod-nft-tproxy' \
+			--info 'depends:luci-base luci-lib-nixio lua rpcd uclient-fetch curl ca-bundle jsonfilter firewall4 nftables ip-full kmod-tun kmod-nft-tproxy' \
 			--files '/work/.build/apk/pkg' \
 			--script 'post-install:/work/.build/apk/scripts/post-install' \
 			--script 'post-upgrade:/work/.build/apk/scripts/post-upgrade' \

@@ -125,6 +125,32 @@ assert.strictEqual(JSON.parse(sanitized.events.at(-1)).token, '19330');
 assert(publicText.includes('http://127.0.0.1:9090/version'));
 assert.strictEqual(secrets.evidence.task_result.lines[2], '  "password": "private-password",', 'report generation must not mutate its evidence');
 
+const runtimeObservation = {
+	ok: true,
+	status: {
+		runtime_running: true, controller_ready: true,
+		dns: {
+			path: 'mihomo', lease_active: true, guard_reason: 'runtime_lease_refreshed',
+			probe: {
+				state: 'failed', observed_at: '2026-11-03T11:00:01+08:00', query: 'localclash-probe.google.com',
+				output: 'dns-probe: unhealthy rcode 2; https://example.test/private-path?token=probe-secret'
+			}
+		}
+	}
+};
+const runtimeIssue = report.buildRuntimeGitHubIssue(fixture, runtimeObservation);
+const runtimeIssueURL = new URL(runtimeIssue.url);
+assert.strictEqual(runtimeIssueURL.searchParams.get('template'), 'runtime-report.md');
+assert(runtimeIssueURL.searchParams.get('body').includes('域名解析失败'));
+assert(runtimeIssue.filename.startsWith('localclash-runtime-'));
+for (const evidence of [ '运行诊断报告', 'runtime_observation', 'runtime_lease_refreshed', 'localclash-probe.google.com', 'unhealthy rcode 2', 'END_OF_ERROR' ])
+	assert(runtimeIssue.full_report.includes(evidence), evidence);
+assert(!runtimeIssue.full_report.includes('probe-secret'));
+assert(!runtimeIssue.url.includes('localclash-probe.google.com'));
+assert(runtimeObservation.status.dns.probe.output.includes('probe-secret'));
+const stoppedObservation = { ok: true, status: { runtime_running: false, controller_ready: false } };
+assert(!report.buildRuntimeGitHubIssue(fixture, stoppedObservation).full_report.includes('控制器未响应'));
+
 function harness(payload) {
 	const nodes = {};
 	const state = { copied: [], windows: [], downloads: [], errors: [], modal: null, copyFails: false, popupBlocked: false };
@@ -139,7 +165,7 @@ function harness(payload) {
 		return node;
 	}
 	const apiSource = overview.slice(overview.indexOf('function takeoverIssueLogs()'), overview.indexOf('\nfunction mcpGuidanceBody')) +
-		'\nreturn { load: takeoverIssueLogs, show: showTakeoverReport, button: takeoverIssueReportButton };';
+		'\nreturn { load: takeoverIssueLogs, show: showTakeoverReport, button: takeoverIssueReportButton, runtimeButton: runtimeIssueReportButton };';
 	const api = new Function('callTakeoverLogs', 'takeoverIssueReport', 'copyText', 'ui', 'E', '_', 'window', 'document', 'URL', 'Blob', 'actionRow', 'showError', apiSource)(
 		async () => payload, report,
 		async text => { if (state.copyFails) throw new Error('clipboard denied'); state.copied.push(text); },
@@ -193,5 +219,17 @@ function harness(payload) {
 	buttons[2].attrs.click({ currentTarget: {} });
 	assert(h.nodes['localclash-takeover-report-status'].textContent.includes('阻止'));
 	assert(h.state.modal);
-	process.stdout.write('takeover complete report, redaction and delivery regressions passed\n');
+
+	const runtime = harness(fixture);
+	const button = runtime.api.runtimeButton(runtimeObservation);
+	await button.attrs.click({ preventDefault() {}, currentTarget: button });
+	assert.strictEqual(runtime.state.modal.title, '运行问题报告');
+	assert.strictEqual(runtime.nodes['localclash-runtime-report-preview'].value, runtimeIssue.full_report);
+	const runtimeButtons = runtime.state.modal.children.at(-1).children;
+	await runtimeButtons[0].attrs.click();
+	assert.strictEqual(runtime.state.copied[0], runtimeIssue.full_report);
+	runtimeButtons[2].attrs.click();
+	assert.strictEqual(runtime.state.windows.at(-1).url, runtimeIssue.url);
+	assert.strictEqual(await runtime.state.blob.text(), runtimeIssue.full_report);
+	process.stdout.write('takeover and runtime report, redaction and delivery regressions passed\n');
 })().catch(error => { process.stderr.write(error.stack + '\n'); process.exitCode = 1; });

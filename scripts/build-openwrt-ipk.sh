@@ -26,7 +26,7 @@ chmod 755 "${build_dir}/pkg/usr/libexec/localclash/takeover" "${build_dir}/pkg/u
 cat > "${build_dir}/pkg/CONTROL/control" <<EOF
 Package: ${pkg_name}
 Version: ${pkg_version}-${pkg_release}
-Depends: luci-base, luci-lib-nixio, rpcd, uclient-fetch, curl, ca-bundle, jsonfilter, firewall4, nftables, ip-full, kmod-tun, kmod-nft-tproxy
+Depends: luci-base, luci-lib-nixio, lua, rpcd, uclient-fetch, curl, ca-bundle, jsonfilter, firewall4, nftables, ip-full, kmod-tun, kmod-nft-tproxy
 Architecture: all
 Maintainer: qoli
 Section: luci

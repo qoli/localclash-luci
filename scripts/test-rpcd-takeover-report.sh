@@ -151,4 +151,73 @@ assert r["current_status_exit_code"] == 19
 assert r["current_status_output"] == ["ORIGINAL STATUS STDERR"]
 assert r["evidence"]["helper_log"]["available"]
 PY
-printf 'rpcd takeover evidence and original failure preservation tests passed\n'
+
+(
+	call_takeover() { printf '%s\n' "$*"; }
+	[ "$(printf '{}' | takeover_status)" = 'status --json' ]
+	[ "$(printf '{"probe_dns":false}' | takeover_status)" = 'status --json' ]
+	[ "$(printf '{"probe_dns":true}' | takeover_status)" = 'status --json --probe-dns' ]
+)
+
+(
+	takeover="$repo_root/openwrt/luci-app-localclash/root/usr/libexec/localclash/takeover"
+	awk '/^command_name=/ { exit } { print }' "$takeover" > "$tmp_dir/takeover-functions.sh"
+	# shellcheck disable=SC1090
+	. "$tmp_dir/takeover-functions.sh"
+	STATE_DIR="$tmp_dir/takeover-state"
+	DNS_PROBE="$tmp_dir/bin/dns-probe"
+	mkdir -p "$STATE_DIR"
+	printf '{"result":"success","reason":"runtime_lease_refreshed","updated_at_epoch":123}\n' > "$STATE_DIR/dns-guard-status.json"
+	export PROBE_CALLS="$tmp_dir/probe-calls"
+	export PROBE_RESULT=failed
+	cat > "$DNS_PROBE" <<'SH'
+#!/bin/sh
+[ "$1" = 127.0.0.1 ] && [ "$2" = 7874 ] && [ "$4" = udp ] || exit 99
+case "$3" in localclash-*.google.com) ;; *) exit 99 ;; esac
+printf '%s\n' "$3" >> "$PROBE_CALLS"
+case "$PROBE_RESULT" in
+	failed) printf 'dns-probe: DNS response returned unhealthy rcode 2\n' >&2; exit 1 ;;
+	unavailable) printf 'lua: module nixio not found\n' >&2; exit 1 ;;
+	passed) printf '{"ok":true,"rcode":3}\n' ;;
+esac
+SH
+	chmod +x "$DNS_PROBE"
+	probe_runtime=true
+	probe_lease=true
+	require_tools() { :; }
+	read_runtime_facts() {
+		PROFILE_MODE=router RUNTIME_RUNNING="$probe_runtime" CONTROLLER_READY="$probe_runtime" IPV6=true
+		CONFIG_SHA256=test DNS_PORT=7874 DNS_PORT_JSON=7874 REDIR_PORT_JSON=7892 TPROXY_PORT_JSON=7895 TUN_DEVICE=utun
+	}
+	observe_rules() {
+		FW4_AVAILABLE=true NFT_AVAILABLE=true FW4_TABLE=true FW4_BASE_CHAINS=true TUN_INTERFACE=true
+		FWMARK_ROUTE_V4=true NFT_CHAINS=true TCP_REDIRECT=true UDP_TUN_MARK=true DNS_HIJACK=true LOCAL_DNS_BYPASS=true
+		DNS_ACTIVE_SETS=true DNS_INGRESS_REDIRECT=true DNS_LOCAL_REDIRECT=true STATE_OWNED=true DNS_LEASE_ACTIVE="$probe_lease"
+	}
+	status_json > "$tmp_dir/plain.json"
+	probe_runtime=false status_json --probe-dns > "$tmp_dir/stopped.json"
+	probe_lease=false status_json --probe-dns > "$tmp_dir/no-lease.json"
+	[ ! -e "$PROBE_CALLS" ]
+	status_json --probe-dns > "$tmp_dir/failed-probe.json"
+	PROBE_RESULT=unavailable status_json --probe-dns > "$tmp_dir/unavailable-probe.json"
+	PROBE_RESULT=passed status_json --probe-dns > "$tmp_dir/passed-probe.json"
+	python3 - "$tmp_dir" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+def status(filename):
+    return json.loads((root / filename).read_text())["status"]
+for name in ("plain", "stopped", "no-lease"):
+    assert "probe" not in status(f"{name}.json")["dns"]
+assert len((root / "probe-calls").read_text().splitlines()) == 3
+for state in ("failed", "unavailable", "passed"):
+    sample = status(f"{state}-probe.json")
+    assert sample["runtime_running"] and sample["effective"]
+    dns = sample["dns"]
+    assert dns["path"] == "mihomo" and dns["lease_active"] and dns["guard_reason"] == "runtime_lease_refreshed"
+    probe = dns["probe"]
+    assert probe["state"] == state and probe["port"] == 7874 and probe["observed_at"]
+assert "unhealthy rcode 2" in status("failed-probe.json")["dns"]["probe"]["output"]
+assert "module nixio not found" in status("unavailable-probe.json")["dns"]["probe"]["output"]
+PY
+)
+printf 'rpcd takeover evidence and runtime DNS probe contracts passed\n'

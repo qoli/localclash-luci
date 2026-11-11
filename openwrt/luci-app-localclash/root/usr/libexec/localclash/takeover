@@ -5,6 +5,7 @@ CORE="${LOCALCLASH_CORE:-/usr/local/bin/localclash}"
 WORKDIR="${LOCALCLASH_WORKDIR:-/root/localclash}"
 STATE_DIR="${LOCALCLASH_TAKEOVER_STATE_DIR:-/tmp/localclash/router-takeover}"
 SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
+DNS_PROBE="${LOCALCLASH_DNS_PROBE:-$SELF_DIR/dns-probe}"
 APPLY_IMPL="${LOCALCLASH_TAKEOVER_APPLY_IMPL:-$SELF_DIR/takeover-apply}"
 STOP_IMPL="${LOCALCLASH_TAKEOVER_STOP_IMPL:-$SELF_DIR/takeover-stop}"
 FWMARK="${LOCALCLASH_TAKEOVER_FWMARK:-0x6c63}"
@@ -152,7 +153,23 @@ takeover_artifacts_present() {
 		[ "$DNS_ACTIVE_SETS" = true ] || [ "$DNS_INGRESS_REDIRECT" = true ] || [ "$DNS_LOCAL_REDIRECT" = true ] || [ "$FWMARK_ROUTE_V4" = true ]
 }
 
+dns_probe_json() {
+	local name output rc state
+	# Use a fresh name so a cached reply cannot hide an upstream failure.
+	name="localclash-$(date +%s)-$$.google.com"
+	rc=0
+	output="$("$DNS_PROBE" 127.0.0.1 "$DNS_PORT" "$name" udp 2>&1)" || rc=$?
+	case "$rc:$output" in
+		0:*) state=passed ;;
+		1:dns-probe:\ *) state=failed ;;
+		*) state=unavailable ;;
+	esac
+	printf '{"state":"%s","observed_at":"%s","query":"%s","server":"127.0.0.1","port":%s,"network":"udp","exit_code":%s,"output":"%s"}' \
+		"$state" "$(date -Iseconds)" "$name" "$DNS_PORT" "$rc" "$(json_escape "$output")"
+}
+
 status_json() {
+	local dns_probe_field=""
 	require_tools || return 1
 	read_runtime_facts || return 1
 	observe_rules
@@ -166,9 +183,12 @@ status_json() {
 	GUARD_REASON="$(jsonfilter -i "$STATE_DIR/dns-guard-status.json" -e '@.reason' 2>/dev/null || true)"
 	GUARD_UPDATED="$(jsonfilter -i "$STATE_DIR/dns-guard-status.json" -e '@.updated_at_epoch' 2>/dev/null || true)"
 	case "$GUARD_UPDATED" in ''|*[!0-9]*) GUARD_UPDATED_JSON=null ;; *) GUARD_UPDATED_JSON="$GUARD_UPDATED" ;; esac
-	printf '{"ok":true,"changed":false,"summary":"OpenWrt takeover status read.","status":{"schema_version":1,"profile_mode":"%s","runtime_running":%s,"controller_ready":%s,"effective":%s,"state_owned":%s,"config_sha256":"%s","dns_port":%s,"redir_port":%s,"tproxy_port":%s,"tun_device":"%s","ipv6":%s,"dns":{"mode":"ingress_deadman","fallback":"dnsmasq","path":"%s","lease_active":%s,"guard_basis":"runtime_lifecycle","guard_result":"%s","guard_reason":"%s","guard_updated_at_epoch":%s},"checks":{"fw4_available":%s,"nft_available":%s,"fw4_table":%s,"fw4_base_chains":%s,"tun_interface":%s,"fwmark_route_v4":%s,"nft_chains":%s,"tcp_redirect":%s,"udp_tun_mark":%s,"dns_hijack":%s,"local_dns_bypass":%s,"dns_active_sets":%s,"dns_ingress_redirect":%s,"dns_local_redirect":%s}},"changes":[],"warnings":[],"next_actions":[]}\n' \
+	if [ "${1:-}" = --probe-dns ] && [ "$RUNTIME_RUNNING" = true ] && [ "$DNS_LEASE_ACTIVE" = true ] && [ -n "$DNS_PORT" ]; then
+		dns_probe_field=',"probe":'"$(dns_probe_json)"
+	fi
+	printf '{"ok":true,"changed":false,"summary":"OpenWrt takeover status read.","status":{"schema_version":1,"profile_mode":"%s","runtime_running":%s,"controller_ready":%s,"effective":%s,"state_owned":%s,"config_sha256":"%s","dns_port":%s,"redir_port":%s,"tproxy_port":%s,"tun_device":"%s","ipv6":%s,"dns":{"mode":"ingress_deadman","fallback":"dnsmasq","path":"%s","lease_active":%s,"guard_basis":"runtime_lifecycle","guard_result":"%s","guard_reason":"%s","guard_updated_at_epoch":%s%s},"checks":{"fw4_available":%s,"nft_available":%s,"fw4_table":%s,"fw4_base_chains":%s,"tun_interface":%s,"fwmark_route_v4":%s,"nft_chains":%s,"tcp_redirect":%s,"udp_tun_mark":%s,"dns_hijack":%s,"local_dns_bypass":%s,"dns_active_sets":%s,"dns_ingress_redirect":%s,"dns_local_redirect":%s}},"changes":[],"warnings":[],"next_actions":[]}\n' \
 		"$(json_escape "$PROFILE_MODE")" "$RUNTIME_RUNNING" "$CONTROLLER_READY" "$EFFECTIVE" "$STATE_OWNED" \
-		"$(json_escape "$CONFIG_SHA256")" "$DNS_PORT_JSON" "$REDIR_PORT_JSON" "$TPROXY_PORT_JSON" "$(json_escape "$TUN_DEVICE")" "$IPV6" "$DNS_PATH" "$DNS_LEASE_ACTIVE" "$(json_escape "$GUARD_RESULT")" "$(json_escape "$GUARD_REASON")" "$GUARD_UPDATED_JSON" \
+		"$(json_escape "$CONFIG_SHA256")" "$DNS_PORT_JSON" "$REDIR_PORT_JSON" "$TPROXY_PORT_JSON" "$(json_escape "$TUN_DEVICE")" "$IPV6" "$DNS_PATH" "$DNS_LEASE_ACTIVE" "$(json_escape "$GUARD_RESULT")" "$(json_escape "$GUARD_REASON")" "$GUARD_UPDATED_JSON" "$dns_probe_field" \
 		"$FW4_AVAILABLE" "$NFT_AVAILABLE" "$FW4_TABLE" "$FW4_BASE_CHAINS" "$TUN_INTERFACE" "$FWMARK_ROUTE_V4" "$NFT_CHAINS" "$TCP_REDIRECT" "$UDP_TUN_MARK" "$DNS_HIJACK" "$LOCAL_DNS_BYPASS" "$DNS_ACTIVE_SETS" "$DNS_INGRESS_REDIRECT" "$DNS_LOCAL_REDIRECT"
 }
 
@@ -261,7 +281,13 @@ reconcile_takeover() {
 command_name="${1:-}"
 shift 2>/dev/null || true
 case "$command_name" in
-	status) [ "$#" -eq 1 ] && [ "${1:-}" = "--json" ] || { fail "takeover_usage" "Usage: takeover status --json"; exit 1; }; status_json ;;
+	status)
+		case "$#:$*" in
+			1:--json) status_json ;;
+			"2:--json --probe-dns") status_json --probe-dns ;;
+			*) fail "takeover_usage" "Usage: takeover status --json [--probe-dns]"; exit 1 ;;
+		esac
+		;;
 	apply) [ "$#" -eq 1 ] && [ "${1:-}" = "--json" ] || { fail "takeover_usage" "Usage: takeover apply --json"; exit 1; }; apply_takeover ;;
 	stop) [ "$#" -eq 1 ] && [ "${1:-}" = "--json" ] || { fail "takeover_usage" "Usage: takeover stop --json"; exit 1; }; stop_takeover ;;
 	reconcile)

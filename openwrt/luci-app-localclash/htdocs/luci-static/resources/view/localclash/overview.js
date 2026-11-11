@@ -16,6 +16,9 @@ var callStatus = rpc.declare({
 var callTakeoverStatus = rpc.declare({
 	object: 'localclash',
 	method: 'takeover_status',
+	params: [ 'probe_dns' ],
+	nobatch: true,
+	reject: true,
 	expect: { '': {} }
 });
 
@@ -943,56 +946,35 @@ function bootRestoreSummary(bootRestore) {
 	return _('未启用');
 }
 
-function refreshTakeoverStatus() {
-	return callTakeoverStatus().then(function(takeover) {
-		var text = takeoverState(takeover);
-		var cell = document.getElementById('localclash-overview-takeover-status');
-		var hero = document.getElementById('localclash-overview-takeover-hero');
-
-		if (cell)
-			cell.textContent = text;
-		if (hero)
-			hero.textContent = text;
-		replaceContent('localclash-overview-takeover-actions', takeoverSummaryActions(takeover));
-		updateStatePanelTakeoverAppearance(text, false);
-	}).catch(function(err) {
-		var text = takeoverFailureText(err);
-		var cell = document.getElementById('localclash-overview-takeover-status');
-		var hero = document.getElementById('localclash-overview-takeover-hero');
-
-		if (cell)
-			cell.textContent = text;
-		if (hero)
-			hero.textContent = text;
-		replaceContent('localclash-overview-takeover-actions', takeoverSummaryActions(null));
-		updateStatePanelTakeoverAppearance(text, true);
+function refreshTakeoverStatus(data, task, state) {
+	return callTakeoverStatus(runtimeRunning(productStatus(data))).catch(function(err) {
+		return { ok: false, code: err.code, message: err.message || String(err) };
+	}).then(function(takeover) {
+		if (state.id === 'running')
+			replaceContent('localclash-overview-state', statePanel(state, takeover));
+		replaceContent('localclash-overview-summary-body', summaryTable(data, takeover, task, state));
 	});
 }
 
-function updateStatePanelTakeoverAppearance(text, failed) {
-	var panel = document.getElementById('localclash-state-panel');
-	var badge;
-	var tableLabel = document.getElementById('localclash-overview-takeover-status');
-	var tableBadge = tableLabel ? tableLabel.parentNode : null;
-	var tone;
+function takeoverTone(takeover) {
+	if (takeover && takeover.pending === true)
+		return 'info';
+	if (takeover && takeover.ok === false)
+		return 'danger';
+	return takeoverState(takeover) === _('已生效') ? 'success' : 'warning';
+}
 
-	if (!panel)
-		return;
+function runtimeWarning(takeover) {
+	var status = takeover && takeover.ok === true && takeover.status;
+	var dns = status && status.dns;
 
-	badge = panel.querySelector('.localclash-status-badge');
-	tone = failed ? 'danger' : (text === _('已生效') ? 'success' : 'warning');
-	[ 'success', 'warning', 'danger', 'info', 'neutral' ].forEach(function(name) {
-		panel.classList.remove('localclash-state-panel-' + name);
-		if (badge)
-			badge.classList.remove('localclash-status-' + name);
-		if (tableBadge)
-			tableBadge.classList.remove('localclash-status-' + name);
-	});
-	panel.classList.add('localclash-state-panel-' + tone);
-	if (badge)
-		badge.classList.add('localclash-status-' + tone);
-	if (tableBadge)
-		tableBadge.classList.add('localclash-status-' + tone);
+	if (!status || status.runtime_running !== true)
+		return '';
+	if (dns && dns.lease_active === true && dns.path === 'mihomo' && dns.probe && dns.probe.state === 'failed')
+		return _('DNS 仍由 Mihomo 接管，本次 DNS 查询失败。');
+	if (status.controller_ready === false)
+		return _('Mihomo 进程仍在运行，控制器未响应。');
+	return '';
 }
 
 function statusFailureMessage(data) {
@@ -1041,12 +1023,15 @@ function refreshOverviewStatus() {
 			state = classify(data, takeover, task);
 		}
 
-		replaceContent('localclash-overview-state', statePanel(state));
+		replaceContent('localclash-overview-state', statePanel(state, takeover));
 		replaceContent('localclash-overview-actions', primaryActions(state));
 		updateBootstrapStartButton();
 		lastOverviewStatusData = data.ok === false ? null : data;
 		replaceContent('localclash-overview-summary-body', data.ok === false ? summaryErrorTable(statusFailureMessage(data)) : summaryTable(data, takeover, task, state));
-		return Promise.all([ refreshTakeoverStatus(), refreshOneClickUpdateCheck(lastOverviewStatusData) ]);
+		return Promise.all([
+			data.ok === false ? null : refreshTakeoverStatus(data, task, state),
+			refreshOneClickUpdateCheck(lastOverviewStatusData)
+		]);
 	});
 }
 
@@ -1115,11 +1100,11 @@ function classify(data, takeover, task) {
 	};
 }
 
-function stateTone(state) {
+function stateTone(state, takeover, warning) {
 	if (!state)
 		return 'neutral';
 	if (state.id === 'running')
-		return 'success';
+		return warning ? 'warning' : takeoverTone(takeover);
 	if (state.id === 'status_failed')
 		return 'danger';
 	if (state.id === 'task_running' || state.id === 'loading')
@@ -1166,31 +1151,34 @@ function statePanelActions(state) {
 	return [];
 }
 
-function statePanel(state) {
+function statePanel(state, takeover) {
 	var message;
+	var running = state && state.id === 'running';
+	var warning = running && runtimeWarning(takeover);
+	var tone = stateTone(state, takeover, warning);
+	var title = warning ? _('运行中 · 不稳定') : (state && state.title ? state.title : _('状态未知'));
 	var actions = statePanelActions(state);
+	var copy;
 	var children;
 
-	if (state && state.id === 'running') {
+	if (running) {
 		message = E('p', { 'class': 'localclash-state-message' }, [
 			_('Mihomo 运行时正在运行，网络接管：'),
-			E('span', { 'id': 'localclash-overview-takeover-hero' }, [ _('检查中…') ])
+			takeoverState(takeover)
 		]);
 	}
 	else {
 		message = E('p', { 'class': 'localclash-state-message' }, [ state && state.message ? state.message : '-' ]);
 	}
 
-	children = [
-		E('div', { 'class': 'localclash-state-copy' }, [
-			statusBadge(state && state.title ? state.title : _('状态未知'), stateTone(state)),
-			message
-		])
-	];
+	copy = [ statusBadge(title, tone), message ];
+	if (warning)
+		copy.push(E('p', { 'class': 'localclash-state-message', 'role': 'status' }, [ warning ]));
+	children = [ E('div', { 'class': 'localclash-state-copy' }, copy) ];
 	if (actions.length)
 		children.push(E('div', { 'class': 'localclash-state-actions' }, actions));
 
-	return E('div', { 'id': 'localclash-state-panel', 'class': 'localclash-state-panel localclash-state-panel-' + stateTone(state) }, children);
+	return E('div', { 'id': 'localclash-state-panel', 'class': 'localclash-state-panel localclash-state-panel-' + tone }, children);
 }
 
 function primaryActions(state) {
@@ -1210,11 +1198,11 @@ function primaryActions(state) {
 	return [];
 }
 
-function mihomoSummary(data, status) {
+function mihomoSummary(data, status, warning) {
 	var core = data.core || {};
 
 	if (runtimeRunning(status))
-		return _('运行中');
+		return warning ? _('运行中 · 不稳定') : _('运行中');
 	if (!core.installed)
 		return _('缺失');
 	if (componentInstalled(status, [ 'mihomo' ]))
@@ -1447,7 +1435,18 @@ function summaryTable(data, takeover, task, state) {
 	var dashboardReady = componentInstalled(status, [ 'dashboard', 'ui' ]);
 	var subscriptionReady = subscriptionConfigured(status);
 	var takeoverText = takeoverState(takeover);
-	var takeoverTone = takeover && takeover.pending === true ? 'info' : (takeoverText === _('已生效') ? 'success' : 'warning');
+	var warning = mihomoRunning && runtimeWarning(takeover);
+	var mihomoStatus = statusBadge(mihomoSummary(data, status, warning), mihomoRunning && !warning ? 'success' : 'warning');
+	var mihomoActions = [ recentTaskButton() ];
+
+	if (mihomoRunning)
+		mihomoActions.unshift(runtimeIssueReportButton(takeover));
+	if (warning && state.id !== 'running') {
+		mihomoStatus = E('div', {}, [
+			mihomoStatus,
+			E('div', { 'class': 'localclash-muted' }, [ warning ])
+		]);
+	}
 
 	return E('table', { 'class': 'table cbi-section-table localclash-summary-table' }, [
 		E('tbody', {}, [
@@ -1456,11 +1455,11 @@ function summaryTable(data, takeover, task, state) {
 				E('th', { 'class': 'th', 'scope': 'col' }, [ _('目前状态') ]),
 				E('th', { 'class': 'th cbi-section-actions', 'scope': 'col' }, [ _('操作') ])
 			]),
-			summaryActionRow(_('Mihomo 核心'), statusBadge(mihomoSummary(data, status), mihomoRunning ? 'success' : 'warning'), [ recentTaskButton() ]),
+			summaryActionRow(_('Mihomo 核心'), mihomoStatus, mihomoActions),
 			E('tr', { 'class': 'tr cbi-rowstyle-1' }, [
 				E('td', { 'class': 'td', 'data-title': _('项目') }, [ _('网络接管') ]),
 				E('td', { 'class': 'td', 'data-title': _('目前状态') }, [
-					statusBadge(takeoverText, takeoverTone, { 'id': 'localclash-overview-takeover-status' })
+					statusBadge(takeoverText, takeoverTone(takeover), { 'id': 'localclash-overview-takeover-status' })
 				]),
 				E('td', { 'class': 'td cbi-section-actions', 'id': 'localclash-overview-takeover-actions' }, takeoverSummaryActions(takeover))
 			]),
@@ -1540,13 +1539,13 @@ function takeoverIssueLogs() {
 	});
 }
 
-function takeoverIssueButtonBusy(button, busy, label) {
+function issueReportButtonBusy(button, busy, label) {
 	button.disabled = busy;
 	button.textContent = busy ? _('正在收集诊断…') : label;
 	button.setAttribute('aria-busy', busy ? 'true' : 'false');
 }
 
-function downloadTakeoverReport(issue) {
+function downloadIssueReport(issue) {
 	var url = URL.createObjectURL(new Blob([ issue.full_report ], { type: 'text/plain;charset=utf-8' }));
 	var link = E('a', { href: url, download: issue.filename });
 	document.body.appendChild(link);
@@ -1555,16 +1554,16 @@ function downloadTakeoverReport(issue) {
 	window.setTimeout(function() { URL.revokeObjectURL(url); }, 0);
 }
 
-function showTakeoverReport(logs) {
-	var issue = takeoverIssueReport.buildGitHubIssue(logs);
+function showIssueReport(logs, issue, labels) {
+	var reportId = 'localclash-' + labels.kind + '-report';
 	var preview = E('textarea', {
-		'id': 'localclash-takeover-report-preview',
+		'id': reportId + '-preview',
 		'class': 'cbi-input-textarea localclash-copybox',
 		'readonly': 'readonly',
 		'rows': 16,
 		'aria-label': _('完整问题报告')
 	}, [ issue.full_report ]);
-	var status = E('p', { 'id': 'localclash-takeover-report-status' }, [
+	var status = E('p', { 'id': reportId + '-status', 'role': 'status' }, [
 		_('请检查报告内容。回报 GitHub 时上传完整文本文件作为附件，避免正文长度限制丢失日志。')
 	]);
 	function copyReport() {
@@ -1586,7 +1585,7 @@ function showTakeoverReport(logs) {
 			}
 			issueWindow.opener = null;
 			try {
-				downloadTakeoverReport(issue);
+				downloadIssueReport(issue);
 				status.textContent = _('请将刚下载的报告文件上传到 GitHub Issue 正文，确认附件上传完成后再提交。');
 				issueWindow.location.replace(issue.url);
 			}
@@ -1596,7 +1595,7 @@ function showTakeoverReport(logs) {
 			}
 		}
 	}, [ _('下载并打开 GitHub') ]);
-	ui.showModal(_('网络接管问题报告'), [
+	ui.showModal(labels.title, [
 		E('p', {}, [ logs.complete ? _('诊断已采集。') : _('部分证据未取得；报告已保留具体失败、原始输出和缺失原因。') ]),
 		status,
 		preview,
@@ -1604,10 +1603,10 @@ function showTakeoverReport(logs) {
 			E('button', {
 				type: 'button', 'class': 'btn cbi-button',
 				click: function() { return copyReport().catch(function() {}); }
-			}, [ _('复制完整报告') ]),
+			}, [ labels.copy ]),
 			E('button', {
 				type: 'button', 'class': 'btn cbi-button',
-				click: function() { downloadTakeoverReport(issue); }
+				click: function() { downloadIssueReport(issue); }
 			}, [ _('下载报告') ]),
 			githubButton,
 			E('button', {
@@ -1618,8 +1617,13 @@ function showTakeoverReport(logs) {
 	]);
 }
 
-function takeoverIssueReportButton() {
-	var label = _('生成问题报告');
+function showTakeoverReport(logs) {
+	showIssueReport(logs, takeoverIssueReport.buildGitHubIssue(logs), {
+		kind: 'takeover', title: _('网络接管问题报告'), copy: _('复制完整报告')
+	});
+}
+
+function issueReportButton(label, showReport) {
 	return E('button', {
 		type: 'button',
 		'class': 'btn cbi-button localclash-button',
@@ -1628,12 +1632,24 @@ function takeoverIssueReportButton() {
 			var button = ev.currentTarget;
 			if (button.disabled)
 				return null;
-			takeoverIssueButtonBusy(button, true, label);
-			return takeoverIssueLogs().then(showTakeoverReport).catch(showError).finally(function() {
-				takeoverIssueButtonBusy(button, false, label);
+			issueReportButtonBusy(button, true, label);
+			return takeoverIssueLogs().then(showReport).catch(showError).finally(function() {
+				issueReportButtonBusy(button, false, label);
 			});
 		}
 	}, [ label ]);
+}
+
+function takeoverIssueReportButton() {
+	return issueReportButton(_('生成问题报告'), showTakeoverReport);
+}
+
+function runtimeIssueReportButton(takeover) {
+	return issueReportButton(_('生成运行问题报告'), function(logs) {
+		showIssueReport(logs, takeoverIssueReport.buildRuntimeGitHubIssue(logs, takeover), {
+			kind: 'runtime', title: _('运行问题报告'), copy: _('复制日志和诊断')
+		});
+	});
 }
 
 function takeoverIssueReportBody() {

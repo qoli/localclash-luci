@@ -83,7 +83,17 @@ function evidenceJSON(source) {
 function reportSummary(logs) {
 	var lines = [ '## 已记录的失败与采集缺口', '' ];
 	var evidence = logs.evidence || {};
+	var observation = logs.runtime_observation;
 	var failure = evidenceJSON(evidence.last_failure);
+	if (observation) {
+		var dns = observation.dns || {};
+		if (observation.runtime_running === true && observation.controller_ready === false)
+			lines.push('- 概述页记录到 Mihomo 进程仍在运行，控制器未响应。');
+		if (dns.probe) {
+			var probe = dns.probe;
+			lines.push('- 概述页 DNS 检测 ' + probe.state + '（' + probe.observed_at + '，' + probe.query + '，接管路径 ' + dns.path + '）。');
+		}
+	}
 	if (failure) {
 		lines.push('- 最近失败：' + failure.timestamp + '；来源 ' + failure.source + '；阶段 ' + failure.stage + '；退出码 ' + failure.exit_code + '。');
 		if (failure.boot_id !== logs.boot_id)
@@ -124,10 +134,10 @@ function reportSummary(logs) {
 	return lines.join('\n') + '\n\n';
 }
 
-function fullReport(logs) {
+function fullReport(logs, title) {
 	logs = publicReport(logs);
 	return [
-		'# localClash 网络接管诊断报告',
+		'# ' + (title || 'localClash 网络接管诊断报告'),
 		'- 采集时间：' + (logs.collected_at || '旧版 helper 未提供采集时间'),
 		'- 采集完整：' + logs.complete + '（表示证据采集情况，不表示网络健康）',
 		'- Boot ID：' + logs.boot_id,
@@ -148,31 +158,56 @@ function fullReport(logs) {
 	].join('\n');
 }
 
-function buildGitHubIssue(logs) {
+function issueFromReport(logs, issue) {
 	validateReport(logs);
-	var title = '[Takeover] 网络接管问题 - boot ' + logs.boot_id.slice(0, 8);
-	var instructions = [
-		'## 问题描述',
-		'<!-- 请补充发生时间、受影响设备、实际现象和预期行为。 -->',
-		'',
-		'## 触发操作',
-		'<!-- 例如开机、更新、启动并接管、应用接管、WAN 重新拨号。 -->',
-		'',
-		'## 完整诊断报告',
+	var title = issue.title + ' - boot ' + logs.boot_id.slice(0, 8);
+	var instructions = issue.instructions.concat([
+		'', '## 完整诊断报告',
 		'此草稿尚未包含诊断。请将 LuCI 下载的完整 .txt 报告拖入正文作为附件上传，确认附件已上传后再提交。请保留完整文件，不要为了正文长度删减日志。'
-	].join('\n');
+	]).join('\n');
 	// No diagnostics in the query string: paste the full report or attach its file.
 	return {
 		title: title,
-		url: GITHUB_NEW_ISSUE_URL + '?template=takeover-report.md&title=' + encodeURIComponent(title) + '&body=' + encodeURIComponent(instructions),
-		full_report: fullReport(logs),
-		filename: 'localclash-takeover-' + logs.boot_id.replace(/[^a-zA-Z0-9-]/g, '_') + '.txt'
+		url: GITHUB_NEW_ISSUE_URL + '?template=' + issue.kind + '-report.md&title=' + encodeURIComponent(title) + '&body=' + encodeURIComponent(instructions),
+		full_report: fullReport(logs, issue.reportTitle),
+		filename: 'localclash-' + issue.kind + '-' + logs.boot_id.replace(/[^a-zA-Z0-9-]/g, '_') + '.txt'
 	};
+}
+
+function buildGitHubIssue(logs) {
+	return issueFromReport(logs, {
+		kind: 'takeover',
+		title: '[Takeover] 网络接管问题',
+		instructions: [
+			'## 问题描述',
+			'<!-- 请补充发生时间、受影响设备、实际现象和预期行为。 -->',
+			'',
+			'## 触发操作',
+			'<!-- 例如开机、更新、启动并接管、应用接管、WAN 重新拨号。 -->'
+		]
+	});
+}
+
+function buildRuntimeGitHubIssue(logs, takeover) {
+	var observation = takeover && takeover.ok === true ? takeover.status : null;
+	return issueFromReport(Object.assign({}, logs, { runtime_observation: observation }), {
+		kind: 'runtime',
+		title: '[Runtime] 运行问题',
+		reportTitle: 'localClash 运行诊断报告',
+		instructions: [
+			'## 问题描述',
+			'<!-- 请补充发生时间、受影响设备和域名、实际现象及预期行为。 -->',
+			'',
+			'## 复现步骤',
+			'<!-- 请说明当时是域名解析失败、网页打开慢，还是连接后传输不畅。 -->'
+		]
+	});
 }
 
 return baseclass.extend({
 	validateReport: validateReport,
 	buildPublicReport: publicReport,
 	buildFullReport: fullReport,
-	buildGitHubIssue: buildGitHubIssue
+	buildGitHubIssue: buildGitHubIssue,
+	buildRuntimeGitHubIssue: buildRuntimeGitHubIssue
 });

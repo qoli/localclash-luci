@@ -1986,6 +1986,14 @@ call_takeover() {
 	(cd / && LOCALCLASH_CORE="$CORE" LOCALCLASH_WORKDIR="$workdir" "$TAKEOVER_MANAGER" "$@") 2>>"$LOG"
 }
 
+takeover_status() {
+	if [ ! -t 0 ] && [ "$(jsonfilter -e '@.probe_dns' 2>/dev/null)" = true ]; then
+		call_takeover status --json --probe-dns
+	else
+		call_takeover status --json
+	fi
+}
+
 runtime_stop() {
 	local tmp takeover_tmp rc
 	tmp="/tmp/localclash-runtime-stop.$$.json"
@@ -5995,7 +6003,7 @@ case "$method" in
   "boot_restore_disable": {},
 	  "boot_restore_startup_run": {},
 	  "boot_restore_run": {},
-	  "takeover_status": {},
+	  "takeover_status": { "probe_dns": true },
 	  "takeover_logs": {},
 	  "takeover_apply": {},
   "takeover_restore": {},
@@ -6063,7 +6071,7 @@ JSON
 	boot_restore_disable) with_lock boot_restore_disable ;;
 	boot_restore_startup_run) with_lock boot_restore_startup_run ;;
 	boot_restore_run) with_lock boot_restore_run ;;
-	takeover_status) call_takeover status --json ;;
+	takeover_status) takeover_status ;;
 	takeover_logs) takeover_logs ;;
 	takeover_apply) with_lock takeover_apply ;;
 	takeover_restore) with_lock takeover_restore_run ;;
