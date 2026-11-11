@@ -130,6 +130,7 @@ var callLuciUpdateCheck = rpc.declare({
 var callMcpHelp = rpc.declare({
 	object: 'localclash',
 	method: 'mcp_help',
+	reject: true,
 	expect: { '': {} }
 });
 
@@ -173,21 +174,6 @@ function setText(id, text) {
 
 	if (node)
 		node.textContent = statusText(text);
-}
-
-function deferAfterPaint(fn, delay) {
-	var run = function() {
-		window.setTimeout(fn, delay || 0);
-	};
-
-	if (window.requestAnimationFrame) {
-		window.requestAnimationFrame(function() {
-			window.requestAnimationFrame(run);
-		});
-	}
-	else {
-		window.setTimeout(run, delay || 0);
-	}
 }
 
 function section(title, body, extraClass) {
@@ -1662,10 +1648,7 @@ function takeoverIssueReportBody() {
 }
 
 function mcpGuidanceBody(help) {
-	if (help && help.loading === true)
-		return E('p', { 'class': 'localclash-muted' }, [ _('正在加载 MCP 接入指令…') ]);
-
-	var text = (help && help.text) || '';
+	var text = help.text;
 	var rows = Math.max(10, text.split(/\r?\n/).length + 2);
 
 	return E('div', {}, [
@@ -1688,16 +1671,34 @@ function mcpGuidanceBody(help) {
 	]);
 }
 
-function supportAndDiagnostics(help) {
+function supportAndDiagnostics() {
+	var helpRequest;
+	var bodyId = 'localclash-overview-mcp-body';
+
 	return section(_('帮助与诊断'), E('div', { 'class': 'localclash-support-list' }, [
-		E('details', { 'class': 'localclash-support-item' }, [
+		E('details', {
+			'class': 'localclash-support-item',
+			'toggle': function(ev) {
+				if (!ev.currentTarget.open || helpRequest)
+					return;
+
+				replaceContent(bodyId, E('p', { 'class': 'localclash-muted' }, [ _('正在加载 MCP 接入指令…') ]));
+				helpRequest = callMcpHelp().then(function(help) {
+					if (!help || help.ok !== true || typeof help.text !== 'string')
+						throw new Error(help && (help.message || help.code) || _('未知错误'));
+					replaceContent(bodyId, mcpGuidanceBody(help));
+				}).catch(function(err) {
+					replaceContent(bodyId, E('p', {}, [ formatText(_('读取 MCP 接入指令失败：%s'), err.message || String(err)) ]));
+					helpRequest = null;
+				});
+				return helpRequest;
+			}
+		}, [
 			E('summary', {}, [
 				E('span', {}, [ _('Agent Skill 与 MCP 接入') ]),
 				E('small', {}, [ _('复制接入指令') ])
 			]),
-			E('div', { 'id': 'localclash-overview-mcp-body', 'class': 'localclash-support-body' }, [
-				mcpGuidanceBody(help)
-			])
+			E('div', { 'id': bodyId, 'class': 'localclash-support-body' })
 		]),
 		E('details', { 'class': 'localclash-support-item' }, [
 			E('summary', {}, [
@@ -1707,14 +1708,6 @@ function supportAndDiagnostics(help) {
 			E('div', { 'class': 'localclash-support-body' }, [ takeoverIssueReportBody() ])
 		])
 	]), 'localclash-support');
-}
-
-function refreshMcpGuidance() {
-	return callMcpHelp().catch(function(err) {
-		return { ok: false, text: '', message: err.message || String(err) };
-	}).then(function(help) {
-		replaceContent('localclash-overview-mcp-body', mcpGuidanceBody(help));
-	});
 }
 
 return view.extend({
@@ -1734,8 +1727,7 @@ return view.extend({
 
 		oneClickUpdatePreferencesData = results[0] || null;
 		dashboardURL = results[1];
-		deferAfterPaint(refreshOverviewStatus, 600);
-		deferAfterPaint(refreshMcpGuidance, 1200);
+		window.setTimeout(refreshOverviewStatus, 0);
 
 		return E('main', {
 			'class': 'cbi-map localclash-view localclash-overview',
@@ -1755,7 +1747,7 @@ return view.extend({
 				summaryLoadingTable()
 			]), 'localclash-summary'),
 			oneClickUpdateSection(),
-			supportAndDiagnostics({ loading: true })
+			supportAndDiagnostics()
 		]);
 	}
 });

@@ -308,21 +308,6 @@ function requireSubscriptionUrls() {
 	return uris;
 }
 
-function deferAfterPaint(fn, delay) {
-	var run = function() {
-		window.setTimeout(fn, delay || 0);
-	};
-
-	if (window.requestAnimationFrame) {
-		window.requestAnimationFrame(function() {
-			window.requestAnimationFrame(run);
-		});
-	}
-	else {
-		window.setTimeout(run, delay || 0);
-	}
-}
-
 function setSubscriptionLoadStatus(text, isError) {
 	var status = document.getElementById('localclash-subscription-load-status');
 
@@ -509,7 +494,7 @@ return view.extend({
 			'id': 'localclash-subscription-schedule-status',
 			'class': 'localclash-schedule-status'
 		}, [ scheduleStatusText(scheduleResult) ]);
-		deferAfterPaint(refreshSubscriptionInput, 600);
+		window.setTimeout(refreshSubscriptionInput, 0);
 
 		return E('div', { 'class': 'cbi-map localclash-view localclash-subscription' }, [
 			localclashStyle.stylesheet(),

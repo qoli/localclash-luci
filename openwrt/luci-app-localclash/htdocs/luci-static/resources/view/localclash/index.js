@@ -204,21 +204,6 @@ function defaultPatchStatusText(baseAssets) {
 	return _('缺失');
 }
 
-function deferAfterPaint(fn, delay) {
-	var run = function() {
-		window.setTimeout(fn, delay || 0);
-	};
-
-	if (window.requestAnimationFrame) {
-		window.requestAnimationFrame(function() {
-			window.requestAnimationFrame(run);
-		});
-	}
-	else {
-		window.setTimeout(run, delay || 0);
-	}
-}
-
 function takeoverFailureText(failure) {
 	var code = failure && failure.code ? String(failure.code) : '';
 	var message = failure && failure.message ? String(failure.message) : String(failure || '');
@@ -1042,10 +1027,10 @@ return view.extend({
 
 	render: function(url) {
 		dashboardURL = url;
-		deferAfterPaint(function() {
+		window.setTimeout(function() {
 			refreshStatus();
 			resumeTaskIfNeeded();
-		}, 600);
+		}, 0);
 
 		return E('div', { 'class': 'cbi-map localclash-view localclash-advanced' }, [
 			localclashStyle.stylesheet(),

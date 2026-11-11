@@ -83,6 +83,46 @@ async function testAdvancedStatus() {
 	assert.strictEqual(versionChecks, 1, 'an error table has no version row to refresh');
 }
 
+async function testMcpHelpDisclosure() {
+	let requests = 0;
+	let finishHelp;
+	const replacements = [];
+	const helpContext = vm.createContext({
+		_: value => value,
+		E: (tag, attrs, children) => ({ tag, attrs, children }),
+		section: (title, body) => body,
+		replaceContent: (id, content) => replacements.push({ id, content }),
+		formatText: (format, value) => format.replace('%s', value),
+		takeoverIssueReportBody: () => ({}),
+		mcpGuidanceBody: help => help.text,
+		callMcpHelp: () => {
+			requests++;
+			return new Promise(resolve => { finishHelp = resolve; });
+		}
+	});
+	vm.runInContext(functionSource(overviewSource, 'supportAndDiagnostics'), helpContext);
+	const disclosure = helpContext.supportAndDiagnostics().children[0];
+	const toggle = open => disclosure.attrs.toggle({ currentTarget: { open } });
+
+	toggle(false);
+	assert.strictEqual(requests, 0, 'a closed disclosure must not request MCP help');
+	const failed = toggle(true);
+	toggle(false);
+	toggle(true);
+	assert.strictEqual(requests, 1, 'reopening while help loads must reuse the first request');
+	finishHelp({ ok: false, message: 'unavailable' });
+	await failed;
+	assert.match(replacements.at(-1).content.children[0], /unavailable/);
+	const retried = toggle(true);
+	assert.strictEqual(requests, 2);
+	finishHelp({ ok: true, text: 'setup instructions' });
+	await retried;
+	assert.strictEqual(replacements.at(-1).content, 'setup instructions');
+	toggle(false);
+	toggle(true);
+	assert.strictEqual(requests, 2, 'reopening loaded help must not start another request');
+}
+
 let takeoverResult;
 const requests = [];
 const rendered = new Map();
@@ -134,6 +174,7 @@ assert.strictEqual(runtimeContext.runtimeWarning({ ...runtime, ok: false }), '')
 
 (async () => {
 	await testAdvancedStatus();
+	await testMcpHelpDisclosure();
 	const running = { id: 'running', title: '运行中' };
 	const runningData = { core: { installed: true }, status: { runtime: { running: true } } };
 	const mihomoRow = () => rendered.get('localclash-overview-summary-body').children[0].children[1];
