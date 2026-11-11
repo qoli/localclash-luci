@@ -36,12 +36,52 @@ assert.strictEqual(overviewContext.statusFailureMessage({
 	details: { core: { state: 'unavailable', exit_code: 2, error_excerpt: 'fatal error: SIGSEGV' } }
 }), 'Core cannot execute; state unknown · state=unavailable · exit=2 · fatal error: SIGSEGV');
 
-assert(indexSource.includes("data.ok === false ? advancedStatusErrorTable(statusFailureMessage(data))"), 'advanced page does not render typed backend failures as errors');
 assert(!indexSource.includes('data.ok === false && data.error'), 'advanced page still requires a transport-only error field');
 assert(overviewSource.includes('if (data.ok === false) {'), 'overview does not classify typed backend failures as status failures');
 assert(overviewSource.includes('message: statusFailureMessage(data)'), 'overview does not expose the typed backend failure message');
 assert(!overviewSource.includes('data.ok === false && data.error'), 'overview still treats typed backend failures as valid product state');
 assert.match(overviewSource, /method: 'takeover_status',\s+params: \[ 'probe_dns' \],\s+nobatch: true/, 'runtime status must finish independently of update checks');
+assert.match(indexSource, /method: 'luci_update_check',\s+nobatch: true/, 'advanced version checks must use a separate XHR');
+
+async function testAdvancedStatus() {
+	const rendered = [];
+	const versionCell = { textContent: 'installed version' };
+	let data = { ok: true };
+	let completeVersionCheck;
+	let versionChecks = 0;
+	let versionRequested;
+	const requested = new Promise(resolve => { versionRequested = resolve; });
+
+	Object.assign(context, {
+		callStatus: async () => data,
+		callTakeoverStatus: async () => ({ ok: true }),
+		callLuciUpdateCheck: () => {
+			versionChecks++;
+			versionRequested();
+			return new Promise((resolve, reject) => { completeVersionCheck = reject; });
+		},
+		replaceContent: (id, content) => rendered.push({ id, content }),
+		advancedStatusTable: () => 'local status',
+		advancedStatusErrorTable: message => message,
+		luciPackageSummary: (status, update) => update.message,
+		document: { getElementById: () => versionCell }
+	});
+	vm.runInContext(functionSource(indexSource, 'refreshStatus'), context);
+
+	const refresh = context.refreshStatus();
+	await requested;
+	assert.deepStrictEqual(rendered, [{ id: 'localclash-advanced-status-body', content: 'local status' }]);
+	assert.strictEqual(versionCell.textContent, 'installed version');
+	completeVersionCheck(new Error('version request timed out'));
+	await refresh;
+	assert.strictEqual(versionCell.textContent, 'version request timed out');
+	assert.strictEqual(rendered.length, 1, 'a version reply must update only its own row');
+
+	data = { ok: false, code: 'core_status_invalid' };
+	await context.refreshStatus();
+	assert.strictEqual(rendered[1].content, 'core_status_invalid');
+	assert.strictEqual(versionChecks, 1, 'an error table has no version row to refresh');
+}
 
 let takeoverResult;
 const requests = [];
@@ -93,6 +133,7 @@ assert.strictEqual(runtimeContext.runtimeWarning({ ...runtime, status: { ...runt
 assert.strictEqual(runtimeContext.runtimeWarning({ ...runtime, ok: false }), '');
 
 (async () => {
+	await testAdvancedStatus();
 	const running = { id: 'running', title: '运行中' };
 	const runningData = { core: { installed: true }, status: { runtime: { running: true } } };
 	const mihomoRow = () => rendered.get('localclash-overview-summary-body').children[0].children[1];

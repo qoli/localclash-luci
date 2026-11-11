@@ -132,6 +132,7 @@ var callLuciUpdate = rpc.declare({
 var callLuciUpdateCheck = rpc.declare({
 	object: 'localclash',
 	method: 'luci_update_check',
+	nobatch: true,
 	expect: { '': {} }
 });
 
@@ -367,14 +368,14 @@ function takeoverDetails(takeover) {
 	];
 }
 
-function statusRow(item, value) {
+function statusRow(item, value, id) {
 	return E('tr', { 'class': 'tr cbi-rowstyle-1' }, [
 		E('td', { 'class': 'td', 'data-title': _('项目') }, [ item ]),
-		E('td', { 'class': 'td', 'data-title': _('目前状态') }, [ statusText(value) ])
+		E('td', { 'id': id, 'class': 'td', 'data-title': _('目前状态') }, [ statusText(value) ])
 	]);
 }
 
-function advancedStatusTable(data, takeover, updateCheck) {
+function advancedStatusTable(data, takeover) {
 	var core = data.core || {};
 	var baseAssets = data.base_assets || {};
 	var runtimeProfile = data.runtime_profile || {};
@@ -392,7 +393,7 @@ function advancedStatusTable(data, takeover, updateCheck) {
 			statusRow(_('localClash 核心'), statusWithDetails(core.installed ? _('已安装') : _('缺失'), [
 				core.path
 			])),
-			statusRow(_('LuCI 界面'), luciPackageSummary(data, updateCheck)),
+			statusRow(_('LuCI 界面'), luciPackageSummary(data), 'localclash-advanced-luci-version'),
 			statusRow(_('基础文件'), statusWithDetails(baseAssets.installed ? _('已安装') : _('缺失'), [
 				baseAssets.path,
 				baseAssets.missing ? 'missing=' + baseAssets.missing : null
@@ -510,10 +511,16 @@ function refreshStatus() {
 		var data = results[0] || {};
 		var takeover = results[1] || {};
 
+		replaceContent('localclash-advanced-status-body', data.ok === false ? advancedStatusErrorTable(statusFailureMessage(data)) : advancedStatusTable(data, takeover));
+		if (data.ok === false)
+			return;
+
 		return callLuciUpdateCheck().catch(function(err) {
 			return { ok: false, message: err.message || String(err) };
 		}).then(function(updateCheck) {
-			replaceContent('localclash-advanced-status-body', data.ok === false ? advancedStatusErrorTable(statusFailureMessage(data)) : advancedStatusTable(data, takeover, updateCheck || {}));
+			var version = document.getElementById('localclash-advanced-luci-version');
+			if (version)
+				version.textContent = luciPackageSummary(data, updateCheck);
 		});
 	});
 }
