@@ -45,6 +45,7 @@ function loadView(view) {
 		markTaskSeen: () => {},
 		callBootstrapTaskStatus: taskStatus,
 		callTaskStatus: taskStatus,
+		updateOneClickUpdateButton: task => { state.oneClickTask = task; },
 		callBootstrapLogs: async () => ({ logs: ['restart phase'] }),
 		showTaskModal: (title, cancellable, options) => {
 			const modal = { title, cancellable, options };
@@ -69,6 +70,17 @@ function task(fields) {
 
 function click(button) {
 	return button.attrs.click({ preventDefault() {}, currentTarget: button });
+}
+
+function resumeTask(test, view, running, terminal) {
+	if (view === 'overview') {
+		// The overview already has the initial status. The resumed task reads
+		// status again after completion to update the one-click button.
+		test.state.statuses.push(terminal, terminal);
+		return test.context.resumeTaskIfNeeded(running);
+	}
+	test.state.statuses.push(running, terminal);
+	return test.context.resumeTaskIfNeeded();
 }
 
 async function testView(view) {
@@ -111,18 +123,20 @@ async function testView(view) {
 	assert.strictEqual(JSON.parse(test.modal().resultOutput.textContent).code, 'restore_failed');
 
 	test = loadView(view);
-	test.state.statuses.push(task({ running: true, started_at: 123 }), task({ done: true, result: { ok: true } }));
-	await test.context.resumeTaskIfNeeded();
+	const running = task({ running: true, started_at: 123 });
+	const terminal = task({ done: true, running: false, result: { ok: true } });
+	await resumeTask(test, view, running, terminal);
 	assert.strictEqual(test.modal().title, '重启');
 	assert.strictEqual(test.modal().cancellable, false, view + ': resumed restart permits cancellation');
 	assert.strictEqual(test.modal().options.task.task_id, 'restart-123');
 	assert.strictEqual(test.modal().options.startedAt, 123);
-	await test.context.resumeTaskIfNeeded();
+	if (view === 'overview')
+		assert.strictEqual(test.state.oneClickTask, terminal, 'one-click button did not receive final task status');
+	await test.context.resumeTaskIfNeeded(view === 'overview' ? running : undefined);
 	assert.strictEqual(test.state.modals.length, 1, view + ': duplicated resume modal');
 
 	test = loadView(view);
-	test.state.statuses.push(task({ running: true }), task({ task_id: 'replacement', done: true, result: { ok: true } }));
-	await test.context.resumeTaskIfNeeded();
+	await resumeTask(test, view, running, task({ task_id: 'replacement', done: true, result: { ok: true } }));
 	assert.match(test.modal().statusLine.textContent, /任务失败.*任务记录已变化/,
 		view + ': resume did not preserve task identity');
 
