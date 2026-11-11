@@ -1,7 +1,21 @@
 'use strict';
 'require baseclass';
+'require rpc';
+
+var callDashboardConfig = rpc.declare({
+	object: 'localclash',
+	method: 'dashboard_config',
+	reject: true,
+	expect: { '': {} }
+});
 
 return baseclass.extend({
+	loadURL: function(pageLocation) {
+		return callDashboardConfig().then(function(result) {
+			return this.buildURL(result.config, pageLocation);
+		}.bind(this));
+	},
+
 	configValue: function(config, key) {
 		if (typeof config !== 'string')
 			throw new Error('Mihomo config must be a string');

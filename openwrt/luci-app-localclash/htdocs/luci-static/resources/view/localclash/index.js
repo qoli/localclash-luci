@@ -3,7 +3,6 @@
 'require rpc';
 'require ui';
 'require localclash.style as localclashStyle';
-'require fs';
 'require localclash.dashboard as dashboardAccess';
 
 var callStatus = rpc.declare({
@@ -13,7 +12,6 @@ var callStatus = rpc.declare({
 });
 
 var dashboardURL = null;
-var DASHBOARD_CONFIG_PATH = '/root/localclash/.runtime/mihomo/config.yaml';
 var callBootstrapCoreAsync = rpc.declare({
 	object: 'localclash',
 	method: 'bootstrap_core_async',
@@ -980,12 +978,6 @@ function workspaceResetControls() {
 	]);
 }
 
-function loadDashboardURL() {
-	return fs.read(DASHBOARD_CONFIG_PATH).then(function(config) {
-		return dashboardAccess.buildURL(config, window.location);
-	});
-}
-
 function dashboardLink(extraClass) {
 	return E('a', {
 		'class': 'btn cbi-button localclash-button ' + (extraClass || ''),
@@ -1022,7 +1014,7 @@ function bootRestoreControls() {
 
 return view.extend({
 	load: function() {
-		return loadDashboardURL().catch(function() { return null; });
+		return dashboardAccess.loadURL(window.location).catch(function() { return null; });
 	},
 
 	render: function(url) {

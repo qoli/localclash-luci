@@ -3,7 +3,6 @@
 'require rpc';
 'require ui';
 'require localclash.style as localclashStyle';
-'require fs';
 'require localclash.dashboard as dashboardAccess';
 'require localclash.takeover-issue-report as takeoverIssueReport';
 
@@ -137,7 +136,6 @@ var callMcpHelp = rpc.declare({
 var lastOverviewStatusData = null;
 var oneClickUpdatePreferencesData = null;
 var dashboardURL = null;
-var DASHBOARD_CONFIG_PATH = '/root/localclash/.runtime/mihomo/config.yaml';
 
 function statusText(value) {
 	if (value === null || value === undefined || value === '')
@@ -594,12 +592,6 @@ function linkButton(label, href, extraClass) {
 			window.location.href = href;
 		}
 	}, [ label ]);
-}
-
-function loadDashboardURL() {
-	return fs.read(DASHBOARD_CONFIG_PATH).then(function(config) {
-		return dashboardAccess.buildURL(config, window.location);
-	});
 }
 
 function dashboardLink(extraClass) {
@@ -1714,7 +1706,7 @@ return view.extend({
 	load: function() {
 		return Promise.all([
 			callOneClickUpdatePreferences().catch(function() { return null; }),
-			loadDashboardURL().catch(function() { return null; })
+			dashboardAccess.loadURL(window.location).catch(function() { return null; })
 		]);
 	},
 

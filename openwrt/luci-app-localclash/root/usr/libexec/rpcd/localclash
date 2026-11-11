@@ -2669,6 +2669,31 @@ status_error_excerpt() {
 	sed -n '1,8p' "$path" 2>/dev/null | redact_diagnostic_stream | tr '\n\r\t' '   ' | cut -c1-480
 }
 
+dashboard_config() {
+	local config snippet
+	config="$STATE_DIR/.runtime/mihomo/config.yaml"
+	# Keep the YAML values intact for the Dashboard link parser in LuCI.
+	if ! snippet="$(LC_ALL=C awk '
+		/^(external-controller|external-ui|secret):/ {
+			key = substr($0, 1, index($0, ":") - 1)
+			if (seen[key]++)
+				next
+			gsub(/\\/, "\\\\&")
+			gsub(/"/, "\\\\&")
+			gsub(/\t/, "\\t")
+			gsub(/\r/, "\\r")
+			printf "%s%s", sep, $0
+			sep = "\\n"
+			if (++count == 3)
+				exit
+		}
+	' "$config" 2>/dev/null)"; then
+		fail "dashboard_config_unavailable" "无法读取 Mihomo 的 Dashboard 配置。"
+		return 1
+	fi
+	ok '"config":"'"$snippet"'"'
+}
+
 mcp_help() {
 	endpoint="$(mcp_endpoint)"
 	if [ -f "$MCP_HELP" ]; then
@@ -5969,6 +5994,7 @@ case "$method" in
 		cat <<'JSON'
 {
 	  "status": {},
+	  "dashboard_config": {},
 	  "subscription_get": {},
 	  "subscription_set": { "uris": [] },
 	  "subscription_setup": { "uris": [] },
@@ -6026,6 +6052,7 @@ case "$method" in
 JSON
 		;;
 	status) status ;;
+	dashboard_config) dashboard_config ;;
 	subscription_get) subscription_get ;;
 	subscription_set) subscription_set ;;
 	subscription_setup) with_lock subscription_setup ;;
