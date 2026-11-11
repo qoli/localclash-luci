@@ -794,6 +794,9 @@ luci_update_retry() {
 	shift
 	attempt=1
 	while [ "$attempt" -le "$LUCI_UPDATE_MAX_ATTEMPTS" ]; do
+		if bounded_stage_expired; then
+			return 124
+		fi
 		if "$@"; then
 			if [ "$attempt" -gt 1 ]; then
 				log_line "LuCI 更新：${label}在第 ${attempt}/${LUCI_UPDATE_MAX_ATTEMPTS} 次尝试成功"
@@ -930,6 +933,10 @@ luci_update() {
 		rm -rf "$tmpdir"
 		fail_with_details "luci_package_metadata_invalid" "LuCI 安装包的套件名称或架构不兼容，已在调用包管理器前拒绝。" '"install_output":"'"$install_excerpt"'","package_manager":"'"$(json_escape "$manager")"'","target_version":"'"$(json_escape "$asset_version")"'"'
 		return 1
+	fi
+	if bounded_stage_expired; then
+		rm -rf "$tmpdir"
+		return 124
 	fi
 	log_line "LuCI 更新：sha256 校验通过，正在安装"
 	luci_update_install_package "$manager" "$package" "$install_log"
@@ -1286,36 +1293,53 @@ run_with_heartbeat_until_complete() {
 	run_with_heartbeat_timeout 0 "$@"
 }
 
+bounded_stage_expired() {
+	[ -n "${bounded_stage_deadline:-}" ] && [ "$(now_epoch)" -ge "$bounded_stage_deadline" ]
+}
+
 run_with_heartbeat_timeout() {
-	local timeout label output tmp_output pid elapsed rc
+	local timeout label output tmp_output pid started elapsed delay remaining rc timed_out bounded_stage_deadline
 	timeout="$1"
 	label="$2"
 	output="$3"
 	shift 3
-	elapsed=0
+	started="$(now_epoch)"
+	timed_out=false
+	bounded_stage_deadline=""
+	if [ "$timeout" -gt 0 ]; then
+		bounded_stage_deadline=$((started + timeout))
+	fi
 	tmp_output="${output}.run.$$"
 	rm -f "$tmp_output"
 	( "$@" > "$tmp_output" ) &
 	pid="$!"
 	while kill -0 "$pid" 2>/dev/null; do
-		sleep "$TASK_HEARTBEAT_INTERVAL"
+		delay="$TASK_HEARTBEAT_INTERVAL"
+		if [ -n "$bounded_stage_deadline" ]; then
+			remaining=$((bounded_stage_deadline - $(now_epoch)))
+			[ "$remaining" -ge "$delay" ] || delay="$remaining"
+		fi
+		[ "$delay" -le 0 ] || sleep "$delay"
 		if kill -0 "$pid" 2>/dev/null; then
-			elapsed=$((elapsed + TASK_HEARTBEAT_INTERVAL))
+			elapsed=$(($(now_epoch) - started))
 			log_line "${label}：仍在执行（${elapsed}s）"
-			if [ "$timeout" -gt 0 ] && [ "$elapsed" -ge "$timeout" ]; then
+			if bounded_stage_expired; then
 				log_line "${label}：超过 ${timeout}s，已停止等待"
+				timed_out=true
 				kill_process_tree -TERM "$pid"
 				sleep 2
 				kill_process_tree -KILL "$pid"
-				wait "$pid" 2>/dev/null || true
-				rm -f "$tmp_output"
-				printf '{"ok":false,"code":"step_timeout","message":"%s 超时，请检查路由器是否能访问下载源，或稍后重试。","details":{"timeout_seconds":%s},"next_actions":["确认路由器可以访问下载源后重试。"]}\n' "$(json_escape "$label")" "$timeout" > "$output"
-				return 124
+				break
 			fi
 		fi
 	done
-	wait "$pid"
-	rc="$?"
+	rc=0
+	wait "$pid" || rc="$?"
+	if [ "$timed_out" = true ] || { [ "$rc" -ne 0 ] && bounded_stage_expired; }; then
+		rm -f "$tmp_output"
+		printf '{"ok":false,"code":"step_timeout","message":"%s 超时，请检查路由器是否能访问下载源，或稍后重试。","details":{"timeout_seconds":%s},"next_actions":["确认路由器可以访问下载源后重试。"]}\n' "$(json_escape "$label")" "$timeout" > "$output"
+		return 124
+	fi
 	if [ -f "$tmp_output" ]; then
 		mv "$tmp_output" "$output"
 	else
@@ -1325,27 +1349,36 @@ run_with_heartbeat_timeout() {
 }
 
 fetch_single_url() {
-	local url output downloader stderr_file started completed elapsed rc bytes host line failure_reason
+	local url output downloader stderr_file started completed elapsed rc bytes host line failure_reason timeout remaining
 	url="$1"
 	output="$2"
 	host="$(download_url_host "$url")"
 	stderr_file="${output}.fetch-stderr.$$"
 	started="$(now_epoch)"
+	timeout="$FETCH_TIMEOUT"
+	if [ -n "${bounded_stage_deadline:-}" ]; then
+		remaining=$((bounded_stage_deadline - started))
+		if [ "$remaining" -le 0 ]; then
+			log_line "下载：当前步骤已超时，未开始请求 host=$host"
+			return 124
+		fi
+		[ "$remaining" -ge "$timeout" ] || timeout="$remaining"
+	fi
 	rm -f "$stderr_file" "$output"
 	if command -v uclient-fetch >/dev/null 2>&1; then
 		downloader="uclient-fetch"
-		log_line "下载：开始 downloader=$downloader host=$host timeout=${FETCH_TIMEOUT}s"
-		fetch_with_watchdog "$url" uclient-fetch -T "$FETCH_TIMEOUT" -q -O "$output" "$url" 2>"$stderr_file"
+		log_line "下载：开始 downloader=$downloader host=$host timeout=${timeout}s"
+		fetch_with_watchdog "$url" "$timeout" uclient-fetch -T "$timeout" -q -O "$output" "$url" 2>"$stderr_file"
 		rc=$?
 	elif command -v wget >/dev/null 2>&1; then
 		downloader="wget"
-		log_line "下载：开始 downloader=$downloader host=$host timeout=${FETCH_TIMEOUT}s"
-		fetch_with_watchdog "$url" wget -T "$FETCH_TIMEOUT" -q -O "$output" "$url" 2>"$stderr_file"
+		log_line "下载：开始 downloader=$downloader host=$host timeout=${timeout}s"
+		fetch_with_watchdog "$url" "$timeout" wget -T "$timeout" -q -O "$output" "$url" 2>"$stderr_file"
 		rc=$?
 	elif command -v curl >/dev/null 2>&1; then
 		downloader="curl"
-		log_line "下载：开始 downloader=$downloader host=$host timeout=${FETCH_TIMEOUT}s"
-		fetch_with_watchdog "$url" curl --max-time "$FETCH_TIMEOUT" -fsSL "$url" -o "$output" 2>"$stderr_file"
+		log_line "下载：开始 downloader=$downloader host=$host timeout=${timeout}s"
+		fetch_with_watchdog "$url" "$timeout" curl --max-time "$timeout" -fsSL "$url" -o "$output" 2>"$stderr_file"
 		rc=$?
 	else
 		log_line "下载：失败 reason=downloader_missing host=$host"
@@ -1435,9 +1468,10 @@ log_download_dns_context() {
 }
 
 fetch_with_watchdog() {
-	local label pid watchdog elapsed rc watchdog_dir timeout_marker
+	local label timeout pid watchdog elapsed delay remaining rc watchdog_dir timeout_marker
 	label="$1"
-	shift
+	timeout="$2"
+	shift 2
 	watchdog_dir="$(mktemp -d /tmp/localclash-fetch-watchdog.XXXXXX)" || {
 		log_line "下载：失败 reason=watchdog_state_unavailable"
 		return 1
@@ -1448,13 +1482,16 @@ fetch_with_watchdog() {
 	(
 		elapsed=0
 		while kill -0 "$pid" 2>/dev/null; do
-			sleep 5
+			remaining=$((timeout - elapsed))
+			delay=5
+			[ "$remaining" -ge "$delay" ] || delay="$remaining"
+			sleep "$delay"
 			if kill -0 "$pid" 2>/dev/null; then
-				elapsed=$((elapsed + 5))
+				elapsed=$((elapsed + delay))
 				log_line "下载：等待 ${label}（${elapsed}s）"
-				if [ "$elapsed" -ge "$FETCH_TIMEOUT" ]; then
+				if [ "$elapsed" -ge "$timeout" ]; then
 					: > "$timeout_marker"
-					log_line "下载：超时 ${label} timeout=${FETCH_TIMEOUT}s"
+					log_line "下载：超时 ${label} timeout=${timeout}s"
 					kill "$pid" 2>/dev/null || exit 0
 					sleep 2
 					kill -9 "$pid" 2>/dev/null || true
@@ -1682,6 +1719,10 @@ commit_download_output() {
 	local tmp output
 	tmp="$1"
 	output="$2"
+	if bounded_stage_expired; then
+		rm -f "$tmp"
+		return 124
+	fi
 	if mv "$tmp" "$output"; then
 		return 0
 	fi

@@ -26,4 +26,46 @@ grep -q 'run_with_heartbeat_until_complete "一键更新：正在刷新订阅"' 
 grep -q 'run_with_heartbeat_until_complete "一键更新：正在同步最新默认策略"' "$helper"
 grep -q 'run_with_heartbeat_until_complete "订阅设置：正在刷新订阅"' "$helper"
 
+if run_with_heartbeat "限时下载测试" "$output" sh -c 'sleep 20'; then
+	printf 'test-rpcd-task-timeout: bounded step unexpectedly succeeded\n' >&2
+	exit 1
+else
+	[ "$?" -eq 124 ]
+fi
+grep -q '"code":"step_timeout"' "$output"
+
+(
+	calls="${tmp_dir}/fetch-calls"
+	FETCH_TIMEOUT=120
+	now_epoch() { printf '100\n'; }
+	uclient-fetch() {
+		printf '%s\n' "$*" >> "$calls"
+		while [ "$#" -gt 1 ]; do
+			if [ "$1" = -O ]; then
+				printf 'payload\n' > "$2"
+				return 0
+			fi
+			shift
+		done
+		return 1
+	}
+	bounded_stage_deadline=103
+	fetch_single_url https://example.invalid/first "${tmp_dir}/payload"
+	grep -q '^-T 3 ' "$calls"
+
+	bounded_stage_deadline=100
+	if fetch_single_url https://example.invalid/late "${tmp_dir}/late"; then
+		exit 1
+	else
+		[ "$?" -eq 124 ]
+	fi
+	if luci_update_retry "重试测试" fetch_single_url https://example.invalid/retry "${tmp_dir}/retry"; then
+		exit 1
+	else
+		[ "$?" -eq 124 ]
+	fi
+	[ "$(wc -l < "$calls" | tr -d ' ')" -eq 1 ]
+	[ ! -e "${tmp_dir}/late" ] && [ ! -e "${tmp_dir}/retry" ]
+)
+
 printf 'test-rpcd-task-timeout: PASS\n'
