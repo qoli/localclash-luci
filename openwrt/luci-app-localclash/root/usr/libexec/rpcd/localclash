@@ -4088,10 +4088,6 @@ pool_schedule_config_value() {
 	"$UCI_BIN" -q get "localclash.pool_schedule.$1" 2>/dev/null || printf '%s\n' "$2"
 }
 
-pool_capability_disabled() {
-	[ "$(jsonfilter -i "$STATE_DIR/localclash-runtime.json" -e '@.pools_disabled' 2>/dev/null)" = true ]
-}
-
 pool_capability_get() {
 	local result enabled
 	if result="$(call_core config pools --json)"; then
@@ -4106,6 +4102,15 @@ pool_capability_get() {
 	fi
 	fail "pool_capability_unavailable" "更新 localClash 核心后可设置线路池开关。"
 	return 1
+}
+
+pool_capability_value() {
+	local result
+	result="$(pool_capability_get)" || {
+		printf '%s\n' "$result"
+		return 1
+	}
+	jsonfilter -s "$result" -e '@.status.enabled' 2>/dev/null
 }
 
 start_pool_capability_set() {
@@ -4226,7 +4231,7 @@ pool_schedule_get() {
 			fi
 		fi
 	fi
-	if [ "$enabled" != true ] || pool_capability_disabled || ! "$POOL_SCHEDULER_SERVICE" running >/dev/null 2>&1; then
+	if [ "$enabled" != true ] || ! "$POOL_SCHEDULER_SERVICE" running >/dev/null 2>&1 || [ "$(pool_capability_value)" != true ]; then
 		next_run=
 	fi
 	printf '{"ok":true,"available":%s,"schedule":{"enabled":%s,"period":"%s"},"next_run_at":"%s","last_run_at":"%s","outcome":"%s"}\n' \
@@ -4234,7 +4239,11 @@ pool_schedule_get() {
 }
 
 pool_schedule_service_apply() {
-	if [ "$1" = 1 ] && ! pool_capability_disabled; then
+	local pool_enabled=false
+	if [ "$1" = 1 ]; then
+		pool_enabled="$(pool_capability_value)" || return 1
+	fi
+	if [ "$pool_enabled" = true ]; then
 		LOCALCLASH_STATE_DIR="$STATE_DIR" "$POOL_SCHEDULER_SERVICE" enable &&
 			LOCALCLASH_STATE_DIR="$STATE_DIR" "$POOL_SCHEDULER_SERVICE" restart
 	else
@@ -4246,7 +4255,7 @@ pool_schedule_service_apply() {
 }
 
 pool_schedule_set() {
-	local payload enabled period arch previous_section previous_enabled previous_period rollback_rc
+	local payload enabled period pool_enabled arch previous_section previous_enabled previous_period rollback_rc
 	payload="$(strip_ubus_rpc_session "$(cat)")"
 	enabled="$(jsonfilter -s "$payload" -e '@.enabled' 2>/dev/null || true)"
 	period="$(jsonfilter -s "$payload" -e '@.period' 2>/dev/null || true)"
@@ -4263,8 +4272,12 @@ pool_schedule_set() {
 		fail "pool_scheduler_service_missing" "线路池定时更新服务未安装。"
 		return 1
 	}
-	if [ "$enabled" = 1 ] && ! pool_capability_disabled; then
-		if ! arch="$(router_arch)" || [ ! -x "$STATE_DIR/bin/linux-$arch/localclash-pools" ]; then
+	if [ "$enabled" = 1 ]; then
+		pool_enabled="$(pool_capability_value)" || {
+			printf '%s\n' "$pool_enabled"
+			return 1
+		}
+		if [ "$pool_enabled" = true ] && { ! arch="$(router_arch)" || [ ! -x "$STATE_DIR/bin/linux-$arch/localclash-pools" ]; }; then
 			fail "pool_worker_missing" "请先更新 localClash 核心和基础资产，再启用线路池定时更新。"
 			return 1
 		fi

@@ -32,9 +32,9 @@ uci() {
 jsonfilter() {
 	local value="$2" expression="$4"
 	if [ "$1" = -i ]; then
-		jq -er ".${expression#@.}" "$value"
+		jq -er ".${expression#@.} | select(. != null) | tostring" "$value"
 	else
-		printf '%s\n' "$value" | jq -er ".${expression#@.}"
+		printf '%s\n' "$value" | jq -er ".${expression#@.} | select(. != null) | tostring"
 	fi
 }
 POOL_SCHEDULER_SERVICE="$test_dir/service"
@@ -57,7 +57,28 @@ esac
 SERVICE
 chmod +x "$POOL_SCHEDULER_SERVICE"
 
+CORE="$test_dir/localclash"
+cat > "$CORE" <<'CORE'
+#!/bin/sh
+set -eu
+[ "$1:$2" = config:pools ] || exit 1
+[ "${LOCALCLASH_TEST_POOL_READ_FAIL:-0}" = 0 ] || exit 1
+profile="$LOCALCLASH_WORKDIR/localclash-runtime.json"
+enabled="${LOCALCLASH_TEST_POOL_DEFAULT:-false}"
+if [ "$3" = --enabled ]; then
+	enabled="$4"
+	jq -n --argjson enabled "$enabled" '{pools_disabled: ($enabled | not)}' > "$profile"
+elif [ -f "$profile" ]; then
+	enabled="$(jq -r --argjson default "$enabled" 'if .pools_disabled == null then $default else (.pools_disabled | not) end' "$profile")"
+fi
+jq -n --argjson enabled "$enabled" '{ok:true,status:{enabled:$enabled}}'
+CORE
+chmod +x "$CORE"
+export LOCALCLASH_CORE="$CORE"
+
 pool_schedule_get | jq -e '.schedule == {"enabled":false,"period":"15m"} and .available == false' >/dev/null
+pool_capability_get | jq -e '.status.enabled == false' >/dev/null
+apply_pool_capability true | jq -e '.status.enabled == true' >/dev/null
 if result="$(printf '{"enabled":true,"period":"15m"}\n' | pool_schedule_set)"; then
 	echo "Enabled without pool worker" >&2
 	exit 1
@@ -90,6 +111,17 @@ if result="$(printf '{"enabled":true,"period":"30m"}\n' | pool_schedule_set)"; t
 	exit 1
 fi
 pool_schedule_get | jq -e '.schedule == {"enabled":true,"period":"daily-08"}' >/dev/null
+if result="$(printf '{"enabled":true,"period":"30m"}\n' | LOCALCLASH_TEST_POOL_READ_FAIL=1 pool_schedule_set)"; then
+	echo "Saved a new schedule without reading the pool setting" >&2
+	exit 1
+fi
+printf '%s\n' "$result" | jq -e '.code == "pool_capability_unavailable"' >/dev/null
+if LOCALCLASH_TEST_POOL_READ_FAIL=1 pool_schedule_service_apply 1; then
+	echo "Reconciled the scheduler without reading the pool setting" >&2
+	exit 1
+fi
+[ -f "$test_dir/enabled" ] && [ -f "$test_dir/running" ]
+pool_schedule_get | jq -e '.schedule.period == "daily-08"' >/dev/null
 
 procd_open_instance() { printf '%s\n' "$1" > "$test_dir/instance"; }
 procd_set_param() {
@@ -103,18 +135,17 @@ grep -qx pool_scheduler "$test_dir/instance"
 printf '%s\n' command "$worker" schedule --runtime "$STATE_DIR/.runtime/mihomo" --period daily-08 | cmp - "$test_dir/command"
 grep -qx 'TZ=Asia/Shanghai' "$test_dir/env"
 
-call_core() {
-	[ "$1:$2" = config:pools ] || return 1
-	local enabled=true profile="$STATE_DIR/localclash-runtime.json"
-	if [ "$3" = --enabled ]; then
-		enabled="$4"
-		jq -n --argjson enabled "$enabled" '{pools_disabled: ($enabled | not)}' > "$profile"
-	elif [ -f "$profile" ]; then
-		enabled="$(jq -r '.pools_disabled | not' "$profile")"
-	fi
-	jq -n --argjson enabled "$enabled" '{ok:true,status:{enabled:$enabled}}'
-}
-pool_capability_get | jq -e '.status.enabled == true' >/dev/null
+mkdir -p "$STATE_DIR/.runtime/mihomo/qualified-pools"
+printf '{"next_run_at":"2026-11-13T08:00:00+08:00"}\n' > "$STATE_DIR/.runtime/mihomo/qualified-pools/schedule.json"
+pool_schedule_get | jq -e '.next_run_at == "2026-11-13T08:00:00+08:00"' >/dev/null
+printf '{"version":2,"mode":"router","core":"meta"}\n' > "$STATE_DIR/localclash-runtime.json"
+rm "$test_dir/instance"
+start_service
+[ ! -f "$test_dir/instance" ]
+pool_schedule_get | jq -e '.schedule.enabled == true and .next_run_at == ""' >/dev/null
+LOCALCLASH_TEST_POOL_DEFAULT=true start_service
+grep -qx pool_scheduler "$test_dir/instance"
+
 apply_pool_capability false | jq -e '.status.enabled == false' >/dev/null
 [ ! -f "$test_dir/enabled" ] && [ ! -f "$test_dir/running" ]
 pool_schedule_get | jq -e '.schedule == {"enabled":true,"period":"daily-08"} and .next_run_at == ""' >/dev/null
