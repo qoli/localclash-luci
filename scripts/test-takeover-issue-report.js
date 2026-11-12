@@ -99,6 +99,66 @@ const partialReport = report.buildFullReport(partial);
 for (const text of [ '不是完整 JSON', 'file_read_failed', '省略较早的 50 行', 'ORIGINAL_STDERR', '另一轮开机' ])
 	assert(partialReport.includes(text), text);
 
+function summaryOf(reportText) {
+	return reportText.slice(0, reportText.indexOf('<details'));
+}
+
+function hotplugEvent(second, event, fields) {
+	return JSON.stringify({
+		boot_id: fixture.boot_id, source: 'iface_hotplug',
+		timestamp: '2026-11-12T02:28:' + second + '+08:00', uptime_seconds: 500 + Number(second),
+		event, ...fields
+	});
+}
+
+const recoveryFixture = {
+	...fixture,
+	evidence: { last_failure: { available: false, exit_code: 1, reason: 'file_missing', lines: [] } },
+	events: [
+		hotplugEvent('13', 'repair_apply_finished', { event_id: '4206', result: 'failure', core_code: 'takeover_apply_verification_failed' }),
+		hotplugEvent('13', 'restore_finished', { event_id: '4206', result: 'failure', exit_code: '1' }),
+		hotplugEvent('14', 'restore_finished', { boot_id: 'another-boot', event_id: '9', result: 'already_effective' }),
+		hotplugEvent('15', 'restore_finished', { event_id: '5170', result: 'success', exit_code: '0' }),
+		hotplugEvent('16', 'worker_finished', { source: 'net_hotplug', result: 'success', exit_code: '0' }),
+		hotplugEvent('12', 'repair_apply_finished', { event_id: '100', result: 'success' }),
+		hotplugEvent('27', 'repair_apply_finished', { event_id: '6983', result: 'success' }),
+		hotplugEvent('28', 'restore_finished', { event_id: '6983', result: 'success', exit_code: '0' }),
+		hotplugEvent('30', 'restore_started', { event_id: '4206' }),
+		hotplugEvent('31', 'restore_finished', { event_id: '4206', result: 'failure', exit_code: '1' }),
+		hotplugEvent('32', 'runtime_restart_finished', { event_id: '6600', result: 'success', takeover_transition: 'preserved_inactive' }),
+		hotplugEvent('33', 'repair_apply_finished', { boot_id: 'another-boot', result: 'failure', core_code: 'other_boot_failure' }),
+		'{"event":',
+		'null'
+	]
+};
+
+for (const reportText of [
+	report.buildGitHubIssue(recoveryFixture).full_report,
+	report.buildRuntimeGitHubIssue(recoveryFixture, { ok: true, status: { effective: true } }).full_report
+]) {
+	const summary = summaryOf(reportText);
+	const failures = summary.split('\n').filter(line => line.includes('接管操作失败'));
+	assert.strictEqual(failures.length, 2, 'the hotplug wrapper repeats one failure and the next operation reuses the ID');
+	assert.match(failures[0], /02:28:31.*后续暂无接管恢复验证记录/);
+	assert.match(failures[1], /02:28:13.*takeover_apply_verification_failed.*02:28:27.*接管恢复并验证生效/);
+	assert(summary.includes('有 1 条事件不是完整 JSON'));
+	assert(!summary.includes('other_boot_failure'));
+}
+
+const snapshotRecovery = {
+	...recoveryFixture,
+	events: recoveryFixture.events.slice(0, 8),
+	evidence: { last_failure: file([ JSON.stringify({
+		boot_id: fixture.boot_id, source: 'iface_hotplug', event_id: '4206',
+		timestamp: '2026-11-12T02:28:13+08:00', stage: 'takeover_apply', exit_code: 1,
+		result: { ...originalError, code: 'takeover_apply_verification_failed' }
+	}) ]) }
+};
+const snapshotSummary = summaryOf(report.buildFullReport(snapshotRecovery));
+assert.match(snapshotSummary, /最近失败.*02:28:13.*02:28:27.*接管恢复并验证生效/);
+assert(!snapshotSummary.includes('接管操作失败'), 'the snapshot and the matching event describe one failure');
+assert(snapshotSummary.includes('END_OF_ERROR'));
+
 // Redact actual secrets, while retaining socket addresses and valid nested JSON.
 const secrets = structuredClone(fixture);
 secrets.evidence.task_result = file([

@@ -80,11 +80,77 @@ function evidenceJSON(source) {
 	catch (e) { return null; }
 }
 
+function takeoverRecovery(event) {
+	if (event.event === 'restore_finished' && event.result === 'already_effective')
+		return '确认接管已生效';
+	if (event.result === 'success' && (event.event === 'repair_apply_finished' ||
+		event.event === 'runtime_takeover_finished' ||
+		(event.event === 'apply_finished' && event.effective === 'true') ||
+		(event.event === 'runtime_restart_finished' && event.takeover_transition === 'restored')))
+		return '接管恢复并验证生效';
+	return null;
+}
+
+function takeoverEventHistory(lines, bootID) {
+	var failures = [];
+	var pending = [];
+	var failedOperations = new Set();
+	var invalidEvents = 0;
+	lines.forEach(function(line) {
+		var event;
+		try { event = JSON.parse(line); }
+		catch (e) { invalidEvents++; return; }
+		if (!event || !bootID || bootID === 'unknown' || event.boot_id !== bootID)
+			return;
+		var operation = event.event_id && event.source + '/' + event.event_id;
+		// The interface hotplug ID is a PID and may be reused.
+		if (operation && /_started$/.test(event.event))
+			failedOperations.delete(operation);
+
+		var recovery = takeoverRecovery(event);
+		if (recovery) {
+			var outcome = { timestamp: event.timestamp, source: event.source, summary: recovery };
+			pending = pending.filter(function(record) {
+				if (event.uptime_seconds < record.event.uptime_seconds)
+					return true;
+				record.recovery = outcome;
+				return false;
+			});
+			return;
+		}
+		var failed = event.event === 'status_failed' || (event.result === 'failure' &&
+			([ 'apply_finished', 'repair_apply_finished', 'restore_finished', 'runtime_takeover_finished' ].indexOf(event.event) >= 0 ||
+				(event.event === 'runtime_restart_finished' && event.stage === 'takeover_restore')));
+		if (!failed || (operation && failedOperations.has(operation)))
+			return;
+		var record = { event: event, recovery: null };
+		failures.push(record);
+		pending.push(record);
+		if (operation)
+			failedOperations.add(operation);
+	});
+	return { failures: failures.reverse(), invalidEvents: invalidEvents };
+}
+
+function recoveryText(recovery) {
+	if (!recovery)
+		return ' 后续暂无接管恢复验证记录。';
+	return ' ' + (recovery.timestamp || '时间未知') + ' ' + recovery.summary +
+		(recovery.source ? '（' + recovery.source + '）' : '') + '。';
+}
+
 function reportSummary(logs) {
 	var lines = [ '## 已记录的失败与采集缺口', '' ];
 	var evidence = logs.evidence || {};
 	var observation = logs.runtime_observation;
 	var failure = evidenceJSON(evidence.last_failure);
+	var history = takeoverEventHistory(logs.events, logs.boot_id);
+	var snapshotEvent = failure && failure.event_id && history.failures.find(function(record) {
+		var event = record.event;
+		var code = failure.result && failure.result.code;
+		return event.boot_id === failure.boot_id && event.event_id === failure.event_id && event.source === failure.source &&
+			(!code || !event.core_code || event.core_code === code);
+	});
 	if (observation) {
 		var dns = observation.dns || {};
 		if (observation.runtime_running === true && observation.controller_ready === false)
@@ -95,7 +161,8 @@ function reportSummary(logs) {
 		}
 	}
 	if (failure) {
-		lines.push('- 最近失败：' + failure.timestamp + '；来源 ' + failure.source + '；阶段 ' + failure.stage + '；退出码 ' + failure.exit_code + '。');
+		lines.push('- 最近失败：' + failure.timestamp + '；来源 ' + failure.source + '；阶段 ' + failure.stage + '；退出码 ' + failure.exit_code + '。' +
+			(snapshotEvent ? recoveryText(snapshotEvent.recovery) : ''));
 		if (failure.boot_id !== logs.boot_id)
 			lines.push('- 该失败来自另一轮开机：' + failure.boot_id + '，请勿当作当前开机的根因。');
 		var result = failure.result || {};
@@ -105,6 +172,14 @@ function reportSummary(logs) {
 		if (typeof output === 'string')
 			lines.push('- 原始命令输出：\n\n    ' + output.split('\n').join('\n    '));
 	}
+	history.failures.forEach(function(record) {
+		if (record === snapshotEvent)
+			return;
+		var event = record.event;
+		var error = event.core_code || (event.exit_code && '退出码 ' + event.exit_code);
+		var detail = [ event.source, event.stage || event.event, error ].filter(Boolean).join('，');
+		lines.push('- ' + (event.timestamp || '时间未知') + ' 接管操作失败（' + detail + '）。' + recoveryText(record.recovery));
+	});
 	var task = evidenceJSON(evidence.task_result);
 	if (task && task.ok === false)
 		lines.push('- 最近任务错误：' + (task.code || '') + ' ' + (task.message || ''));
@@ -117,11 +192,8 @@ function reportSummary(logs) {
 		lines.push('- 快照命令失败：' + logs.snapshot_errors.join('、') + '；原始 stderr 和退出码见下方完整诊断。');
 	if (logs.events_available === false)
 		lines.push('- 未取得接管事件文件，不能由当前状态重建此前发生的操作。');
-	var invalidEvents = logs.events.filter(function(line) {
-		try { JSON.parse(line); return false; } catch (e) { return true; }
-	});
-	if (invalidEvents.length)
-		lines.push('- 有 ' + invalidEvents.length + ' 条事件不是完整 JSON，原文已保留，无法据此补全事件。');
+	if (history.invalidEvents)
+		lines.push('- 有 ' + history.invalidEvents + ' 条事件不是完整 JSON，原文已保留，无法据此补全事件。');
 	Object.keys(evidence).forEach(function(name) {
 		var source = evidence[name];
 		if (!source.available || source.exit_code)

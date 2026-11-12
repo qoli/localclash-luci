@@ -77,6 +77,7 @@ run_with_heartbeat_until_complete() {
 
 MOCK_RUNNING=true
 MOCK_REFRESH_READY=true
+MOCK_REFRESH_WARNINGS='[]'
 MOCK_RESTART_FAIL=false
 MOCK_RESTART_ERROR=""
 MOCK_NODE_CHANGE=true
@@ -87,6 +88,7 @@ reset_case() {
 	rm -f "$SUBSCRIPTION_SCHEDULE_STATUS" "$SUBSCRIPTION_SCHEDULE_RUNTIME" "${tmp_dir}/calls" "${tmp_dir}/heartbeat"
 	MOCK_RUNNING=true
 	MOCK_REFRESH_READY=true
+	MOCK_REFRESH_WARNINGS='[]'
 	MOCK_RESTART_FAIL=false
 	MOCK_RESTART_ERROR=""
 	MOCK_NODE_CHANGE=true
@@ -111,7 +113,7 @@ mcp_tool_call() {
 			else
 				node_diff='{"added":[],"removed":[]}'
 			fi
-			rpc_response '{"node_diff":'"$node_diff"',"localclash_config":{"state":"auto_applied","hot_reload_ready":'"$MOCK_REFRESH_READY"',"proxy_groups":[{"id":"Auto"}]}}' > "$output"
+			rpc_response '{"node_diff":'"$node_diff"',"warnings":'"$MOCK_REFRESH_WARNINGS"',"localclash_config":{"state":"auto_applied","hot_reload_ready":'"$MOCK_REFRESH_READY"',"proxy_groups":[{"id":"Auto"}]}}' > "$output"
 			;;
 		runtime_facts)
 			rpc_response '{"config_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}' > "$output"
@@ -198,14 +200,16 @@ reset_case
 mkdir -p "$LOCK_DIR"
 printf '%s\n' "$$" > "$LOCK_DIR/pid"
 printf '{"ok":true,"running":true,"done":false,"started_at":123,"task":"subscription_schedule","task_id":"task-123","cancellable":false}\n' > "$TASK_STATUS"
+MOCK_REFRESH_WARNINGS='["subscription 02 refresh failed; using cached subscription artifact"]'
 (subscription_schedule_run_task task-123)
-python3 - "$TASK_STATUS" <<'PY'
+python3 - "$TASK_STATUS" "$MOCK_REFRESH_WARNINGS" <<'PY'
 import json, sys
 value = json.load(open(sys.argv[1], encoding='utf-8'))
 assert value['done'] is True
 assert value['exit_code'] == 0
 assert value['task_id'] == 'task-123'
 assert value['result']['outcome'] == 'reloaded'
+assert value['result']['warnings'] == json.loads(sys.argv[2])
 PY
 
 printf 'rpcd subscription schedule tests passed\n'

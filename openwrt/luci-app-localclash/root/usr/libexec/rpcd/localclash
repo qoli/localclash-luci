@@ -4499,7 +4499,7 @@ subscription_schedule_takeover_readback() {
 }
 
 subscription_schedule_run_locked() {
-	local source tmpdir started runtime_before pid_before running takeover_before profile_before refresh_state hot_reload_ready config_sha restart_error reloaded strategy restart_sha pid_after completed result
+	local source tmpdir started runtime_before pid_before running takeover_before profile_before refresh_state hot_reload_ready config_sha restart_error reloaded strategy restart_sha pid_after completed result warnings_json
 	source="$1"
 	started="$(now_epoch)"
 	tmpdir="$(mktemp -d /tmp/localclash-subscription-schedule.XXXXXX)" || {
@@ -4555,6 +4555,8 @@ subscription_schedule_run_locked() {
 		return 1
 	fi
 	mv "$tmpdir/refresh-response.json" "$tmpdir/refresh.json"
+	warnings_json="$(jsonfilter -i "$tmpdir/refresh.json" -e '@.result.structuredContent.warnings' 2>/dev/null || true)"
+	warnings_json="${warnings_json:-[]}"
 	refresh_state="$(jsonfilter -i "$tmpdir/refresh.json" -e '@.result.structuredContent.localclash_config.state' 2>/dev/null || true)"
 	hot_reload_ready="$(jsonfilter -i "$tmpdir/refresh.json" -e '@.result.structuredContent.localclash_config.hot_reload_ready' 2>/dev/null || true)"
 	if [ "$hot_reload_ready" != true ]; then
@@ -4581,7 +4583,7 @@ subscription_schedule_run_locked() {
 
 	if [ "$running" = false ]; then
 		completed="$(now_epoch)"
-		result='{"version":1,"ok":true,"source":"'"$(json_escape "$source")"'","outcome":"pending_next_start","stage":"complete","message":"订阅已刷新并通过配置验证；运行时原本未启动，未执行热加载。","started_at":'"$started"',"completed_at":'"$completed"',"runtime_was_running":false,"config_sha256":"'"$(json_escape "$config_sha")"'"}'
+		result='{"version":1,"ok":true,"source":"'"$(json_escape "$source")"'","outcome":"pending_next_start","stage":"complete","message":"订阅配置已通过验证，将在运行时下次启动时使用。","started_at":'"$started"',"completed_at":'"$completed"',"runtime_was_running":false,"config_sha256":"'"$(json_escape "$config_sha")"'","warnings":'"$warnings_json"'}'
 		rm -rf "$tmpdir"
 		subscription_schedule_finish "$result"
 		return 0
@@ -4595,7 +4597,7 @@ subscription_schedule_run_locked() {
 			pid_after="$(jsonfilter -i "$tmpdir/indeterminate-runtime.json" -e '@.result.structuredContent.pid' 2>/dev/null || true)"
 			if [ "$pid_after" = "$pid_before" ] && subscription_schedule_takeover_readback "$tmpdir/indeterminate-takeover.json" "$takeover_before" "$profile_before"; then
 				completed="$(now_epoch)"
-				result='{"version":1,"ok":true,"source":"'"$(json_escape "$source")"'","outcome":"reloaded_after_indeterminate_call","stage":"complete","message":"MCP 热加载调用结果不确定，但运行时语义读回已确认新订阅配置生效。","started_at":'"$started"',"completed_at":'"$completed"',"runtime_was_running":true,"pid":'"$pid_after"',"config_sha256":"'"$(json_escape "$config_sha")"'","takeover_effective":'"$takeover_before"',"profile_mode":"'"$(json_escape "$profile_before")"'","warning":"'"$(json_escape "$restart_error")"'"}'
+				result='{"version":1,"ok":true,"source":"'"$(json_escape "$source")"'","outcome":"reloaded_after_indeterminate_call","stage":"complete","message":"MCP 热加载调用结果不确定，但运行时语义读回已确认新订阅配置生效。","started_at":'"$started"',"completed_at":'"$completed"',"runtime_was_running":true,"pid":'"$pid_after"',"config_sha256":"'"$(json_escape "$config_sha")"'","takeover_effective":'"$takeover_before"',"profile_mode":"'"$(json_escape "$profile_before")"'","warning":"'"$(json_escape "$restart_error")"'","warnings":'"$warnings_json"'}'
 				rm -rf "$tmpdir"
 				subscription_schedule_finish "$result"
 				return 0
@@ -4633,7 +4635,7 @@ subscription_schedule_run_locked() {
 		return 1
 	fi
 	completed="$(now_epoch)"
-	result='{"version":1,"ok":true,"source":"'"$(json_escape "$source")"'","outcome":"reloaded","stage":"complete","message":"订阅已刷新、验证并热加载，运行时读回成功。","started_at":'"$started"',"completed_at":'"$completed"',"runtime_was_running":true,"pid":'"$pid_after"',"config_sha256":"'"$(json_escape "$config_sha")"'","refresh_state":"'"$(json_escape "$refresh_state")"'","takeover_effective":'"$takeover_before"',"profile_mode":"'"$(json_escape "$profile_before")"'"}'
+	result='{"version":1,"ok":true,"source":"'"$(json_escape "$source")"'","outcome":"reloaded","stage":"complete","message":"订阅配置已验证并热加载，运行时读回成功。","started_at":'"$started"',"completed_at":'"$completed"',"runtime_was_running":true,"pid":'"$pid_after"',"config_sha256":"'"$(json_escape "$config_sha")"'","refresh_state":"'"$(json_escape "$refresh_state")"'","takeover_effective":'"$takeover_before"',"profile_mode":"'"$(json_escape "$profile_before")"'","warnings":'"$warnings_json"'}'
 	rm -rf "$tmpdir"
 	subscription_schedule_finish "$result"
 }
@@ -4825,7 +4827,7 @@ subscription_save_refresh_file() {
 }
 
 subscription_setup_file() {
-	local input tmpdir restart_json
+	local input tmpdir restart_json warnings_json
 	input="$1"
 	tmpdir="$(mktemp -d /tmp/localclash-subscription.XXXXXX)" || {
 		fail "tmpdir_failed" "无法创建临时订阅目录。"
@@ -4859,10 +4861,11 @@ subscription_setup_file() {
 		return 1
 	fi
 	restart_json="$(cat "$tmpdir/restart.json")"
+	warnings_json="$(jsonfilter -i "$tmpdir/refresh.json" -e '@.warnings' 2>/dev/null || true)"
 
 	rm -rf "$tmpdir"
 	log_line "订阅设置：已完成"
-	printf '{"ok":true,"changed":true,"summary":"订阅已保存、刷新，配置已生成，运行时已重启并验证生效。","runtime_restart":%s,"next_actions":[]}\n' "$restart_json"
+	printf '{"ok":true,"changed":true,"summary":"订阅已保存，配置已生成，运行时已重启并验证生效。","runtime_restart":%s,"warnings":%s,"next_actions":[]}\n' "$restart_json" "${warnings_json:-[]}"
 }
 
 write_bootstrap_subscription_input() {

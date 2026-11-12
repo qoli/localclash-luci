@@ -54,6 +54,9 @@ case "$expr" in
 	@.message)
 		printf '%s\n' "$content" | sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
 		;;
+	@.warnings)
+		python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["warnings"]))' <<< "$content"
+		;;
 	*) exit 1 ;;
 esac
 EOF
@@ -101,6 +104,7 @@ takeover_log_event_safe() { :; }
 
 MOCK_SET_FAIL=0
 MOCK_REFRESH_FAIL=0
+MOCK_REFRESH_WARNINGS=''
 MOCK_RENDER_FAIL=0
 MOCK_RESTART_FAIL=0
 MOCK_RUNTIME_RUNNING=true
@@ -111,6 +115,7 @@ reset_case() {
 	: > "$LOG"
 	MOCK_SET_FAIL=0
 	MOCK_REFRESH_FAIL=0
+	MOCK_REFRESH_WARNINGS=''
 	MOCK_RENDER_FAIL=0
 	MOCK_RESTART_FAIL=0
 	MOCK_RUNTIME_RUNNING=true
@@ -127,7 +132,7 @@ call_core() {
 			;;
 		"subscription refresh --json")
 			[ "$MOCK_REFRESH_FAIL" -eq 0 ] || { printf '{"ok":false,"code":"refresh_failed"}\n'; return 12; }
-			printf '{"ok":true,"refreshed":true}\n'
+			printf '{"ok":true,"refreshed":true%s}\n' "${MOCK_REFRESH_WARNINGS:+,\"warnings\":$MOCK_REFRESH_WARNINGS}"
 			;;
 		"config render --json")
 			[ "$MOCK_RENDER_FAIL" -eq 0 ] || { printf '{"ok":false,"code":"render_failed"}\n'; return 13; }
@@ -197,6 +202,19 @@ call_core runtime status --json
 call_takeover status --json
 EOF
 diff -u "${tmp_dir}/expected-success" "${tmp_dir}/trace" || fail_test "successful call order mismatch"
+
+reset_case
+MOCK_REFRESH_WARNINGS='["subscription 02 refresh failed; using cached subscription artifact","source \"03\" was skipped"]'
+capture_setup
+[ "$result_rc" -eq 0 ] || fail_test "refresh using cache failed: $result"
+write_task_done 0 "$result"
+python3 - "$TASK_STATUS" "$MOCK_REFRESH_WARNINGS" <<'PY' || fail_test "cached-source warnings were lost from the completed task"
+import json, sys
+task = json.load(open(sys.argv[1], encoding='utf-8'))
+assert task["result"]["warnings"] == json.loads(sys.argv[2])
+assert task["exit_code"] == 0 and task["result"]["ok"] is True
+PY
+diff -u "${tmp_dir}/expected-success" "${tmp_dir}/trace" || fail_test "cache warning changed the restart flow"
 
 reset_case
 MOCK_REFRESH_FAIL=1

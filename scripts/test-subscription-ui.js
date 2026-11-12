@@ -34,29 +34,44 @@ assert(source.includes('if (task && task.cancellable === false)'));
 assert(source.includes("modal.cancelButton.style.display = 'none'"));
 assert(!source.includes('g204'), 'removed g204 controls must not remain in the subscription UI');
 
-async function testScheduleSave() {
+async function testSubscriptionActions() {
 	const calls = [];
 	const byID = new Map();
-	let save;
+	const buttons = new Map();
+	let modal;
 	let response;
+	let rpcResponseForTask;
 	const E = (tag, attrs, children) => {
-		const node = { attrs, children, id: attrs.id, textContent: '', disabled: false };
+		const node = {
+			attrs, id: attrs.id, textContent: '', disabled: false, style: {},
+			setAttribute(name, value) { attrs[name] = value; },
+			removeAttribute(name) { delete attrs[name]; },
+			classList: { add() {}, remove() {} }
+		};
 		if (node.id)
 			byID.set(node.id, node);
-		if (tag === 'button' && children[0] === '保存定时设置')
-			save = node;
+		if (tag === 'button')
+			buttons.set(children[0], node);
 		return node;
 	};
 	const rpc = {
 		declare: spec => async (...args) => {
 			calls.push({ method: spec.method, args });
+			if (spec.method === 'subscription_setup_async' || spec.method === 'subscription_schedule_run_now')
+				return { started: true };
+			if (spec.method === 'task_status')
+				return { done: true, cancellable: false, result: rpcResponseForTask };
 			return response;
 		}
 	};
-	const view = new Function('view', 'rpc', 'localclashStyle', 'E', '_', 'window', source)(
-		{ extend: value => value }, rpc, { stylesheet: () => ({}) }, E, value => value, { setTimeout() {} }
+	const taskLogs = { monitor: () => ({ start() {}, finish() {} }) };
+	const view = new Function('view', 'rpc', 'localclashStyle', 'E', '_', 'window', 'ui', 'taskLogs', 'document', source)(
+		{ extend: value => value }, rpc, { stylesheet: () => ({}) }, E, value => value, { setTimeout() {} },
+		{ showModal: (title, children) => { modal = children; } }, taskLogs,
+		{ getElementById: id => byID.get(id) }
 	);
 	view.render([{ ok: true, schedule: { enabled: false, update_hour: 7 } }, {}, {}]);
+	const save = buttons.get('保存定时设置');
 	byID.get('localclash-subscription-schedule-enabled').checked = true;
 	byID.get('localclash-subscription-schedule-hour').value = '23';
 	const status = byID.get('localclash-subscription-schedule-status');
@@ -84,9 +99,33 @@ async function testScheduleSave() {
 	assert.match(status.textContent, /保存定时更新设置失败.*MCP 服务必须健康/);
 	assert.strictEqual(calls.length, 3);
 	assert.strictEqual(save.disabled, false);
+
+	byID.get('localclash-subscription-urls').value = 'https://example.test/sub';
+	const warning = 'subscription 02 refresh failed; using cached subscription artifact';
+	for (const [label, method] of [
+		[ '保存并应用订阅', 'subscription_setup_async' ],
+		[ '立即更新并热加载', 'subscription_schedule_run_now' ]
+	]) {
+		const button = buttons.get(label);
+		for (const result of [
+			{ ok: true, warnings: [warning] },
+			{ ok: true, warnings: [] },
+			{ ok: false, message: '刷新失败', warnings: [warning] }
+		]) {
+			const callIndex = calls.length;
+			rpcResponseForTask = result;
+			await button.attrs.click({ currentTarget: button, preventDefault() {} });
+			assert.deepStrictEqual(calls.slice(callIndex).map(call => call.method), [method, 'task_status']);
+			if (result.ok && result.warnings.length)
+				assert.match(modal[0].textContent, /任务完成.*警告.*subscription 02.*using cached/);
+			else
+				assert.strictEqual(modal[0].textContent, result.ok ? '任务完成。' : '任务失败：刷新失败');
+			assert.deepStrictEqual(JSON.parse(modal[2].textContent), result);
+		}
+	}
 }
 
-testScheduleSave().then(function() {
+testSubscriptionActions().then(function() {
 	process.stdout.write('subscription UI tests passed\n');
 }).catch(function(error) {
 	console.error(error);
