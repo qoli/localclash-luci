@@ -335,6 +335,25 @@ body[data-page^="admin-services-localclash"] .modal input[type="radio"] {
 .localclash-schedule-enabled { display: flex; align-items: center; gap: 10px; cursor: pointer; }
 .localclash-schedule-hour { display: grid; gap: 8px; font-size: 14px; }
 .localclash-view .localclash-schedule-status { margin: 20px 0 0; padding: 0; border: 0; color: var(--lc-muted); background: transparent; font: inherit; font-size: 14px; white-space: pre-wrap; }
+.localclash-pool-switch { position: relative; display: inline-flex; align-items: center; gap: 10px; min-height: 32px; cursor: pointer; }
+.localclash-pool-switch input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.localclash-pool-switch-track {
+	box-sizing: border-box;
+	display: flex;
+	align-items: center;
+	flex: none;
+	width: 40px;
+	height: 24px;
+	padding: 3px;
+	border: 1px solid var(--lc-muted);
+	border-radius: 12px;
+	background: var(--lc-soft);
+}
+.localclash-pool-switch-track::before { content: ''; width: 16px; height: 16px; border-radius: 50%; background: var(--lc-muted); }
+.localclash-pool-switch input:checked + .localclash-pool-switch-track { justify-content: flex-end; border-color: var(--lc-success); background: var(--lc-success); }
+.localclash-pool-switch input:checked + .localclash-pool-switch-track::before { background: #fff; }
+.localclash-pool-switch input:focus-visible + .localclash-pool-switch-track { outline: 2px solid var(--lc-focus); outline-offset: 3px; }
+.localclash-pool-switch input:disabled + .localclash-pool-switch-track { opacity: .65; cursor: not-allowed; }
 .localclash-view .localclash-error { color: var(--lc-danger); }
 
 .localclash-custom-sites-header { display: flex; align-items: center; justify-content: space-between; gap: 24px; }

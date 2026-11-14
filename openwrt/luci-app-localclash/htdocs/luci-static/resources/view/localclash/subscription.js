@@ -47,6 +47,7 @@ var callPoolCapabilitySetAsync = rpc.declare({
 	object: 'localclash',
 	method: 'pool_capability_set_async',
 	params: [ 'enabled' ],
+	nobatch: true,
 	expect: { '': {} }
 });
 
@@ -343,28 +344,152 @@ function scheduleStatusText(result) {
 	return lines.join('\n');
 }
 
-function renderPoolCapability(result) {
-	var available = result && result.ok === true && result.status && typeof result.status.enabled === 'boolean';
-	var enabled = E('input', {
+function readPoolCapability() {
+	return callPoolCapabilityGet().catch(function(err) { return { ok: false, message: err.message }; });
+}
+
+function readPoolSchedule() {
+	return callPoolScheduleGet().catch(function(err) { return { ok: false, message: err.message }; });
+}
+
+function readPoolTask() {
+	return callTaskStatus().catch(function() { return null; });
+}
+
+function poolTaskIsRunning(task) {
+	return task && task.ok === true && task.task === 'pool_capability' && task.running === true && task.task_id;
+}
+
+async function startPoolCapabilityTask(enabled) {
+	var result, requestError;
+	try {
+		result = await callPoolCapabilitySetAsync(enabled);
+	} catch (err) {
+		requestError = err;
+	}
+	if (result && result.ok === true && result.task_id)
+		return result;
+	if (requestError || (result && result.code === 'task_locked')) {
+		var task = await readPoolTask();
+		if (poolTaskIsRunning(task))
+			return task;
+	}
+	throw requestError || new Error(result && (result.message || result.code) || _('无法提交线路池设置。'));
+}
+
+function poolCapabilityAvailable(capability) {
+	return capability && capability.ok === true && capability.status && typeof capability.status.enabled === 'boolean';
+}
+
+function poolTaskInProgressText(enabled) {
+	if (enabled === true)
+		return _('正在后台进行首次线路池筛选，完成后自动应用。可以离开本页。');
+	if (enabled === false)
+		return _('正在后台关闭线路池。可以离开本页。');
+	return _('正在后台应用线路池设置。可以离开本页。');
+}
+
+function poolCapabilityStatusText(capability, result, error) {
+	var state = poolCapabilityAvailable(capability) ?
+		(capability.status.enabled ? _('线路池已启用。') : _('线路池已关闭。')) :
+		(capability && capability.message || _('暂时无法读取线路池状态。'));
+	if (error || (result && result.ok === false))
+		return formatText(_('切换线路池失败：%s'), error || result.message || result.code || _('未知错误')) + ' ' + state;
+	if (result && result.schedule_applied === false)
+		return state + ' ' + _('定时更新服务未能同步。');
+	return state;
+}
+
+async function waitForPoolTask(taskId, showProgress) {
+	showProgress(true);
+	while (true) {
+		var task = await readPoolTask();
+		var readable = task && task.ok === true;
+		if (readable) {
+			if (task.task !== 'pool_capability' || task.task_id !== taskId)
+				return null;
+			if (task.done === true)
+				return task.result;
+		}
+		showProgress(readable);
+		await new Promise(function(resolve) { window.setTimeout(resolve, 1000); });
+	}
+}
+
+function renderPoolCapability(capability, task, refreshSchedule) {
+	var available = poolCapabilityAvailable(capability);
+	var confirmedEnabled = !!available && capability.status.enabled;
+	var toggle = E('input', {
 		'id': 'localclash-pool-capability-enabled',
 		'type': 'checkbox',
-		'checked': available && result.status.enabled ? '' : null,
-		'disabled': available ? null : ''
+		'role': 'switch',
+		'aria-describedby': 'localclash-pool-capability-help',
+		'checked': confirmedEnabled ? '' : null,
+		'disabled': available ? null : '',
+		'change': function() {
+			if (!toggle.disabled)
+				return applySetting(toggle.checked);
+		}
 	});
-	var save = liveTaskButton(_('应用线路池设置'), function() {
-		return callPoolCapabilitySetAsync(enabled.checked);
-	}, 'cbi-button-apply');
-	save.disabled = !available;
+	var poolTask = task && task.task === 'pool_capability' ? task : null;
+	var status = E('p', {
+		'id': 'localclash-pool-capability-status',
+		'class': 'localclash-schedule-status',
+		'role': 'status'
+	}, [ poolCapabilityStatusText(capability, poolTask && poolTask.result) ]);
+
+	async function applySetting(requested, existingTask) {
+		toggle.disabled = true;
+		toggle.setAttribute('aria-busy', 'true');
+		if (typeof requested === 'boolean')
+			toggle.checked = requested;
+
+		var result, error;
+		try {
+			if (!existingTask) {
+				status.textContent = _('正在提交线路池设置…');
+				existingTask = await startPoolCapabilityTask(requested);
+			}
+			if (typeof existingTask.requested_enabled === 'boolean') {
+				requested = existingTask.requested_enabled;
+				toggle.checked = requested;
+			}
+			var runningText = poolTaskInProgressText(requested);
+			result = await waitForPoolTask(existingTask.task_id, function(connected) {
+				var text = connected ? runningText : _('暂时无法读取线路池任务进度。可以离开本页，稍后回来查看。');
+				if (status.textContent !== text)
+					status.textContent = text;
+			});
+		} catch (err) {
+			error = err.message || String(err);
+		}
+
+		var updated = await readPoolCapability();
+		var readable = poolCapabilityAvailable(updated);
+		if (readable)
+			confirmedEnabled = updated.status.enabled;
+		if (!error && readable && typeof requested === 'boolean' && confirmedEnabled !== requested && (!result || result.ok === true))
+			error = _('路由器尚未确认本次切换。');
+		toggle.checked = confirmedEnabled;
+		toggle.disabled = !readable;
+		toggle.removeAttribute('aria-busy');
+		status.textContent = poolCapabilityStatusText(updated, result, error);
+		return refreshSchedule(updated);
+	}
+
+	if (poolTaskIsRunning(poolTask))
+		applySetting(poolTask.requested_enabled, poolTask);
 
 	return E('div', { 'class': 'cbi-section localclash-section' }, [
 		E('h3', {}, [ _('线路池') ]),
-		E('p', {}, [ _('启用后，订阅刷新时为「⚡ 自动选择」和「ChatGPT-available」准备合格线路。关闭后，「自动选择」使用全部可选订阅线路，服务资格专用组暂停。') ]),
-		E('label', { 'class': 'localclash-schedule-enabled', 'for': enabled.id }, [
-			enabled, E('span', {}, [ _('启用线路池') ])
+		E('p', { 'id': 'localclash-pool-capability-help' }, [ _('启用时，路由器会在后台为「⚡ 自动选择」和「ChatGPT-available」进行首次线路筛选。完成后自动应用，可以离开本页。关闭后，「自动选择」使用全部可选订阅线路，服务资格专用组暂停。') ]),
+		E('label', { 'class': 'localclash-pool-switch', 'for': toggle.id }, [
+			toggle,
+			E('span', { 'class': 'localclash-pool-switch-track', 'aria-hidden': 'true' }),
+			E('span', {}, [ _('启用线路池') ])
 		]),
-		available ? null : E('p', {}, [ result && result.message || _('更新 localClash 核心后可设置线路池开关。') ]),
-		actionRow([ save ])
-	].filter(Boolean));
+		status
+	]);
 }
 
 function poolScheduleStatusText(result, capability) {
@@ -374,7 +499,7 @@ function poolScheduleStatusText(result, capability) {
 	var lines = [];
 	if (!result.available)
 		lines.push(_('更新 localClash 核心和基础资产后即可启用。'));
-	var paused = capability && capability.ok === true && capability.status && capability.status.enabled === false;
+	var paused = poolCapabilityAvailable(capability) && !capability.status.enabled;
 	if (paused && result.schedule.enabled)
 		lines.push(_('定时更新已暂停，重新启用线路池后恢复。'));
 	if (result.last_run_at) {
@@ -416,9 +541,10 @@ function renderPoolSchedule(result, capability) {
 				'selected': (schedule.period || '15m') === option[0] ? '' : null
 			}, [ option[1] ]);
 		}));
-	var status = E('pre', { 'class': 'localclash-schedule-status', 'aria-live': 'polite' }, [ poolScheduleStatusText(result, capability) ]);
+	var status = E('pre', { 'id': 'localclash-pool-schedule-status', 'class': 'localclash-schedule-status', 'aria-live': 'polite' }, [ poolScheduleStatusText(result, capability) ]);
+	var statusRevision = 0;
 
-	return E('div', { 'class': 'cbi-section localclash-section' }, [
+	var section = E('div', { 'class': 'cbi-section localclash-section' }, [
 		E('h3', {}, [ _('线路池定时更新') ]),
 		E('p', {}, [ _('线路池启用时按所选周期复检。每天 08:00 按路由器本地时间执行。') ]),
 		E('div', { 'class': 'localclash-schedule-grid' }, [
@@ -442,7 +568,8 @@ function renderPoolSchedule(result, capability) {
 				'click': function(ev) {
 					var button = ev.currentTarget;
 					button.disabled = true;
-					callPoolScheduleSet(enabled.checked, period.value, enhancedFilter.checked).then(function(updated) {
+					statusRevision++;
+					return callPoolScheduleSet(enabled.checked, period.value, enhancedFilter.checked).then(function(updated) {
 						if (!updated || updated.ok !== true)
 							throw new Error(updated && updated.message || _('无法保存线路池定时更新设置。'));
 						enabled.checked = updated.schedule.enabled;
@@ -460,19 +587,32 @@ function renderPoolSchedule(result, capability) {
 			}, [ _('保存线路池定时设置') ])
 		])
 	].filter(Boolean));
+	return {
+		section: section,
+		refresh: function(updatedCapability) {
+			capability = updatedCapability;
+			var revision = ++statusRevision;
+			return readPoolSchedule().then(function(updated) {
+				if (revision === statusRevision)
+					status.textContent = poolScheduleStatusText(updated, capability);
+			});
+		}
+	};
 }
 
 return view.extend({
 	load: function() {
 		return Promise.all([
 			callSubscriptionScheduleGet(),
-			callPoolScheduleGet().catch(function(err) { return { ok: false, message: err.message }; }),
-			callPoolCapabilityGet().catch(function(err) { return { ok: false, message: err.message }; })
+			readPoolSchedule(),
+			readPoolCapability(),
+			readPoolTask()
 		]);
 	},
 
 	render: function(data) {
 		var scheduleResult = data[0];
+		var poolSchedule = renderPoolSchedule(data[1], data[2]);
 		var schedule = scheduleResult && scheduleResult.schedule || {};
 		var selectedHour = Number(schedule.update_hour);
 		var hourOptions = [];
@@ -569,8 +709,8 @@ return view.extend({
 						})
 					])
 				]),
-				renderPoolCapability(data[2]),
-				renderPoolSchedule(data[1], data[2])
+				renderPoolCapability(data[2], data[3], poolSchedule.refresh),
+				poolSchedule.section
 			]);
 	}
 });

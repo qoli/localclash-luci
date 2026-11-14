@@ -808,7 +808,7 @@ function resumeTaskIfNeeded() {
 	taskResumeChecked = true;
 
 	return callTaskStatus().then(function(task) {
-		if (!task || !task.task)
+		if (!task || !task.task || task.task === 'pool_capability')
 			return null;
 		if (task.running === true)
 			return trackTask(taskLabel(task), Promise.resolve({ started: true }), {

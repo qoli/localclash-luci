@@ -987,6 +987,9 @@ write_task_running() {
 	if [ "$task" = runtime_restart ] || [ "$task" = subscription_schedule ] || [ "$task" = pool_capability ]; then
 		extra=',"cancellable":false,"task_id":"'"$(json_escape "$3")"'"'
 	fi
+	if [ "$task" = pool_capability ]; then
+		extra="$extra,\"requested_enabled\":$4"
+	fi
 	printf '{"ok":true,"running":true,"done":false,"started_at":%s,"task":"%s","summary":"%s"%s}\n' "$(now_epoch)" "$(json_escape "$task")" "$(json_escape "$summary")" "$extra" > "${TASK_STATUS}.tmp.$$" && mv "${TASK_STATUS}.tmp.$$" "$TASK_STATUS"
 }
 
@@ -1038,7 +1041,7 @@ write_task_done() {
 	completed="$(now_epoch)"
 	cancellable="$(jsonfilter -i "$TASK_STATUS" -e '@.cancellable' 2>/dev/null || true)"
 	extra=""
-	if [ "$task" = runtime_restart ] || [ "$task" = subscription_schedule ]; then
+	if [ "$task" = runtime_restart ] || [ "$task" = subscription_schedule ] || [ "$task" = pool_capability ]; then
 		extra=',"cancellable":false,"task_id":"'"$(json_escape "$(jsonfilter -i "$TASK_STATUS" -e '@.task_id')")"'"'
 	elif [ "$cancellable" = false ]; then
 		extra=',"cancellable":false'
@@ -4114,11 +4117,12 @@ pool_capability_value() {
 }
 
 start_pool_capability_set() {
-	local payload enabled task_id bg_pid
+	local payload enabled task_id bg_pid summary
 	payload="$(strip_ubus_rpc_session "$(cat)")"
 	enabled="$(jsonfilter -s "$payload" -e '@.enabled' 2>/dev/null)"
 	case "$enabled" in
-		true|false) ;;
+		true) summary="正在后台进行首次线路池筛选，完成后自动应用。" ;;
+		false) summary="正在后台关闭线路池。" ;;
 		*) fail "pool_capability_enabled_invalid" "请选择是否启用线路池。"; return 1 ;;
 	esac
 	clear_stale_lock
@@ -4135,7 +4139,7 @@ start_pool_capability_set() {
 	task_id="$(now_epoch)-$$"
 	rm -f "$TASK_RESULT" "$TASK_INPUT" "$TASK_PID"
 	: > "$LOG"
-	if ! write_task_running "正在应用线路池设置。" pool_capability "$task_id"; then
+	if ! write_task_running "$summary" pool_capability "$task_id" "$enabled"; then
 		rm -rf "$LOCK_DIR"
 		fail "task_status_write_failed" "无法记录线路池任务。"
 		return 1
@@ -4184,12 +4188,13 @@ pool_capability_set_run() {
 	trap 'exit 143' INT TERM
 	[ -n "$task_id" ] && [ "$(jsonfilter -i "$TASK_STATUS" -e '@.task_id' 2>/dev/null)" = "$task_id" ] || return 1
 	case "$enabled" in true|false) ;; *) return 1 ;; esac
-	log_line "线路池：正在应用能力开关"
+	log_line "线路池：开始后台任务 task_id=$task_id enabled=$enabled"
 	result="$(apply_pool_capability "$enabled")"
 	rc=$?
 	printf '%s\n' "$result" > "$TASK_RESULT"
-	write_task_done "$rc" "$result"
+	write_task_done "$rc" "$result" || return 1
 	rm -f "$TASK_PID"
+	log_line "线路池：后台任务结束 task_id=$task_id exit_code=$rc"
 	return "$rc"
 }
 

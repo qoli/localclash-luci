@@ -440,7 +440,7 @@ function trackTask(title, startPromise, options) {
 var taskResumeChecked = false;
 
 function resumeTaskIfNeeded(task) {
-	if (taskResumeChecked || !task || !task.task || task.running !== true)
+	if (taskResumeChecked || !task || !task.task || task.task === 'pool_capability' || task.running !== true)
 		return Promise.resolve();
 	taskResumeChecked = true;
 

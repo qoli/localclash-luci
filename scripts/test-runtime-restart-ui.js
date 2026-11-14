@@ -153,6 +153,16 @@ async function testView(view) {
 	assert.strictEqual(test.state.modals.length, 1, view + ': duplicated resume modal');
 
 	test = loadView(view);
+	const poolTask = { task: 'pool_capability', task_id: 'pool-123', running: true, cancellable: false };
+	if (view === 'overview')
+		await test.context.resumeTaskIfNeeded(poolTask);
+	else {
+		test.state.statuses.push(poolTask);
+		await test.context.resumeTaskIfNeeded();
+	}
+	assert.strictEqual(test.state.modals.length, 0, view + ': background pool work opened a modal on navigation');
+
+	test = loadView(view);
 	await resumeTask(test, view, running, task({ task_id: 'replacement', done: true, result: { ok: true } }));
 	assert.match(test.modal().statusLine.textContent, /任务失败.*任务记录已变化/,
 		view + ': resume did not preserve task identity');
