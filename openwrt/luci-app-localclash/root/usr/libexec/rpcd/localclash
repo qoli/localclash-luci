@@ -4198,14 +4198,29 @@ pool_schedule_period_valid() {
 	return 1
 }
 
+pool_enhanced_filter_available() {
+	local arch features worker
+	arch="$(router_arch)" || return 1
+	worker="$STATE_DIR/bin/linux-$arch/localclash-pools"
+	[ -x "$worker" ] || return 1
+	features="$("$worker" features 2>/dev/null)" || return 1
+	[ "$(jsonfilter -s "$features" -e '@.enhanced_filter' 2>/dev/null)" = true ]
+}
+
 pool_schedule_get() {
-	local enabled period available arch status_file next_run last_run outcome
+	local enabled period enhanced_filter enhanced_filter_available available arch status_file next_run last_run outcome
 	command -v "$UCI_BIN" >/dev/null 2>&1 || {
 		fail "uci_missing" "缺少 uci，无法读取线路池定时更新设置。"
 		return 1
 	}
 	enabled="$(pool_schedule_config_value enabled 0)"
 	period="$(pool_schedule_config_value period 15m)"
+	enhanced_filter="$(pool_schedule_config_value enhanced_filter 0)"
+	case "$enhanced_filter" in
+		0) enhanced_filter=false ;;
+		1) enhanced_filter=true ;;
+		*) fail "pool_enhanced_filter_invalid" "篩選增強配置无效。"; return 1 ;;
+	esac
 	case "$enabled" in
 		0) enabled=false ;;
 		1) enabled=true ;;
@@ -4218,6 +4233,10 @@ pool_schedule_get() {
 	available=false
 	if arch="$(router_arch)" && [ -x "$STATE_DIR/bin/linux-$arch/localclash-pools" ]; then
 		available=true
+	fi
+	enhanced_filter_available=false
+	if pool_enhanced_filter_available; then
+		enhanced_filter_available=true
 	fi
 	status_file="$STATE_DIR/.runtime/mihomo/qualified-pools/schedule.json"
 	outcome=
@@ -4234,8 +4253,8 @@ pool_schedule_get() {
 	if [ "$enabled" != true ] || ! "$POOL_SCHEDULER_SERVICE" running >/dev/null 2>&1 || [ "$(pool_capability_value)" != true ]; then
 		next_run=
 	fi
-	printf '{"ok":true,"available":%s,"schedule":{"enabled":%s,"period":"%s"},"next_run_at":"%s","last_run_at":"%s","outcome":"%s"}\n' \
-		"$available" "$enabled" "$period" "$(json_escape "$next_run")" "$(json_escape "$last_run")" "$outcome"
+	printf '{"ok":true,"available":%s,"enhanced_filter_available":%s,"schedule":{"enabled":%s,"period":"%s","enhanced_filter":%s},"next_run_at":"%s","last_run_at":"%s","outcome":"%s"}\n' \
+		"$available" "$enhanced_filter_available" "$enabled" "$period" "$enhanced_filter" "$(json_escape "$next_run")" "$(json_escape "$last_run")" "$outcome"
 }
 
 pool_schedule_service_apply() {
@@ -4255,10 +4274,21 @@ pool_schedule_service_apply() {
 }
 
 pool_schedule_set() {
-	local payload enabled period pool_enabled arch previous_section previous_enabled previous_period rollback_rc
+	local payload enabled period enhanced_filter pool_enabled arch previous_section previous_enabled previous_period previous_enhanced_filter rollback_rc
 	payload="$(strip_ubus_rpc_session "$(cat)")"
 	enabled="$(jsonfilter -s "$payload" -e '@.enabled' 2>/dev/null || true)"
 	period="$(jsonfilter -s "$payload" -e '@.period' 2>/dev/null || true)"
+	enhanced_filter="$(jsonfilter -s "$payload" -e '@.enhanced_filter' 2>/dev/null || true)"
+	case "$enhanced_filter" in
+		true) enhanced_filter=1 ;;
+		false) enhanced_filter=0 ;;
+		'') enhanced_filter="$(pool_schedule_config_value enhanced_filter 0)" ;;
+		*) fail "pool_enhanced_filter_invalid" "请选择是否启用篩選增強。"; return 1 ;;
+	esac
+	case "$enhanced_filter" in
+		0|1) ;;
+		*) fail "pool_enhanced_filter_invalid" "篩選增強配置无效。"; return 1 ;;
+	esac
 	case "$enabled" in
 		true) enabled=1 ;;
 		false) enabled=0 ;;
@@ -4272,6 +4302,10 @@ pool_schedule_set() {
 		fail "pool_scheduler_service_missing" "线路池定时更新服务未安装。"
 		return 1
 	}
+	if [ "$enhanced_filter" = 1 ] && [ "$enabled" = 1 ] && ! pool_enhanced_filter_available; then
+		fail "pool_enhanced_filter_unavailable" "请先更新 localClash 基础资产，再启用篩選增強。"
+		return 1
+	fi
 	if [ "$enabled" = 1 ]; then
 		pool_enabled="$(pool_capability_value)" || {
 			printf '%s\n' "$pool_enabled"
@@ -4285,9 +4319,11 @@ pool_schedule_set() {
 	previous_section="$("$UCI_BIN" -q get localclash.pool_schedule 2>/dev/null)" || previous_section=
 	previous_enabled="$("$UCI_BIN" -q get localclash.pool_schedule.enabled 2>/dev/null)" || previous_enabled=
 	previous_period="$("$UCI_BIN" -q get localclash.pool_schedule.period 2>/dev/null)" || previous_period=
+	previous_enhanced_filter="$("$UCI_BIN" -q get localclash.pool_schedule.enhanced_filter 2>/dev/null)" || previous_enhanced_filter=
 	if "$UCI_BIN" -q set localclash.pool_schedule=pool_schedule &&
 		"$UCI_BIN" -q set "localclash.pool_schedule.enabled=$enabled" &&
 		"$UCI_BIN" -q set "localclash.pool_schedule.period=$period" &&
+		"$UCI_BIN" -q set "localclash.pool_schedule.enhanced_filter=$enhanced_filter" &&
 		"$UCI_BIN" -q commit localclash &&
 		pool_schedule_service_apply "$enabled" >/dev/null 2>&1; then
 		pool_schedule_get
@@ -4305,6 +4341,11 @@ pool_schedule_set() {
 			"$UCI_BIN" -q set "localclash.pool_schedule.period=$previous_period" || rollback_rc=1
 		else
 			"$UCI_BIN" -q delete localclash.pool_schedule.period || true
+		fi
+		if [ -n "$previous_enhanced_filter" ]; then
+			"$UCI_BIN" -q set "localclash.pool_schedule.enhanced_filter=$previous_enhanced_filter" || rollback_rc=1
+		else
+			"$UCI_BIN" -q delete localclash.pool_schedule.enhanced_filter || true
 		fi
 	else
 		"$UCI_BIN" -q delete localclash.pool_schedule || true
@@ -6041,7 +6082,7 @@ case "$method" in
 	  "pool_capability_get": {},
 	  "pool_capability_set_async": { "enabled": false },
 	  "pool_schedule_get": {},
-	  "pool_schedule_set": { "enabled": false, "period": "" },
+	  "pool_schedule_set": { "enabled": false, "period": "", "enhanced_filter": false },
 	  "custom_sites_get": {},
 	  "custom_sites_transact": { "operation": "", "pattern": "", "route": "", "id": "" },
 	  "custom_sites_transact_async": { "operation": "", "pattern": "", "route": "", "id": "" },

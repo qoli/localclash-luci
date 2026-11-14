@@ -76,7 +76,7 @@ CORE
 chmod +x "$CORE"
 export LOCALCLASH_CORE="$CORE"
 
-pool_schedule_get | jq -e '.schedule == {"enabled":false,"period":"15m"} and .available == false' >/dev/null
+pool_schedule_get | jq -e '.schedule == {"enabled":false,"period":"15m","enhanced_filter":false} and .available == false and .enhanced_filter_available == false' >/dev/null
 pool_capability_get | jq -e '.status.enabled == false' >/dev/null
 apply_pool_capability true | jq -e '.status.enabled == true' >/dev/null
 if result="$(printf '{"enabled":true,"period":"15m"}\n' | pool_schedule_set)"; then
@@ -102,7 +102,7 @@ printf '%s\n' "$result" | jq -e '.code == "pool_schedule_save_failed"' >/dev/nul
 
 for period in 5m 15m 30m 1h daily-08; do
 	result="$(printf '{"enabled":true,"period":"%s"}\n' "$period" | pool_schedule_set)"
-	printf '%s\n' "$result" | jq -e --arg period "$period" '.ok and .schedule == {"enabled":true,"period":$period}' >/dev/null
+	printf '%s\n' "$result" | jq -e --arg period "$period" '.ok and .schedule == {"enabled":true,"period":$period,"enhanced_filter":false}' >/dev/null
 	[ -f "$test_dir/enabled" ] && [ -f "$test_dir/running" ]
 done
 touch "$test_dir/fail-once"
@@ -110,7 +110,32 @@ if result="$(printf '{"enabled":true,"period":"30m"}\n' | pool_schedule_set)"; t
 	echo "Ignored failure to change the service period" >&2
 	exit 1
 fi
-pool_schedule_get | jq -e '.schedule == {"enabled":true,"period":"daily-08"}' >/dev/null
+pool_schedule_get | jq -e '.schedule == {"enabled":true,"period":"daily-08","enhanced_filter":false}' >/dev/null
+
+if result="$(printf '{"enabled":true,"period":"daily-08","enhanced_filter":true}\n' | pool_schedule_set)"; then
+	echo "Enabled enhanced filtering with an unsupported worker" >&2
+	exit 1
+fi
+printf '%s\n' "$result" | jq -e '.code == "pool_enhanced_filter_unavailable"' >/dev/null
+cat > "$worker" <<'WORKER'
+#!/bin/sh
+[ "$1" = features ] || exit 1
+printf '{"enhanced_filter":true}\n'
+WORKER
+pool_schedule_get | jq -e '.enhanced_filter_available == true' >/dev/null
+if result="$(printf '{"enabled":true,"period":"daily-08","enhanced_filter":2}\n' | pool_schedule_set)"; then
+	echo "Accepted an invalid enhanced filtering setting" >&2
+	exit 1
+fi
+printf '%s\n' "$result" | jq -e '.code == "pool_enhanced_filter_invalid"' >/dev/null
+touch "$test_dir/fail-once"
+if result="$(printf '{"enabled":true,"period":"5m","enhanced_filter":true}\n' | pool_schedule_set)"; then
+	echo "Ignored enhanced scheduler restart failure" >&2
+	exit 1
+fi
+pool_schedule_get | jq -e '.schedule.period == "daily-08" and .schedule.enhanced_filter == false' >/dev/null
+printf '{"enabled":true,"period":"daily-08","enhanced_filter":true}\n' | pool_schedule_set | jq -e '.schedule.enhanced_filter == true' >/dev/null
+printf '{"enabled":true,"period":"daily-08"}\n' | pool_schedule_set | jq -e '.schedule.enhanced_filter == true' >/dev/null
 if result="$(printf '{"enabled":true,"period":"30m"}\n' | LOCALCLASH_TEST_POOL_READ_FAIL=1 pool_schedule_set)"; then
 	echo "Saved a new schedule without reading the pool setting" >&2
 	exit 1
@@ -127,13 +152,17 @@ procd_open_instance() { printf '%s\n' "$1" > "$test_dir/instance"; }
 procd_set_param() {
 	case "$1" in command|env) printf '%s\n' "$@" > "$test_dir/$1" ;; esac
 }
+procd_append_param() { shift; printf '%s\n' "$@" >> "$test_dir/command"; }
 procd_close_instance() { :; }
 . "$init_script"
 export LOCALCLASH_STATE_DIR="$STATE_DIR"
 start_service
 grep -qx pool_scheduler "$test_dir/instance"
-printf '%s\n' command "$worker" schedule --runtime "$STATE_DIR/.runtime/mihomo" --period daily-08 | cmp - "$test_dir/command"
+printf '%s\n' command "$worker" schedule --runtime "$STATE_DIR/.runtime/mihomo" --period daily-08 --enhanced-filter | cmp - "$test_dir/command"
 grep -qx 'TZ=Asia/Shanghai' "$test_dir/env"
+printf '{"enabled":true,"period":"daily-08","enhanced_filter":false}\n' | pool_schedule_set | jq -e '.schedule.enhanced_filter == false' >/dev/null
+start_service
+printf '%s\n' command "$worker" schedule --runtime "$STATE_DIR/.runtime/mihomo" --period daily-08 | cmp - "$test_dir/command"
 
 mkdir -p "$STATE_DIR/.runtime/mihomo/qualified-pools"
 printf '{"next_run_at":"2026-11-13T08:00:00+08:00"}\n' > "$STATE_DIR/.runtime/mihomo/qualified-pools/schedule.json"
@@ -148,7 +177,7 @@ grep -qx pool_scheduler "$test_dir/instance"
 
 apply_pool_capability false | jq -e '.status.enabled == false' >/dev/null
 [ ! -f "$test_dir/enabled" ] && [ ! -f "$test_dir/running" ]
-pool_schedule_get | jq -e '.schedule == {"enabled":true,"period":"daily-08"} and .next_run_at == ""' >/dev/null
+pool_schedule_get | jq -e '.schedule == {"enabled":true,"period":"daily-08","enhanced_filter":false} and .next_run_at == ""' >/dev/null
 rm "$test_dir/instance"
 start_service
 [ ! -f "$test_dir/instance" ]
@@ -156,10 +185,10 @@ printf '{"enabled":true,"period":"30m"}\n' | pool_schedule_set | jq -e '.schedul
 [ ! -f "$test_dir/running" ]
 apply_pool_capability true | jq -e '.status.enabled == true' >/dev/null
 [ -f "$test_dir/enabled" ] && [ -f "$test_dir/running" ]
-pool_schedule_get | jq -e '.schedule == {"enabled":true,"period":"30m"}' >/dev/null
+pool_schedule_get | jq -e '.schedule == {"enabled":true,"period":"30m","enhanced_filter":false}' >/dev/null
 
 result="$(printf '{"enabled":false,"period":"15m"}\n' | pool_schedule_set)"
-printf '%s\n' "$result" | jq -e '.schedule == {"enabled":false,"period":"15m"}' >/dev/null
+printf '%s\n' "$result" | jq -e '.schedule == {"enabled":false,"period":"15m","enhanced_filter":false}' >/dev/null
 [ ! -f "$test_dir/enabled" ] && [ ! -f "$test_dir/running" ]
 apply_pool_capability true | jq -e '.status.enabled == true' >/dev/null
 [ ! -f "$test_dir/enabled" ] && [ ! -f "$test_dir/running" ]

@@ -59,7 +59,7 @@ var callPoolScheduleGet = rpc.declare({
 var callPoolScheduleSet = rpc.declare({
 	object: 'localclash',
 	method: 'pool_schedule_set',
-	params: [ 'enabled', 'period' ],
+	params: [ 'enabled', 'period', 'enhanced_filter' ],
 	expect: { '': {} }
 });
 
@@ -396,6 +396,12 @@ function renderPoolSchedule(result, capability) {
 		'checked': schedule.enabled === true ? '' : null,
 		'disabled': result && (result.available || schedule.enabled) ? null : ''
 	});
+	var enhancedFilter = E('input', {
+		'id': 'localclash-pool-enhanced-filter',
+		'type': 'checkbox',
+		'checked': schedule.enhanced_filter === true ? '' : null,
+		'disabled': result && (result.enhanced_filter_available || schedule.enhanced_filter) ? null : ''
+	});
 	var options = [
 		[ '5m', _('5 分钟') ],
 		[ '15m', _('15 分钟') ],
@@ -423,6 +429,11 @@ function renderPoolSchedule(result, capability) {
 				E('span', {}, [ _('更新周期') ]), period
 			])
 		]),
+		E('label', { 'class': 'localclash-schedule-enabled', 'for': enhancedFilter.id }, [
+			enhancedFilter, E('span', {}, [ _('篩選增強') ])
+		]),
+		E('p', {}, [ _('保存订阅时使用基础筛选。启用后，定时重筛会追加 SMTP STARTTLS、Ubuntu 更新与安全更新索引、TMDB 封面和 Microsoft 连通性检查，全部通过后进入自动池。增强项目并行执行，定时重筛耗时会增加。') ]),
+		result && !result.enhanced_filter_available ? E('p', {}, [ _('更新 localClash 基础资产后可启用篩選增強。') ]) : null,
 		status,
 		actionRow([
 			E('button', {
@@ -431,11 +442,13 @@ function renderPoolSchedule(result, capability) {
 				'click': function(ev) {
 					var button = ev.currentTarget;
 					button.disabled = true;
-					callPoolScheduleSet(enabled.checked, period.value).then(function(updated) {
+					callPoolScheduleSet(enabled.checked, period.value, enhancedFilter.checked).then(function(updated) {
 						if (!updated || updated.ok !== true)
 							throw new Error(updated && updated.message || _('无法保存线路池定时更新设置。'));
 						enabled.checked = updated.schedule.enabled;
 						period.value = updated.schedule.period;
+						enhancedFilter.checked = updated.schedule.enhanced_filter === true;
+						enhancedFilter.disabled = !updated.enhanced_filter_available && !updated.schedule.enhanced_filter;
 						enabled.disabled = !updated.available && !updated.schedule.enabled;
 						status.textContent = [ _('线路池定时设置已保存。'), poolScheduleStatusText(updated, capability) ].filter(Boolean).join('\n');
 					}).catch(function(err) {
@@ -446,7 +459,7 @@ function renderPoolSchedule(result, capability) {
 				}
 			}, [ _('保存线路池定时设置') ])
 		])
-	]);
+	].filter(Boolean));
 }
 
 return view.extend({

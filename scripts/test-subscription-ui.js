@@ -25,9 +25,10 @@ assert(source.includes("method: 'pool_schedule_set'"));
 assert(source.includes("method: 'pool_capability_get'"));
 assert(source.includes("method: 'pool_capability_set_async'"));
 assert(source.includes('return callPoolCapabilitySetAsync(enabled.checked);'));
-assert(source.includes('callPoolScheduleSet(enabled.checked, period.value)'));
+assert(source.includes('callPoolScheduleSet(enabled.checked, period.value, enhancedFilter.checked)'));
 assert(source.includes("id': 'localclash-pool-capability-enabled'"));
-assert(source.includes("params: [ 'enabled', 'period' ]"));
+assert(source.includes("params: [ 'enabled', 'period', 'enhanced_filter' ]"));
+assert(source.includes("_('篩選增強')"));
 for (const period of [ '5m', '15m', '30m', '1h', 'daily-08' ])
 	assert(source.includes("[ '" + period + "', _("));
 assert(source.includes('if (task && task.cancellable === false)'));
@@ -93,6 +94,20 @@ async function testSubscriptionActions() {
 	response.runtime.update_hour = 23;
 	await click();
 	assert.match(status.textContent, /下次执行：/);
+
+	const poolSave = buttons.get('保存线路池定时设置');
+	byID.get('localclash-pool-schedule-enabled').checked = true;
+	byID.get('localclash-pool-schedule-period').value = '15m';
+	byID.get('localclash-pool-enhanced-filter').checked = true;
+	response = {
+		ok: true, available: true, enhanced_filter_available: true,
+		schedule: { enabled: true, period: '15m', enhanced_filter: true }
+	};
+	await poolSave.attrs.click({ currentTarget: poolSave });
+	await new Promise(resolve => setImmediate(resolve));
+	assert.deepStrictEqual(calls.pop(), { method: 'pool_schedule_set', args: [true, '15m', true] });
+	assert.strictEqual(byID.get('localclash-pool-enhanced-filter').checked, true);
+	assert.strictEqual(byID.get('localclash-pool-enhanced-filter').disabled, false);
 
 	response = { ok: false, code: 'mcp_service_unhealthy', message: 'localClash MCP 服务必须健康。' };
 	await click();
