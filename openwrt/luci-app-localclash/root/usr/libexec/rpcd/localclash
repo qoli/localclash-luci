@@ -4203,17 +4203,22 @@ pool_schedule_period_valid() {
 	return 1
 }
 
-pool_enhanced_filter_available() {
-	local arch features worker
+pool_worker_features() {
+	local arch worker
 	arch="$(router_arch)" || return 1
 	worker="$STATE_DIR/bin/linux-$arch/localclash-pools"
 	[ -x "$worker" ] || return 1
-	features="$("$worker" features 2>/dev/null)" || return 1
+	"$worker" features 2>/dev/null
+}
+
+pool_enhanced_filter_available() {
+	local features
+	features="$(pool_worker_features)" || return 1
 	[ "$(jsonfilter -s "$features" -e '@.enhanced_filter' 2>/dev/null)" = true ]
 }
 
 pool_schedule_get() {
-	local enabled period enhanced_filter enhanced_filter_available available arch status_file next_run last_run outcome
+	local enabled period enhanced_filter enhanced_filter_available enhanced_chatgpt_streaming features available arch status_file next_run last_run outcome
 	command -v "$UCI_BIN" >/dev/null 2>&1 || {
 		fail "uci_missing" "缺少 uci，无法读取线路池定时更新设置。"
 		return 1
@@ -4240,8 +4245,13 @@ pool_schedule_get() {
 		available=true
 	fi
 	enhanced_filter_available=false
-	if pool_enhanced_filter_available; then
+	enhanced_chatgpt_streaming=false
+	if features="$(pool_worker_features)" && \
+		[ "$(jsonfilter -s "$features" -e '@.enhanced_filter' 2>/dev/null)" = true ]; then
 		enhanced_filter_available=true
+		if [ "$(jsonfilter -s "$features" -e '@.enhanced_chatgpt_streaming' 2>/dev/null)" = true ]; then
+			enhanced_chatgpt_streaming=true
+		fi
 	fi
 	status_file="$STATE_DIR/.runtime/mihomo/qualified-pools/schedule.json"
 	outcome=
@@ -4258,8 +4268,8 @@ pool_schedule_get() {
 	if [ "$enabled" != true ] || ! "$POOL_SCHEDULER_SERVICE" running >/dev/null 2>&1 || [ "$(pool_capability_value)" != true ]; then
 		next_run=
 	fi
-	printf '{"ok":true,"available":%s,"enhanced_filter_available":%s,"schedule":{"enabled":%s,"period":"%s","enhanced_filter":%s},"next_run_at":"%s","last_run_at":"%s","outcome":"%s"}\n' \
-		"$available" "$enhanced_filter_available" "$enabled" "$period" "$enhanced_filter" "$(json_escape "$next_run")" "$(json_escape "$last_run")" "$outcome"
+	printf '{"ok":true,"available":%s,"enhanced_filter_available":%s,"enhanced_chatgpt_streaming":%s,"schedule":{"enabled":%s,"period":"%s","enhanced_filter":%s},"next_run_at":"%s","last_run_at":"%s","outcome":"%s"}\n' \
+		"$available" "$enhanced_filter_available" "$enhanced_chatgpt_streaming" "$enabled" "$period" "$enhanced_filter" "$(json_escape "$next_run")" "$(json_escape "$last_run")" "$outcome"
 }
 
 pool_schedule_service_apply() {

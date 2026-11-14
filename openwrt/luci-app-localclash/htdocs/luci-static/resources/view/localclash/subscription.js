@@ -558,7 +558,8 @@ function renderPoolSchedule(result, capability) {
 		E('label', { 'class': 'localclash-schedule-enabled', 'for': enhancedFilter.id }, [
 			enhancedFilter, E('span', {}, [ _('篩選增強') ])
 		]),
-		E('p', {}, [ _('保存订阅时使用基础筛选。启用后，定时重筛会追加 SMTP STARTTLS、Ubuntu 更新与安全更新索引、TMDB 封面和 Microsoft 连通性检查，全部通过后进入自动池。增强项目并行执行，定时重筛耗时会增加。') ]),
+		E('p', {}, [ _('保存订阅时使用基础筛选。启用后，自动池定时重筛会追加 SMTP STARTTLS、Ubuntu 更新与安全更新索引、TMDB 封面和 Microsoft 连通性检查。') ]),
+		result && result.enhanced_chatgpt_streaming === true ? E('p', {}, [ _('ChatGPT-available 定时重筛也会通过公开测试服务检查 SSE 和 WebSocket。每次重筛最多检测三轮，至少两轮的两项检查都完成后入池。') ]) : null,
 		result && !result.enhanced_filter_available ? E('p', {}, [ _('更新 localClash 基础资产后可启用篩選增強。') ]) : null,
 		status,
 		actionRow([

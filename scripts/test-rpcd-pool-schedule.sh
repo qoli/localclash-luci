@@ -122,7 +122,13 @@ cat > "$worker" <<'WORKER'
 [ "$1" = features ] || exit 1
 printf '{"enhanced_filter":true}\n'
 WORKER
-pool_schedule_get | jq -e '.enhanced_filter_available == true' >/dev/null
+pool_schedule_get | jq -e '.enhanced_filter_available == true and .enhanced_chatgpt_streaming == false' >/dev/null
+cat > "$worker" <<'WORKER'
+#!/bin/sh
+[ "$1" = features ] || exit 1
+printf '{"enhanced_filter":true,"enhanced_chatgpt_streaming":true}\n'
+WORKER
+pool_schedule_get | jq -e '.enhanced_filter_available == true and .enhanced_chatgpt_streaming == true' >/dev/null
 if result="$(printf '{"enabled":true,"period":"daily-08","enhanced_filter":2}\n' | pool_schedule_set)"; then
 	echo "Accepted an invalid enhanced filtering setting" >&2
 	exit 1
