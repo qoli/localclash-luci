@@ -90,6 +90,9 @@ case "$expr" in
 	@.changed)
 		json_bool changed
 		;;
+	@.status.staged_core)
+		printf '%s\n' "$content" | sed -n 's/.*"staged_core"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+		;;
 	@.luci.changed)
 		printf '%s\n' "$content" | grep -q '"luci"[[:space:]]*:[[:space:]]*{[^}]*"changed"[[:space:]]*:[[:space:]]*true' && printf 'true\n' || printf 'false\n'
 		;;
@@ -171,7 +174,7 @@ TAKEOVER_LOG_LOCK_DIR="${tmp_dir}/takeover-events.lock"
 TAKEOVER_REPAIR_TICKET="${tmp_dir}/takeover/repair-ticket"
 TAKEOVER_STATE_STATUS="${tmp_dir}/takeover/status"
 TASK_STEP_TIMEOUT=0
-mkdir -p "$STATE_DIR"
+mkdir -p "$STATE_DIR/.runtime"
 
 trace() {
 	printf '%s\n' "$1" >> "${tmp_dir}/trace"
@@ -295,8 +298,22 @@ takeover_apply() {
 	printf '{"ok":true,"changed":true,"summary":"takeover applied"}\n'
 }
 
+assert_material_core() {
+	local candidate
+	candidate="${LOCALCLASH_STAGED_MIHOMO:-}"
+	if [ "${MOCK_INITIAL_RUNTIME_STOPPED:-0}" = "1" ] || [ "${MOCK_MIHOMO_UNCHANGED:-0}" = "1" ]; then
+		[ -z "$candidate" ] || fail_test "unexpected staged executable at $*"
+	else
+		[ "$candidate" = "$(cat "${tmp_dir}/staged-core")" ] && [ -f "$candidate" ] || fail_test "missing staged executable at $*"
+	fi
+}
+
 call_core() {
-	trace "call_core $*"
+	if [ "$1 ${2:-} ${3:-} ${4:-}" = "component update mihomo --stage-dir" ]; then
+		trace 'call_core component update mihomo --stage-dir <stage> --json'
+	else
+		trace "call_core $*"
+	fi
 	case "$*" in
 		"runtime status --json")
 			if [ "${MOCK_INITIAL_RUNTIME_STOPPED:-0}" = "1" ]; then
@@ -308,7 +325,12 @@ call_core() {
 		"takeover status --json")
 			printf '{"status":{"effective":true,"runtime_running":true,"profile_mode":"router"}}\n'
 			;;
-		"component update mihomo --json")
+		"component update mihomo --json"|component\ update\ mihomo\ --stage-dir\ *\ --json)
+			if [ "${MOCK_INITIAL_RUNTIME_STOPPED:-0}" = "1" ]; then
+				[ "$4" = "--json" ] || fail_test "stopped runtime should install immediately"
+			else
+				[ "$4" = "--stage-dir" ] || fail_test "running runtime should stage the candidate"
+			fi
 			if [ "${MOCK_MIHOMO_UPDATE_FAIL:-0}" = "1" ]; then
 				printf '{"ok":false,"code":"mihomo_download_failed","message":"download unavailable"}\n'
 				return 1
@@ -316,6 +338,11 @@ call_core() {
 				printf '{"ok":true,"changed":false,"summary":"mihomo already current"}\n'
 			elif [ "${MOCK_MIHOMO_CHANGED_MISSING:-0}" = "1" ]; then
 				printf '{"ok":true,"summary":"mihomo updated"}\n'
+			elif [ "$4" = "--stage-dir" ]; then
+				local candidate="$5/lc-mihomo-smart"
+				: > "$candidate"
+				printf '%s\n' "$candidate" > "${tmp_dir}/staged-core"
+				printf '{"ok":true,"changed":true,"status":{"staged_core":"%s"}}\n' "$candidate"
 			else
 				printf '{"ok":true,"changed":true,"summary":"mihomo updated"}\n'
 			fi
@@ -345,6 +372,7 @@ call_core() {
 			printf '{"status":{"configured":true}}\n'
 			;;
 		"subscription refresh --json")
+			assert_material_core "$*"
 			if [ "${MOCK_SUBSCRIPTION_REFRESH_FAIL:-0}" = "1" ]; then
 				printf 'provider timeout\n' >&2
 				printf '{"ok":false,"code":"subscription_fetch_failed","message":"subscription source unavailable"}\n'
@@ -359,6 +387,7 @@ call_core() {
 			printf '{"status":{"runtime_profile":{"mode":"router","core":"smart"}}}\n'
 			;;
 		config\ apply-template\ --input\ *\ --json)
+			assert_material_core "$*"
 			cp "$4" "${tmp_dir}/template-sync-input.json"
 			if [ "${MOCK_TEMPLATE_TRANSACTION_FAIL:-0}" = "1" ]; then
 				printf '{"ok":false,"code":"command_failed","message":"material transaction failed and prior state was restored: capability probe failed"}\n'
@@ -379,6 +408,7 @@ call_core() {
 			fi
 			;;
 		"mihomo config-test --json")
+			assert_material_core "$*"
 			if [ "${MOCK_CONFIG_TEST_FAIL:-0}" = "1" ]; then
 				printf '{"ok":false,"code":"mihomo_config_invalid","message":"candidate config invalid"}\n'
 				return 1
@@ -386,6 +416,7 @@ call_core() {
 			printf '{"ok":true,"changed":false,"summary":"config valid"}\n'
 			;;
 		"runtime restart --strategy process_restart --json"|"runtime restart --strategy hot_reload --json")
+			assert_material_core "$*"
 			printf '{"ok":true,"changed":true,"summary":"runtime restarted"}\n'
 			;;
 		*)
@@ -396,6 +427,7 @@ call_core() {
 }
 
 call_takeover() {
+	[ -z "${LOCALCLASH_STAGED_MIHOMO:-}" ] || fail_test "takeover must observe the installed runtime"
 	trace "call_takeover $*"
 	case "$*" in
 		"status --json")
@@ -464,7 +496,7 @@ luci_update
 one_click_update_reexec
 bootstrap_core
 service_status
-call_core component update mihomo --json
+call_core component update mihomo --stage-dir <stage> --json
 call_core component update dashboard --json
 call_core subscription status --json
 call_core subscription refresh --json
@@ -481,6 +513,7 @@ EOF
 if ! diff -u "$expected" "${tmp_dir}/trace"; then
 	fail_test "one-click update order mismatch"
 fi
+[ ! -e "$(cat "${tmp_dir}/staged-core")" ] || fail_test "successful update left a staged executable"
 grep -q 'dnsqualify' "${tmp_dir}/trace" && fail_test "retired dnsqualify step remained in one-click trace"
 grep -q 'custom-sites list' "${tmp_dir}/trace" && fail_test "unchecked policy sync must not read custom-site preservation snapshots"
 
@@ -601,7 +634,7 @@ luci_update
 one_click_update_reexec
 bootstrap_core
 service_status
-call_core component update mihomo --json
+call_core component update mihomo --stage-dir <stage> --json
 call_core component update dashboard --json
 call_core subscription status --json
 call_core subscription refresh --json
@@ -612,6 +645,7 @@ if ! diff -u "$expected" "${tmp_dir}/trace"; then
 	fail_test "subscription refresh failure boundary mismatch"
 fi
 grep -q '^call_core runtime restart ' "${tmp_dir}/trace" && fail_test "subscription refresh failure restarted Mihomo before all materials were ready"
+[ ! -e "$(cat "${tmp_dir}/staged-core")" ] || fail_test "subscription failure left a staged executable"
 
 : > "${tmp_dir}/trace"
 rm -f "${tmp_dir}/takeover-status-count" "${tmp_dir}/takeover-recovered"
@@ -742,7 +776,7 @@ luci_update
 one_click_update_reexec
 bootstrap_core
 service_status
-call_core component update mihomo --json
+call_core component update mihomo --stage-dir <stage> --json
 call_core component update dashboard --json
 call_core subscription status --json
 call_core custom-sites list --json
@@ -892,7 +926,12 @@ for runtime_stopped in 0 1; do
 					if [ "$luci_changed" = true ]; then
 						printf 'one_click_update_reexec\n'
 					fi
-					printf 'bootstrap_core\nservice_status\ncall_core component update mihomo --json\n'
+					printf 'bootstrap_core\nservice_status\n'
+					if [ "$runtime_stopped" = 0 ]; then
+						printf 'call_core component update mihomo --stage-dir <stage> --json\n'
+					else
+						printf 'call_core component update mihomo --json\n'
+					fi
 				} > "$expected"
 				if ! diff -u "$expected" "${tmp_dir}/trace"; then
 					fail_test "download failure reached downstream operations (stopped=${runtime_stopped}, disk=${disk_core_present}, policy=${sync_default_policy}, luci_changed=${luci_changed})"
@@ -927,5 +966,6 @@ assert_json "$result"
 [ "$result_rc" -ne 0 ] || fail_test "invalid final Mihomo material returned success"
 printf '%s\n' "$result" | grep -q '"code":"mihomo_config_invalid"' || fail_test "final material validation failure was not preserved: ${result}"
 grep -q '^call_core runtime restart ' "${tmp_dir}/trace" && fail_test "invalid final Mihomo material restarted the runtime"
+[ ! -e "$(cat "${tmp_dir}/staged-core")" ] || fail_test "final validation failure left a staged executable"
 
 printf 'rpcd one-click update tests passed\n'

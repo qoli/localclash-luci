@@ -2050,11 +2050,12 @@ runtime_continuity_core_error_details() {
 }
 
 runtime_restart_continuity_run() {
-	local strategy expected_effective expected_profile source tmpdir before_effective before_runtime before_profile restart_ok runtime_after apply_ok post_effective post_runtime post_profile summary transition rc details
+	local strategy expected_effective expected_profile source staged_core tmpdir before_effective before_runtime before_profile restart_ok runtime_after apply_ok post_effective post_runtime post_profile summary transition rc details
 	strategy="$1"
 	expected_effective="$2"
 	expected_profile="$3"
 	source="$4"
+	staged_core="${5:-}"
 
 	case "$strategy" in
 		hot_reload|process_restart) ;;
@@ -2131,7 +2132,7 @@ runtime_restart_continuity_run() {
 	fi
 
 	log_line "运行时重启：正在重启 Mihomo 并等待就绪"
-	if call_core runtime restart --strategy "$strategy" --json > "$tmpdir/runtime.json"; then
+	if LOCALCLASH_STAGED_MIHOMO="$staged_core" call_core runtime restart --strategy "$strategy" --json > "$tmpdir/runtime.json"; then
 		rc=0
 	else
 		rc=$?
@@ -3451,7 +3452,7 @@ one_click_update_run() {
 }
 
 one_click_update_continue() {
-	local tmpdir runtime_was_running takeover_was_effective profile_mode result_file recovery_file rc recovery_rc mihomo_update_failed
+	local tmpdir runtime_was_running takeover_was_effective profile_mode result_file recovery_file rc recovery_rc mihomo_update_failed mihomo_stage_dir
 	tmpdir="$1"
 	runtime_was_running="$3"
 	takeover_was_effective="$4"
@@ -3459,11 +3460,15 @@ one_click_update_continue() {
 	result_file="/tmp/localclash-one-click-result.$$.json"
 	recovery_file="/tmp/localclash-one-click-recovery.$$.json"
 	mihomo_update_failed=false
+	mihomo_stage_dir=""
 	rm -f "$result_file" "$recovery_file"
 	if one_click_update_continue_execute "$@" > "$result_file"; then
 		rc=0
 	else
 		rc=$?
+	fi
+	if [ -n "$mihomo_stage_dir" ]; then
+		rm -rf "$mihomo_stage_dir"
 	fi
 	if [ "$rc" -eq 0 ] || [ "$mihomo_update_failed" = "true" ]; then
 		cat "$result_file"
@@ -3481,7 +3486,7 @@ one_click_update_continue() {
 }
 
 one_click_update_continue_execute() {
-	local tmpdir sync_default_policy runtime_was_running takeover_was_effective profile_mode subscription_ready subscription_refresh_json policy_template_sync_json custom_sites_preservation custom_sites_before_fields custom_sites_after_fields mihomo_changed dashboard_changed runtime_recovered takeover_recovered mcp_healthy current_mode current_core commit_strategy software_checkpoint_json material_checkpoint_json warnings_json warning_text completion_summary
+	local tmpdir sync_default_policy runtime_was_running takeover_was_effective profile_mode subscription_ready subscription_refresh_json policy_template_sync_json custom_sites_preservation custom_sites_before_fields custom_sites_after_fields mihomo_changed mihomo_candidate dashboard_changed runtime_recovered takeover_recovered mcp_healthy current_mode current_core commit_strategy software_checkpoint_json material_checkpoint_json warnings_json warning_text completion_summary
 	tmpdir="$1"
 	sync_default_policy="$2"
 	runtime_was_running="$3"
@@ -3526,7 +3531,17 @@ one_click_update_continue_execute() {
 		return 1
 	fi
 
-	if ! run_with_heartbeat "一键更新：正在更新 Mihomo 核心" "$tmpdir/mihomo.json" call_core component update mihomo --json; then
+	set --
+	if [ "$runtime_was_running" = "true" ]; then
+		if ! mihomo_stage_dir="$(mktemp -d "$STATE_DIR/.runtime/.one-click-mihomo-XXXXXX")"; then
+			mihomo_update_failed=true
+			fail "mihomo_stage_dir_failed" "无法创建 Mihomo 更新暂存目录。"
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		set -- --stage-dir "$mihomo_stage_dir"
+	fi
+	if ! run_with_heartbeat "一键更新：正在更新 Mihomo 核心" "$tmpdir/mihomo.json" call_core component update mihomo "$@" --json; then
 		# No Mihomo runtime switch has occurred. Do not test or restart the
 		# existing on-disk core, or enter takeover recovery after this failure.
 		mihomo_update_failed=true
@@ -3540,6 +3555,15 @@ one_click_update_continue_execute() {
 		rm -rf "$tmpdir"
 		return 1
 	}
+	mihomo_candidate=""
+	if [ -n "$mihomo_stage_dir" ] && [ "$mihomo_changed" = "true" ]; then
+		mihomo_candidate="$(jsonfilter -i "$tmpdir/mihomo.json" -e '@.status.staged_core' 2>/dev/null || true)"
+		if [ -z "$mihomo_candidate" ]; then
+			fail "component_update_result_invalid" "Mihomo 更新结果缺少暂存的核心路径。"
+			rm -rf "$tmpdir"
+			return 1
+		fi
+	fi
 	log_line "一键更新：Mihomo 核心材料已准备；运行时切换延后到所有材料验证完成后"
 
 	if ! run_with_heartbeat "一键更新：正在更新 Dashboard" "$tmpdir/dashboard.json" call_core component update dashboard --json; then
@@ -3567,7 +3591,7 @@ one_click_update_continue_execute() {
 		return 1
 	}
 	if [ "$subscription_ready" = "true" ] && [ "$sync_default_policy" != "true" ]; then
-		if ! run_with_heartbeat_until_complete "一键更新：正在刷新订阅" "$tmpdir/subscription-refresh.json" call_core subscription refresh --json; then
+		if ! LOCALCLASH_STAGED_MIHOMO="$mihomo_candidate" run_with_heartbeat_until_complete "一键更新：正在刷新订阅" "$tmpdir/subscription-refresh.json" call_core subscription refresh --json; then
 			log_line "一键更新：订阅刷新失败；运行时尚未切换"
 			cat "$tmpdir/subscription-refresh.json"
 			rm -rf "$tmpdir"
@@ -3631,7 +3655,7 @@ one_click_update_continue_execute() {
   "refresh_subscription": true
 }
 JSON
-		if ! run_with_heartbeat_until_complete "一键更新：正在同步最新默认策略" "$tmpdir/policy-template-sync.json" call_core config apply-template --input "$tmpdir/template-sync.json" --json; then
+		if ! LOCALCLASH_STAGED_MIHOMO="$mihomo_candidate" run_with_heartbeat_until_complete "一键更新：正在同步最新默认策略" "$tmpdir/policy-template-sync.json" call_core config apply-template --input "$tmpdir/template-sync.json" --json; then
 			log_line "一键更新：默认策略同步失败"
 			cat "$tmpdir/policy-template-sync.json"
 			rm -rf "$tmpdir"
@@ -3681,7 +3705,7 @@ JSON
 	fi
 
 	if [ "$runtime_was_running" = "true" ] || [ "$subscription_ready" = "true" ]; then
-		if ! run_with_heartbeat "一键更新：正在验证最终 Mihomo 材料" "$tmpdir/config-test.json" call_core mihomo config-test --json; then
+		if ! LOCALCLASH_STAGED_MIHOMO="$mihomo_candidate" run_with_heartbeat "一键更新：正在验证最终 Mihomo 材料" "$tmpdir/config-test.json" call_core mihomo config-test --json; then
 			log_line "一键更新：最终 Mihomo 材料验证失败；运行时尚未切换"
 			cat "$tmpdir/config-test.json"
 			rm -rf "$tmpdir"
@@ -3695,7 +3719,7 @@ JSON
 		else
 			commit_strategy=hot_reload
 		fi
-		if ! run_with_heartbeat "一键更新：正在批量提交已验证材料" "$tmpdir/batch-checkpoint.json" runtime_restart_continuity_run "$commit_strategy" "$takeover_was_effective" "$profile_mode" one_click_update_batch; then
+		if ! run_with_heartbeat "一键更新：正在批量提交已验证材料" "$tmpdir/batch-checkpoint.json" runtime_restart_continuity_run "$commit_strategy" "$takeover_was_effective" "$profile_mode" one_click_update_batch "$mihomo_candidate"; then
 			log_line "一键更新：批量材料提交失败"
 			cat "$tmpdir/batch-checkpoint.json"
 			rm -rf "$tmpdir"
