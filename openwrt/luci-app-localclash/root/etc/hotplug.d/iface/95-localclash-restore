@@ -24,26 +24,33 @@ printf '%s\n' "$TOKEN" > "$STAMP_TMP" || exit 1
 mv -f "$STAMP_TMP" "$STAMP" || exit 1
 
 takeover_trace() {
-	LOCALCLASH_TAKEOVER_EVENT_ID="$TOKEN" "$HELPER" call takeover_trace iface_hotplug "$1" \
+	local event="$1"
+	shift
+	LOCALCLASH_TAKEOVER_EVENT_ID="$TOKEN" "$HELPER" call takeover_trace iface_hotplug "$event" \
 		action "${ACTION:-unknown}" interface "${INTERFACE:-unknown}" device "${DEVICE:-unknown}" \
-		token "$TOKEN" delay_seconds "$RESTORE_DELAY" result "${2:-}" exit_code "${3:-}" >/dev/null 2>&1 || true
+		token "$TOKEN" delay_seconds "$RESTORE_DELAY" "$@" >/dev/null 2>&1 || true
 }
 
-takeover_trace scheduled
+takeover_trace scheduled result "" exit_code ""
 
 (
 	sleep "$RESTORE_DELAY"
 	LATEST_TOKEN="$(cat "$STAMP" 2>/dev/null)" || exit 1
 	if [ "$LATEST_TOKEN" != "$TOKEN" ]; then
-		takeover_trace superseded
+		takeover_trace superseded result "" exit_code ""
 		exit 0
 	fi
-	takeover_trace restore_started
-	if LOCALCLASH_TAKEOVER_EVENT_ID="$TOKEN" LOCALCLASH_TAKEOVER_RESTORE_SOURCE=iface_hotplug "$HELPER" call takeover_restore >/dev/null 2>&1; then
-		rc=0
-		takeover_trace restore_finished success "$rc"
+	takeover_trace restore_started result "" exit_code ""
+	if restore_result="$(LOCALCLASH_TAKEOVER_EVENT_ID="$TOKEN" LOCALCLASH_TAKEOVER_RESTORE_SOURCE=iface_hotplug "$HELPER" call takeover_restore 2>/dev/null)"; then
+		takeover_trace restore_finished result success exit_code 0
 	else
 		rc=$?
-		takeover_trace restore_finished failure "$rc"
+		error_code="$(printf '%s\n' "$restore_result" | jsonfilter -e '@.code' 2>/dev/null)" || error_code=""
+		case "$error_code" in
+			task_locked) stage=task_lock ;;
+			tmpdir_failed) stage=create_tmpdir ;;
+			*) stage=takeover_restore ;;
+		esac
+		takeover_trace restore_finished result failure exit_code "$rc" stage "$stage" core_code "$error_code"
 	fi
 ) &
