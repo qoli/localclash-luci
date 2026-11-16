@@ -296,7 +296,20 @@ body[data-page^="admin-services-localclash"] .modal input[type="radio"] {
 .localclash-summary-table td:first-child { width: 27%; font-weight: 550; }
 .localclash-summary-table td:nth-child(2) { width: 32%; }
 .localclash-view .table .cbi-section-actions { text-align: right; }
-.localclash-view .localclash-summary-table .btn { min-height: 40px; padding: 8px 14px; border-color: var(--lc-line) !important; color: var(--lc-ink) !important; background: transparent !important; font-size: 13px; }
+.localclash-view .localclash-summary-table .cbi-section-actions {
+	/* Argon gives action cells width: 1% !important. Let the column fit its controls. */
+	width: auto !important;
+}
+.localclash-view .localclash-summary-table .cbi-section-actions > .btn {
+	min-height: 40px;
+	padding: 8px 14px;
+	border-color: var(--lc-line) !important;
+	color: var(--lc-ink) !important;
+	background: transparent !important;
+	font-size: 13px;
+	white-space: nowrap;
+	overflow-wrap: normal;
+}
 .localclash-view .localclash-summary-table .btn + .btn { margin-left: 6px; }
 .localclash-status-table { table-layout: fixed; }
 .localclash-status-table :is(th, td):first-child { width: 180px; font-weight: 550; }
@@ -412,8 +425,9 @@ body[data-page^="admin-services-localclash"] :is(.localclash-result, .localclash
 	.localclash-view .localclash-summary-table tr { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "name actions" "state actions"; align-items: center; }
 	.localclash-view .localclash-summary-table td:first-child { grid-area: name; }
 	.localclash-view .localclash-summary-table td:nth-child(2) { grid-area: state; color: var(--lc-muted); font-size: 14px; }
-	.localclash-view .localclash-summary-table .cbi-section-actions { grid-area: actions; margin: 0; }
+	.localclash-view .localclash-summary-table .cbi-section-actions { display: grid; grid-area: actions; justify-items: end; gap: 6px; margin: 0; }
 	.localclash-view .localclash-summary-table .cbi-section-actions:empty { display: none; }
+	.localclash-view .localclash-summary-table .btn + .btn { margin-left: 0; }
 	.localclash-view .localclash-status-table td:last-child { font-size: 14px; }
 	.localclash-view .localclash-custom-site-table tr { grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 4px 8px; }
 	.localclash-custom-site-table td:first-child { grid-column: 1; grid-row: 1; }
