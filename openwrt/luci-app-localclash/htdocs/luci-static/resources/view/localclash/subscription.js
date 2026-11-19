@@ -482,7 +482,7 @@ function renderPoolCapability(capability, task, refreshSchedule) {
 
 	return E('div', { 'class': 'cbi-section localclash-section' }, [
 		E('h3', {}, [ _('线路池') ]),
-		E('p', { 'id': 'localclash-pool-capability-help' }, [ _('启用时，路由器会在后台为「⚡ 自动选择」和「ChatGPT-available」进行首次线路筛选。完成后自动应用，可以离开本页。关闭后，「自动选择」使用全部可选订阅线路，服务资格专用组暂停。') ]),
+		E('p', { 'id': 'localclash-pool-capability-help' }, [ _('启用时，路由器会在后台为「⚡ 自动选择」、「ChatGPT 美國優先」和「ChatGPT 台灣優先」进行首次线路筛选。完成后自动应用，可以离开本页。关闭后，「自动选择」使用全部可选订阅线路，服务资格专用组暂停。') ]),
 		E('label', { 'class': 'localclash-pool-switch', 'for': toggle.id }, [
 			toggle,
 			E('span', { 'class': 'localclash-pool-switch-track', 'aria-hidden': 'true' }),
@@ -559,7 +559,7 @@ function renderPoolSchedule(result, capability) {
 			enhancedFilter, E('span', {}, [ _('篩選增強') ])
 		]),
 		E('p', {}, [ _('保存订阅时使用基础筛选。启用后，自动池定时重筛会追加 SMTP STARTTLS、Ubuntu 更新与安全更新索引、TMDB 封面和 Microsoft 连通性检查。') ]),
-		result && result.enhanced_chatgpt_streaming === true ? E('p', {}, [ _('ChatGPT-available 定时重筛也会通过公开测试服务检查 SSE 和 WebSocket。每次重筛最多检测三轮，至少两轮的两项检查都完成后入池。') ]) : null,
+		result && result.enhanced_chatgpt_streaming === true ? E('p', {}, [ _('「ChatGPT 美國優先」与「ChatGPT 台灣優先」共用线路池，定时重筛也会通过公开测试服务检查 SSE 和 WebSocket。每次重筛最多检测三轮，至少两轮的两项检查都完成后入池。') ]) : null,
 		result && !result.enhanced_filter_available ? E('p', {}, [ _('更新 localClash 基础资产后可启用篩選增強。') ]) : null,
 		status,
 		actionRow([
