@@ -4393,7 +4393,7 @@ pool_enhanced_filter_available() {
 }
 
 pool_schedule_get() {
-	local enabled period enhanced_filter enhanced_filter_available enhanced_chatgpt_streaming youtube_bulk bulk_measured bulk_reserves features available arch status_file next_run last_run outcome
+	local enabled period enhanced_filter enhanced_filter_available enhanced_chatgpt_streaming smtp_pool youtube_bulk bulk_measured bulk_reserves features available arch status_file next_run last_run outcome
 	command -v "$UCI_BIN" >/dev/null 2>&1 || {
 		fail "uci_missing" "缺少 uci，无法读取线路池定时更新设置。"
 		return 1
@@ -4421,9 +4421,11 @@ pool_schedule_get() {
 	fi
 	enhanced_filter_available=false
 	enhanced_chatgpt_streaming=false
+	smtp_pool=false
 	youtube_bulk=false
 	if features="$(pool_worker_features)" && \
 		[ "$(jsonfilter -s "$features" -e '@.enhanced_filter' 2>/dev/null)" = true ]; then
+		[ "$(jsonfilter -s "$features" -e '@.smtp_pool' 2>/dev/null)" != true ] || smtp_pool=true
 		[ "$(jsonfilter -s "$features" -e '@.youtube_bulk' 2>/dev/null)" != true ] || youtube_bulk=true
 		enhanced_filter_available=true
 		if [ "$(jsonfilter -s "$features" -e '@.enhanced_chatgpt_streaming' 2>/dev/null)" = true ]; then
@@ -4451,8 +4453,8 @@ pool_schedule_get() {
 	if [ "$enabled" != true ] || ! "$POOL_SCHEDULER_SERVICE" running >/dev/null 2>&1 || [ "$(pool_capability_value)" != true ]; then
 		next_run=
 	fi
-	printf '{"ok":true,"available":%s,"enhanced_filter_available":%s,"enhanced_chatgpt_streaming":%s,"youtube_bulk":%s,"bulk_measured":%s,"bulk_reserves":%s,"schedule":{"enabled":%s,"period":"%s","enhanced_filter":%s},"next_run_at":"%s","last_run_at":"%s","outcome":"%s"}\n' \
-		"$available" "$enhanced_filter_available" "$enhanced_chatgpt_streaming" "$youtube_bulk" "$bulk_measured" "$bulk_reserves" "$enabled" "$period" "$enhanced_filter" "$(json_escape "$next_run")" "$(json_escape "$last_run")" "$outcome"
+	printf '{"ok":true,"available":%s,"enhanced_filter_available":%s,"enhanced_chatgpt_streaming":%s,"smtp_pool":%s,"youtube_bulk":%s,"bulk_measured":%s,"bulk_reserves":%s,"schedule":{"enabled":%s,"period":"%s","enhanced_filter":%s},"next_run_at":"%s","last_run_at":"%s","outcome":"%s"}\n' \
+		"$available" "$enhanced_filter_available" "$enhanced_chatgpt_streaming" "$smtp_pool" "$youtube_bulk" "$bulk_measured" "$bulk_reserves" "$enabled" "$period" "$enhanced_filter" "$(json_escape "$next_run")" "$(json_escape "$last_run")" "$outcome"
 }
 
 pool_sync_enhanced_render() {

@@ -598,7 +598,8 @@ function renderPoolSchedule(result, capability, task) {
 		E('label', { 'class': 'localclash-schedule-enabled', 'for': enhancedFilter.id }, [
 			enhancedFilter, E('span', {}, [ _('篩選增強') ])
 		]),
-		E('p', {}, [ _('保存订阅时使用基础筛选。启用后，自动池定时重筛会追加 SMTP STARTTLS、Ubuntu 更新与安全更新索引、TMDB 封面和 Microsoft 连通性检查。') ]),
+		E('p', {}, [ result && result.smtp_pool ? _('增强筛选会检查 Ubuntu 更新与安全更新索引、TMDB 封面和 Microsoft 连通性。') : _('保存订阅时使用基础筛选。启用后，自动池定时重筛会追加 SMTP STARTTLS、Ubuntu 更新与安全更新索引、TMDB 封面和 Microsoft 连通性检查。') ]),
+		result && result.smtp_pool ? E('p', {}, [ _('默认模板中的「📧 SMTP」用于 smtp.gmail.com 的 TCP 587 连接。启用线路池后可选择「📮 SMTP 支持出口」，只列出通过 STARTTLS 检查的线路。') ]) : null,
 		result && result.youtube_bulk === true ? E('p', {}, [ _('启用增强筛选后，YouTube 可选择「📦 大流量优选」。优先使用连续下载稳定的节点，实测不足时补至 30 个，可选出口不足 30 个时全部保留。每个完整测试下载 6 MiB 视频。') ]) : null,
 		result && result.enhanced_chatgpt_streaming === true ? E('p', {}, [ _('「ChatGPT 美國優先」与「ChatGPT 台灣優先」共用线路池，定时重筛也会通过公开测试服务检查 SSE 和 WebSocket。每次重筛最多检测三轮，至少两轮的两项检查都完成后入池。') ]) : null,
 		result && !result.enhanced_filter_available ? E('p', {}, [ _('更新 localClash 基础资产后可启用篩選增強。') ]) : null,
