@@ -48,6 +48,8 @@ awk '/^method="\$\{1:-\}"/ { exit } { print }' "${helper}" > "${tmp_dir}/functio
 . "${tmp_dir}/functions.sh"
 
 LOG="${tmp_dir}/helper.log"
+MIRROR_CACHE_DIR="${tmp_dir}/mirror-cache"
+GITHUB_RELEASE_MIRRORS="https://missing.test https://working.test"
 CORE="${tmp_dir}/localclash"
 printf 'installed-core\n' > "$CORE"
 chmod +x "$CORE"
@@ -74,8 +76,15 @@ write_manifest() {
 EOF
 }
 
-fetch_manifest() {
-	output="$2"
+fetch_single_url() {
+	local output="$2"
+	printf '%s\n' "$1" >> "${tmp_dir}/attempts"
+	case "$1" in
+		"$MANIFEST_URL") return 124 ;;
+		https://missing.test/*) printf '{"version":"v0.126","assets":[]}\n' > "$output"; return 0 ;;
+		https://working.test/*) ;;
+		*) return 1 ;;
+	esac
 	write_manifest "${LOCALCLASH_TEST_ASSET_SHA}" "$output"
 }
 
@@ -86,11 +95,26 @@ printf '%s\n' "$result" | grep -q '"latest_version":"v0.1.30"' || fail_test "lat
 printf '%s\n' "$result" | grep -q '"relation":"asset_mismatch"' || fail_test "relation mismatch: ${result}"
 printf '%s\n' "$result" | grep -q '"update_available":true' || fail_test "update_available not true: ${result}"
 
+[ "$(cat "$MIRROR_CACHE_DIR/release")" = https://working.test ] || fail_test "unusable manifest cached"
+[ "$(wc -l < "${tmp_dir}/attempts" | tr -d ' ')" = 3 ] || fail_test "unexpected preflight in update check"
 LOCALCLASH_TEST_ASSET_SHA="$installed_sha"
 result="$(core_update_check)"
 printf '%s\n' "$result" | grep -q '"ok":true' || fail_test "equal check did not succeed: ${result}"
 printf '%s\n' "$result" | grep -q '"relation":"equal"' || fail_test "equal relation mismatch: ${result}"
 printf '%s\n' "$result" | grep -q '"update_available":false' || fail_test "update_available not false: ${result}"
+
+rm -f "$MIRROR_CACHE_DIR/release"
+echo 100 > "${tmp_dir}/clock"
+now_epoch() { cat "${tmp_dir}/clock"; }
+fetch_single_url() {
+	[ "$FETCH_TIMEOUT" -le 4 ] || fail_test "per-source deadline exceeds 4s"
+	echo $(( $(now_epoch) + FETCH_TIMEOUT )) > "${tmp_dir}/clock"
+	return 124
+}
+GITHUB_RELEASE_MIRRORS="https://a.test https://b.test https://c.test https://d.test https://e.test https://f.test"
+result="$(core_update_check || true)"
+[ "$(now_epoch)" = 112 ] || fail_test "metadata request exceeded total deadline"
+printf '%s\n' "$result" | grep -q '"code":"manifest_download_failed"' || fail_test "deadline error missing: ${result}"
 
 rm -f "$CORE"
 result="$(core_update_check || true)"

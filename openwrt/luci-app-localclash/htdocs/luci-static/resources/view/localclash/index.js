@@ -126,6 +126,7 @@ var callLuciUpdateCheck = rpc.declare({
 	object: 'localclash',
 	method: 'luci_update_check',
 	nobatch: true,
+	reject: true,
 	expect: { '': {} }
 });
 

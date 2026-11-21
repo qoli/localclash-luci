@@ -109,15 +109,20 @@ var callBootRestoreDisable = rpc.declare({
 	expect: { '': {} }
 });
 
-var callCoreUpdateCheck = rpc.declare({
+var callUpdateChecksStart = rpc.declare({
 	object: 'localclash',
-	method: 'core_update_check',
+	method: 'update_checks_start',
+	nobatch: true,
+	reject: true,
 	expect: { '': {} }
 });
 
-var callLuciUpdateCheck = rpc.declare({
+var callUpdateChecksStatus = rpc.declare({
 	object: 'localclash',
-	method: 'luci_update_check',
+	method: 'update_checks_status',
+	params: [ 'run_id' ],
+	nobatch: true,
+	reject: true,
 	expect: { '': {} }
 });
 
@@ -1300,29 +1305,13 @@ function updateCheckLabel(name, check) {
 	return formatText(_('%s：有可用更新'), name);
 }
 
-function oneClickUpdateSummary(luciCheck, coreCheck) {
-	var updates = [];
-	var failures = [];
+function updateCheckStatus(name, check) {
+	if (check.ok === true && check.update_available === true)
+		return updateCheckLabel(name, check);
+	if (check.ok === true && check.update_available === false)
+		return formatText(_('%s已是最新'), name);
 
-	if (luciCheck && luciCheck.update_available === true)
-		updates.push(updateCheckLabel(_('LuCI 界面'), luciCheck));
-	if (coreCheck && coreCheck.update_available === true)
-		updates.push(updateCheckLabel(_('localClash 核心'), coreCheck));
-
-	if (luciCheck && luciCheck.ok === false)
-		failures.push(formatText(_('LuCI 界面检查失败：%s'), luciCheck.message || luciCheck.code || _('未知错误')));
-	if (coreCheck && coreCheck.ok === false)
-		failures.push(formatText(_('localClash 核心检查失败：%s'), coreCheck.message || coreCheck.code || _('未知错误')));
-
-	if (updates.length > 0 && failures.length > 0)
-		return updates.concat(failures).join('；');
-	if (updates.length > 0)
-		return updates.join('；');
-	if (failures.length > 0)
-		return failures.join('；');
-	if (luciCheck && coreCheck)
-		return _('LuCI 界面和 localClash 核心已是最新');
-	return _('正在检查更新…');
+	return formatText(_('%s检查失败：%s'), name, check.message || check.code || _('未收到有效的版本信息'));
 }
 
 function updateOneClickUpdateButton(task) {
@@ -1335,28 +1324,49 @@ function updateOneClickUpdateButton(task) {
 function refreshOneClickUpdateCheck(data) {
 	var versions = document.getElementById('localclash-current-versions');
 	var status = document.getElementById('localclash-one-click-update-status');
+	var names = [ _('LuCI 界面'), _('localClash 核心') ];
+	var labels = names.map(function(name) { return formatText(_('%s：正在检查…'), name); });
 
 	if (!status)
 		return Promise.resolve();
 	if (versions)
 		versions.textContent = currentVersionsSummary(data);
 	if (!data) {
-		status.textContent = oneClickUpdateSummary({ ok: false, message: _('状态数据未加载') }, null);
+		status.textContent = _('状态数据未加载');
 		return Promise.resolve();
 	}
 
-	status.textContent = _('正在检查更新…');
-
-	return Promise.all([
-		callLuciUpdateCheck().catch(function(err) {
-			return { ok: false, message: err.message || String(err) };
-		}),
-		callCoreUpdateCheck().catch(function(err) {
-			return { ok: false, message: err.message || String(err) };
-		})
-	]).then(function(results) {
-		status.textContent = oneClickUpdateSummary(results[0] || {}, results[1] || {});
-	});
+	status.textContent = labels.join('；');
+	function showError(err) {
+		var message = err.message || err.code || _('未收到有效的版本信息');
+		labels = labels.map(function(label, index) {
+			return results[index] ? label : updateCheckStatus(names[index], { message: message });
+		});
+		status.textContent = labels.join('；');
+	}
+	function poll(runId) {
+		if (!status.isConnected)
+			return Promise.resolve();
+		return callUpdateChecksStatus(runId).then(function(snapshot) {
+			if (!snapshot || snapshot.ok !== true || snapshot.run_id !== runId)
+				throw snapshot || {};
+			results = [ snapshot.luci, snapshot.core ];
+			results.forEach(function(result, index) {
+				if (result)
+					labels[index] = updateCheckStatus(names[index], result);
+			});
+			status.textContent = labels.join('；');
+			if (results[0] && results[1])
+				return;
+			return new Promise(function(resolve) { window.setTimeout(resolve, 1000); }).then(function() { return poll(runId); });
+		});
+	}
+	var results = [];
+	return callUpdateChecksStart().then(function(start) {
+		if (!start || start.ok !== true || !start.run_id)
+			throw start || {};
+		return poll(start.run_id);
+	}).catch(showError);
 }
 
 function runtimeStopButton() {

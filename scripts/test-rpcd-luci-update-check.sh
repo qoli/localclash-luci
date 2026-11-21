@@ -70,14 +70,26 @@ awk '/^method="\$\{1:-\}"/ { exit } { print }' "${helper}" > "${tmp_dir}/functio
 . "${tmp_dir}/functions.sh"
 
 LOG="${tmp_dir}/helper.log"
+MIRROR_CACHE_DIR="${tmp_dir}/mirror-cache"
+GITHUB_API_MIRRORS="https://slow.test https://invalid.test https://missing-asset.test https://valid.test"
 
 fail_test() {
 	printf 'test-rpcd-luci-update-check: %s\n' "$*" >&2
 	exit 1
 }
 
-fetch_url() {
-	output="$2"
+fetch_single_url() {
+	local output="$2"
+	printf '%s\n' "$1" >> "${tmp_dir}/attempts"
+	[ "$FETCH_TIMEOUT" -le 4 ] || return 1
+	[ "$bounded_stage_deadline" -le $(( $(now_epoch) + 12 )) ] || return 1
+	case "$1" in
+		"$LUCI_RELEASE_API"|https://slow.test/*) return 124 ;;
+		https://invalid.test/*) printf 'pass\n' > "$output"; return 0 ;;
+		https://missing-asset.test/*) printf '{"tag_name":"v0.1.0-20","assets":[]}\n' > "$output"; return 0 ;;
+		https://valid.test/repos/qoli/localclash-luci/releases/latest) ;;
+		*) return 1 ;;
+	esac
 	cat > "$output" <<'EOF'
 {
   "tag_name": "v0.1.0-20",
@@ -90,11 +102,28 @@ EOF
 }
 
 result="$(luci_update_check)"
+printf '%s\n' "$result" | python3 -m json.tool >/dev/null
 printf '%s\n' "$result" | grep -q '"ok":true' || fail_test "check did not succeed: ${result}"
 printf '%s\n' "$result" | grep -q '"current_version":"0.1.0-19"' || fail_test "current version missing: ${result}"
 printf '%s\n' "$result" | grep -q '"latest_version":"0.1.0-20"' || fail_test "latest version missing: ${result}"
 printf '%s\n' "$result" | grep -q '"relation":"target_newer"' || fail_test "relation mismatch: ${result}"
 printf '%s\n' "$result" | grep -q '"update_available":true' || fail_test "update_available not true: ${result}"
+
+# A broken cache entry is discarded after its actual release response fails validation.
+[ "$(cat "$MIRROR_CACHE_DIR/api")" = https://valid.test ] || fail_test "unexpected cached API mirror"
+cat > "${tmp_dir}/expected" <<EOF
+$LUCI_RELEASE_API
+https://slow.test/repos/qoli/localclash-luci/releases/latest
+https://invalid.test/repos/qoli/localclash-luci/releases/latest
+https://missing-asset.test/repos/qoli/localclash-luci/releases/latest
+https://valid.test/repos/qoli/localclash-luci/releases/latest
+EOF
+diff -u "${tmp_dir}/expected" "${tmp_dir}/attempts"
+printf 'https://missing-asset.test\n' > "$MIRROR_CACHE_DIR/api"
+GITHUB_API_MIRRORS="https://missing-asset.test"
+result="$(luci_update_check || true)"
+printf '%s\n' "$result" | grep -q '"code":"luci_release_asset_missing"' || fail_test "missing asset error lost: ${result}"
+[ ! -f "$MIRROR_CACHE_DIR/api" ] || fail_test "unusable mirror remained in cache"
 
 export LOCALCLASH_TEST_NO_VERSION=1
 result="$(luci_update_check || true)"
