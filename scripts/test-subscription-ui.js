@@ -21,7 +21,7 @@ assert(source.includes("_('每天更新时间（路由器本地时间）')"));
 assert(source.includes('updateHour < 0 || updateHour > 23'));
 assert(source.includes("_('每天更新时间必须是 00:00 到 23:00 的整点。')"));
 assert(source.includes("method: 'pool_schedule_get'"));
-assert(source.includes("method: 'pool_schedule_set'"));
+assert(source.includes("method: 'pool_schedule_set_async'"));
 assert(source.includes("method: 'pool_capability_get'"));
 assert(source.includes("method: 'pool_capability_set_async'"));
 assert(!source.includes("_('应用线路池设置')"), 'the pool switch must submit directly');
@@ -113,9 +113,17 @@ async function testSubscriptionActions() {
 		ok: true, available: true, enhanced_filter_available: true,
 		schedule: { enabled: true, period: '15m', enhanced_filter: true }
 	};
+	const oldRPC = harness.rpcResponse;
+	harness.rpcResponse = method => {
+		if (method === 'pool_schedule_set_async') return { ok: true, task_id: 'schedule-test' };
+		if (method === 'task_status') return { ok: true, done: true, task: 'pool_schedule', task_id: 'schedule-test', result: harness.response };
+		return oldRPC(method);
+	};
 	await poolSave.attrs.click({ currentTarget: poolSave });
+	harness.rpcResponse = oldRPC;
+	assert.deepStrictEqual(calls.pop(), { method: 'task_status', args: [] });
 	await new Promise(resolve => setImmediate(resolve));
-	assert.deepStrictEqual(calls.pop(), { method: 'pool_schedule_set', args: [true, '15m', true] });
+	assert.deepStrictEqual(calls.pop(), { method: 'pool_schedule_set_async', args: [true, '15m', true] });
 	assert.strictEqual(byID.get('localclash-pool-enhanced-filter').checked, true);
 	assert.strictEqual(byID.get('localclash-pool-enhanced-filter').disabled, false);
 

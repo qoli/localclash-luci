@@ -16,6 +16,7 @@
           "subscription_schedule_set",
           "pool_capability_set_async",
           "pool_schedule_set",
+          "pool_schedule_set_async",
           "subscription_schedule_run_now",
           "custom_sites_transact",
           "custom_sites_transact_async",

@@ -984,7 +984,7 @@ write_task_running() {
 	summary="$1"
 	task="${2:-task}"
 	extra=""
-	if [ "$task" = runtime_restart ] || [ "$task" = subscription_schedule ] || [ "$task" = pool_capability ]; then
+	if [ "$task" = runtime_restart ] || [ "$task" = subscription_schedule ] || [ "$task" = pool_capability ] || [ "$task" = pool_schedule ]; then
 		extra=',"cancellable":false,"task_id":"'"$(json_escape "$3")"'"'
 	fi
 	if [ "$task" = pool_capability ]; then
@@ -1041,7 +1041,7 @@ write_task_done() {
 	completed="$(now_epoch)"
 	cancellable="$(jsonfilter -i "$TASK_STATUS" -e '@.cancellable' 2>/dev/null || true)"
 	extra=""
-	if [ "$task" = runtime_restart ] || [ "$task" = subscription_schedule ] || [ "$task" = pool_capability ]; then
+	if [ "$task" = runtime_restart ] || [ "$task" = subscription_schedule ] || [ "$task" = pool_capability ] || [ "$task" = pool_schedule ]; then
 		extra=',"cancellable":false,"task_id":"'"$(json_escape "$(jsonfilter -i "$TASK_STATUS" -e '@.task_id')")"'"'
 	elif [ "$cancellable" = false ]; then
 		extra=',"cancellable":false'
@@ -1241,7 +1241,7 @@ task_cancel() {
 				fail "task_not_cancellable" "订阅已进入运行时重启和网络接管验证阶段，不能中途取消；关闭页面不会停止任务。"
 			elif [ "$task" = subscription_schedule ]; then
 				fail "task_not_cancellable" "订阅更新和热加载任务不能中途取消；关闭页面不会停止任务。"
-			elif [ "$task" = pool_capability ]; then
+			elif [ "$task" = pool_capability ] || [ "$task" = pool_schedule ]; then
 				fail "task_not_cancellable" "线路池设置正在应用。关闭页面后任务会继续执行。"
 			else
 				fail "task_not_cancellable" "重启正在恢复运行时和网络接管，不能中途取消；关闭页面不会停止任务。"
@@ -4140,13 +4140,15 @@ pool_capability_value() {
 	jsonfilter -s "$result" -e '@.status.enabled' 2>/dev/null
 }
 
-start_pool_capability_set() {
-	local payload enabled task_id bg_pid summary
+start_pool_setting() {
+	local task payload enabled task_id bg_pid summary
+	task="$1"
 	payload="$(strip_ubus_rpc_session "$(cat)")"
 	enabled="$(jsonfilter -s "$payload" -e '@.enabled' 2>/dev/null)"
-	case "$enabled" in
-		true) summary="正在后台进行首次线路池筛选，完成后自动应用。" ;;
-		false) summary="正在后台关闭线路池。" ;;
+	case "$task:$enabled" in
+		pool_schedule:true|pool_schedule:false) summary="正在后台保存线路池定时设置。" ;;
+		pool_capability:true) summary="正在后台进行首次线路池筛选，完成后自动应用。" ;;
+		pool_capability:false) summary="正在后台关闭线路池。" ;;
 		*) fail "pool_capability_enabled_invalid" "请选择是否启用线路池。"; return 1 ;;
 	esac
 	clear_stale_lock
@@ -4163,16 +4165,16 @@ start_pool_capability_set() {
 	task_id="$(now_epoch)-$$"
 	rm -f "$TASK_RESULT" "$TASK_INPUT" "$TASK_PID"
 	: > "$LOG"
-	if ! write_task_running "$summary" pool_capability "$task_id" "$enabled"; then
+	if ! printf '%s\n' "$payload" > "$TASK_INPUT" || ! write_task_running "$summary" "$task" "$task_id" "$enabled"; then
 		rm -rf "$LOCK_DIR"
 		fail "task_status_write_failed" "无法记录线路池任务。"
 		return 1
 	fi
-	"$HELPER_SELF" call pool_capability_set_run "$task_id" "$enabled" </dev/null >>"$LOG" 2>&1 &
+	"$HELPER_SELF" call pool_setting_run "$task_id" "$enabled" </dev/null >>"$LOG" 2>&1 &
 	bg_pid="$!"
 	write_task_pid "$bg_pid"
 	printf '%s\n' "$bg_pid" > "$LOCK_DIR/pid"
-	ok '"started":true,"running":true,"task":"pool_capability","task_id":"'"$task_id"'","cancellable":false'
+	ok '"started":true,"running":true,"task":"'"$task"'","task_id":"'"$task_id"'","cancellable":false'
 }
 
 apply_pool_capability() {
@@ -4198,7 +4200,7 @@ apply_pool_capability() {
 	printf '%s\n' "$result"
 }
 
-pool_capability_set_run() {
+pool_setting_run() {
 	local task_id enabled waited result rc
 	task_id="$1"
 	enabled="$2"
@@ -4213,8 +4215,11 @@ pool_capability_set_run() {
 	[ -n "$task_id" ] && [ "$(jsonfilter -i "$TASK_STATUS" -e '@.task_id' 2>/dev/null)" = "$task_id" ] || return 1
 	case "$enabled" in true|false) ;; *) return 1 ;; esac
 	log_line "线路池：开始后台任务 task_id=$task_id enabled=$enabled"
-	result="$(apply_pool_capability "$enabled")"
-	rc=$?
+	case "$(task_name)" in
+		pool_capability) result="$(apply_pool_capability "$enabled")"; rc=$? ;;
+		pool_schedule) result="$(pool_schedule_set < "$TASK_INPUT")"; rc=$? ;;
+		*) return 1 ;;
+	esac
 	printf '%s\n' "$result" > "$TASK_RESULT"
 	write_task_done "$rc" "$result" || return 1
 	rm -f "$TASK_PID"
@@ -4242,7 +4247,7 @@ pool_enhanced_filter_available() {
 }
 
 pool_schedule_get() {
-	local enabled period enhanced_filter enhanced_filter_available enhanced_chatgpt_streaming features available arch status_file next_run last_run outcome
+	local enabled period enhanced_filter enhanced_filter_available enhanced_chatgpt_streaming youtube_bulk bulk_measured bulk_reserves features available arch status_file next_run last_run outcome
 	command -v "$UCI_BIN" >/dev/null 2>&1 || {
 		fail "uci_missing" "缺少 uci，无法读取线路池定时更新设置。"
 		return 1
@@ -4270,8 +4275,10 @@ pool_schedule_get() {
 	fi
 	enhanced_filter_available=false
 	enhanced_chatgpt_streaming=false
+	youtube_bulk=false
 	if features="$(pool_worker_features)" && \
 		[ "$(jsonfilter -s "$features" -e '@.enhanced_filter' 2>/dev/null)" = true ]; then
+		[ "$(jsonfilter -s "$features" -e '@.youtube_bulk' 2>/dev/null)" != true ] || youtube_bulk=true
 		enhanced_filter_available=true
 		if [ "$(jsonfilter -s "$features" -e '@.enhanced_chatgpt_streaming' 2>/dev/null)" = true ]; then
 			enhanced_chatgpt_streaming=true
@@ -4279,7 +4286,13 @@ pool_schedule_get() {
 	fi
 	status_file="$STATE_DIR/.runtime/mihomo/qualified-pools/schedule.json"
 	outcome=
+	bulk_measured=null
+	bulk_reserves=null
 	if [ -r "$status_file" ]; then
+		bulk_measured="$(jsonfilter -i "$status_file" -e '@.youtube_bulk.measured' 2>/dev/null)" || bulk_measured=
+		bulk_reserves="$(jsonfilter -i "$status_file" -e '@.youtube_bulk.reserves' 2>/dev/null)" || bulk_reserves=
+		case "$bulk_measured" in *[!0-9]*|'') bulk_measured=null ;; esac
+		case "$bulk_reserves" in *[!0-9]*|'') bulk_reserves=null ;; esac
 		next_run="$(jsonfilter -i "$status_file" -e '@.next_run_at' 2>/dev/null || true)"
 		last_run="$(jsonfilter -i "$status_file" -e '@.last_run_at' 2>/dev/null || true)"
 		if [ -n "$last_run" ]; then
@@ -4292,12 +4305,26 @@ pool_schedule_get() {
 	if [ "$enabled" != true ] || ! "$POOL_SCHEDULER_SERVICE" running >/dev/null 2>&1 || [ "$(pool_capability_value)" != true ]; then
 		next_run=
 	fi
-	printf '{"ok":true,"available":%s,"enhanced_filter_available":%s,"enhanced_chatgpt_streaming":%s,"schedule":{"enabled":%s,"period":"%s","enhanced_filter":%s},"next_run_at":"%s","last_run_at":"%s","outcome":"%s"}\n' \
-		"$available" "$enhanced_filter_available" "$enhanced_chatgpt_streaming" "$enabled" "$period" "$enhanced_filter" "$(json_escape "$next_run")" "$(json_escape "$last_run")" "$outcome"
+	printf '{"ok":true,"available":%s,"enhanced_filter_available":%s,"enhanced_chatgpt_streaming":%s,"youtube_bulk":%s,"bulk_measured":%s,"bulk_reserves":%s,"schedule":{"enabled":%s,"period":"%s","enhanced_filter":%s},"next_run_at":"%s","last_run_at":"%s","outcome":"%s"}\n' \
+		"$available" "$enhanced_filter_available" "$enhanced_chatgpt_streaming" "$youtube_bulk" "$bulk_measured" "$bulk_reserves" "$enabled" "$period" "$enhanced_filter" "$(json_escape "$next_run")" "$(json_escape "$last_run")" "$outcome"
+}
+
+pool_sync_enhanced_render() {
+	local status current desired features
+	status="$(pool_capability_get)" || return 1
+	current="$(jsonfilter -s "$status" -e '@.status.enhanced_filter' 2>/dev/null)" || current=
+	case "$current" in true|false) ;; *) return 0 ;; esac
+	desired=false
+	if [ "$1" = 1 ] && [ "$(pool_schedule_config_value enhanced_filter 0)" = 1 ]; then
+		features="$(pool_worker_features)" || features=
+		[ "$(jsonfilter -s "$features" -e '@.youtube_bulk' 2>/dev/null)" != true ] || desired=true
+	fi
+	[ "$current" = "$desired" ] || call_core config pools --enhanced-filter "$desired" --json >/dev/null
 }
 
 pool_schedule_service_apply() {
 	local pool_enabled=false
+	pool_sync_enhanced_render "$1" || return 1
 	if [ "$1" = 1 ]; then
 		pool_enabled="$(pool_capability_value)" || return 1
 	fi
@@ -6121,6 +6148,7 @@ case "$method" in
 	  "pool_capability_get": {},
 	  "pool_capability_set_async": { "enabled": false },
 	  "pool_schedule_get": {},
+	  "pool_schedule_set_async": { "enabled": false, "period": "", "enhanced_filter": false },
 	  "pool_schedule_set": { "enabled": false, "period": "", "enhanced_filter": false },
 	  "custom_sites_get": {},
 	  "custom_sites_transact": { "operation": "", "pattern": "", "route": "", "id": "" },
@@ -6178,8 +6206,9 @@ JSON
 	subscription_schedule_set) with_lock subscription_schedule_set ;;
 	subscription_schedule_run_now) start_subscription_schedule_run ;;
 	pool_capability_get) pool_capability_get ;;
-	pool_capability_set_async) start_pool_capability_set ;;
-	pool_capability_set_run) pool_capability_set_run "${3:-}" "${4:-}" ;;
+	pool_capability_set_async) start_pool_setting pool_capability ;;
+	pool_schedule_set_async) start_pool_setting pool_schedule ;;
+	pool_setting_run) pool_setting_run "${3:-}" "${4:-}" ;;
 	pool_schedule_get) pool_schedule_get ;;
 	pool_schedule_set) with_lock pool_schedule_set ;;
 	subscription_schedule_run_task) subscription_schedule_run_task "${3:-}" ;;

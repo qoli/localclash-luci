@@ -59,7 +59,8 @@ var callPoolScheduleGet = rpc.declare({
 
 var callPoolScheduleSet = rpc.declare({
 	object: 'localclash',
-	method: 'pool_schedule_set',
+	method: 'pool_schedule_set_async',
+	nobatch: true,
 	params: [ 'enabled', 'period', 'enhanced_filter' ],
 	expect: { '': {} }
 });
@@ -400,13 +401,13 @@ function poolCapabilityStatusText(capability, result, error) {
 	return state;
 }
 
-async function waitForPoolTask(taskId, showProgress) {
+async function waitForPoolTask(taskId, showProgress, taskName) {
 	showProgress(true);
 	while (true) {
 		var task = await readPoolTask();
 		var readable = task && task.ok === true;
 		if (readable) {
-			if (task.task !== 'pool_capability' || task.task_id !== taskId)
+			if (task.task !== (taskName || 'pool_capability') || task.task_id !== taskId)
 				return null;
 			if (task.done === true)
 				return task.result;
@@ -506,6 +507,9 @@ function poolScheduleStatusText(result, capability) {
 		lines.push(formatText(_('上次执行于 %s'), result.last_run_at));
 		lines.push(result.outcome === 'error' ? _('上次更新未全部完成，请查看路由器系统日志。') : _('上次更新成功。'));
 	}
+	if (!paused && result.schedule.enabled && result.schedule.enhanced_filter &&
+		typeof result.bulk_measured === 'number' && typeof result.bulk_reserves === 'number')
+		lines.push(formatText(_('大流量优选上次筛选：实测达标 %s 个，补位 %s 个。'), result.bulk_measured, result.bulk_reserves));
 	if (result.next_run_at)
 		lines.push(formatText(_('预计下次于 %s 执行'), result.next_run_at));
 	else if (result.schedule.enabled && result.available && !paused)
@@ -513,7 +517,7 @@ function poolScheduleStatusText(result, capability) {
 	return lines.join('\n');
 }
 
-function renderPoolSchedule(result, capability) {
+function renderPoolSchedule(result, capability, task) {
 	var schedule = result && result.schedule || {};
 	var enabled = E('input', {
 		'id': 'localclash-pool-schedule-enabled',
@@ -544,6 +548,42 @@ function renderPoolSchedule(result, capability) {
 	var status = E('pre', { 'id': 'localclash-pool-schedule-status', 'class': 'localclash-schedule-status', 'aria-live': 'polite' }, [ poolScheduleStatusText(result, capability) ]);
 	var statusRevision = 0;
 
+	var save = E('button', {
+		'type': 'button',
+		'class': 'btn cbi-button cbi-button-save localclash-button',
+		'click': function() { return applySchedule(); }
+	}, [ _('保存线路池定时设置') ]);
+
+	async function applySchedule(existingTask) {
+		if (save.disabled)
+			return;
+		save.disabled = true;
+		statusRevision++;
+		try {
+			var started = existingTask || await callPoolScheduleSet(enabled.checked, period.value, enhancedFilter.checked);
+			if (!started || !started.ok || !started.task_id)
+				throw new Error(started && started.message || _('无法保存线路池定时更新设置。'));
+			var updated = await waitForPoolTask(started.task_id, function(connected) {
+				status.textContent = connected ? _('正在后台应用线路池定时设置，可以离开本页。') : _('正在重新连接路由器。');
+			}, 'pool_schedule');
+			if (!updated || !updated.ok)
+				throw new Error(updated && updated.message || _('无法确认线路池定时设置已应用。'));
+			enabled.checked = updated.schedule.enabled;
+			period.value = updated.schedule.period;
+			enhancedFilter.checked = updated.schedule.enhanced_filter === true;
+			enhancedFilter.disabled = !updated.enhanced_filter_available && !enhancedFilter.checked;
+			enabled.disabled = !updated.available && !enabled.checked;
+			status.textContent = [ _('线路池定时设置已保存。'), poolScheduleStatusText(updated, capability) ].join('\n');
+		} catch (err) {
+			status.textContent = formatText(_('保存线路池定时设置失败（%s）'), err.message || String(err));
+		} finally {
+			save.disabled = false;
+		}
+	}
+
+	if (task && task.task === 'pool_schedule' && task.running && task.task_id)
+		applySchedule(task);
+
 	var section = E('div', { 'class': 'cbi-section localclash-section' }, [
 		E('h3', {}, [ _('线路池定时更新') ]),
 		E('p', {}, [ _('线路池启用时按所选周期复检。每天 08:00 按路由器本地时间执行。') ]),
@@ -559,34 +599,11 @@ function renderPoolSchedule(result, capability) {
 			enhancedFilter, E('span', {}, [ _('篩選增強') ])
 		]),
 		E('p', {}, [ _('保存订阅时使用基础筛选。启用后，自动池定时重筛会追加 SMTP STARTTLS、Ubuntu 更新与安全更新索引、TMDB 封面和 Microsoft 连通性检查。') ]),
+		result && result.youtube_bulk === true ? E('p', {}, [ _('启用增强筛选后，YouTube 可选择「📦 大流量优选」。优先使用连续下载稳定的节点，实测不足时补至 30 个，可选出口不足 30 个时全部保留。每个完整测试下载 6 MiB 视频。') ]) : null,
 		result && result.enhanced_chatgpt_streaming === true ? E('p', {}, [ _('「ChatGPT 美國優先」与「ChatGPT 台灣優先」共用线路池，定时重筛也会通过公开测试服务检查 SSE 和 WebSocket。每次重筛最多检测三轮，至少两轮的两项检查都完成后入池。') ]) : null,
 		result && !result.enhanced_filter_available ? E('p', {}, [ _('更新 localClash 基础资产后可启用篩選增強。') ]) : null,
 		status,
-		actionRow([
-			E('button', {
-				'type': 'button',
-				'class': 'btn cbi-button cbi-button-save localclash-button',
-				'click': function(ev) {
-					var button = ev.currentTarget;
-					button.disabled = true;
-					statusRevision++;
-					return callPoolScheduleSet(enabled.checked, period.value, enhancedFilter.checked).then(function(updated) {
-						if (!updated || updated.ok !== true)
-							throw new Error(updated && updated.message || _('无法保存线路池定时更新设置。'));
-						enabled.checked = updated.schedule.enabled;
-						period.value = updated.schedule.period;
-						enhancedFilter.checked = updated.schedule.enhanced_filter === true;
-						enhancedFilter.disabled = !updated.enhanced_filter_available && !updated.schedule.enhanced_filter;
-						enabled.disabled = !updated.available && !updated.schedule.enabled;
-						status.textContent = [ _('线路池定时设置已保存。'), poolScheduleStatusText(updated, capability) ].filter(Boolean).join('\n');
-					}).catch(function(err) {
-						status.textContent = formatText(_('保存线路池定时设置失败（%s）'), err.message || String(err));
-					}).finally(function() {
-						button.disabled = false;
-					});
-				}
-			}, [ _('保存线路池定时设置') ])
-		])
+		actionRow([ save ])
 	].filter(Boolean));
 	return {
 		section: section,
@@ -613,7 +630,7 @@ return view.extend({
 
 	render: function(data) {
 		var scheduleResult = data[0];
-		var poolSchedule = renderPoolSchedule(data[1], data[2]);
+		var poolSchedule = renderPoolSchedule(data[1], data[2], data[3]);
 		var schedule = scheduleResult && scheduleResult.schedule || {};
 		var selectedHour = Number(schedule.update_hour);
 		var hourOptions = [];

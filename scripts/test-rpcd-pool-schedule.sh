@@ -65,13 +65,19 @@ set -eu
 [ "${LOCALCLASH_TEST_POOL_READ_FAIL:-0}" = 0 ] || exit 1
 profile="$LOCALCLASH_WORKDIR/localclash-runtime.json"
 enabled="${LOCALCLASH_TEST_POOL_DEFAULT:-false}"
+enhanced=false
+[ ! -f "$profile" ] || enhanced="$(jq -r '.enhanced_filter // false' "$profile")"
 if [ "$3" = --enabled ]; then
 	enabled="$4"
-	jq -n --argjson enabled "$enabled" '{pools_disabled: ($enabled | not)}' > "$profile"
+	jq -n --argjson enabled "$enabled" --argjson enhanced "$enhanced" '{pools_disabled: ($enabled | not),enhanced_filter:$enhanced}' > "$profile"
 elif [ -f "$profile" ]; then
 	enabled="$(jq -r --argjson default "$enabled" 'if .pools_disabled == null then $default else (.pools_disabled | not) end' "$profile")"
 fi
-jq -n --argjson enabled "$enabled" '{ok:true,status:{enabled:$enabled}}'
+if [ "$3" = --enhanced-filter ]; then
+	enhanced="$4"
+	jq -n --argjson enabled "$enabled" --argjson enhanced "$enhanced" '{pools_disabled:($enabled|not),enhanced_filter:$enhanced}' > "$profile"
+fi
+jq -n --argjson enabled "$enabled" --argjson enhanced "$enhanced" '{ok:true,status:{enabled:$enabled,enhanced_filter:$enhanced}}'
 CORE
 chmod +x "$CORE"
 export LOCALCLASH_CORE="$CORE"
@@ -126,7 +132,7 @@ pool_schedule_get | jq -e '.enhanced_filter_available == true and .enhanced_chat
 cat > "$worker" <<'WORKER'
 #!/bin/sh
 [ "$1" = features ] || exit 1
-printf '{"enhanced_filter":true,"enhanced_chatgpt_streaming":true}\n'
+printf '{"enhanced_filter":true,"enhanced_chatgpt_streaming":true,"youtube_bulk":true}\n'
 WORKER
 pool_schedule_get | jq -e '.enhanced_filter_available == true and .enhanced_chatgpt_streaming == true' >/dev/null
 if result="$(printf '{"enabled":true,"period":"daily-08","enhanced_filter":2}\n' | pool_schedule_set)"; then
@@ -139,6 +145,7 @@ if result="$(printf '{"enabled":true,"period":"5m","enhanced_filter":true}\n' | 
 	echo "Ignored enhanced scheduler restart failure" >&2
 	exit 1
 fi
+pool_capability_get | jq -e '.status.enhanced_filter == false' >/dev/null
 pool_schedule_get | jq -e '.schedule.period == "daily-08" and .schedule.enhanced_filter == false' >/dev/null
 printf '{"enabled":true,"period":"daily-08","enhanced_filter":true}\n' | pool_schedule_set | jq -e '.schedule.enhanced_filter == true' >/dev/null
 printf '{"enabled":true,"period":"daily-08"}\n' | pool_schedule_set | jq -e '.schedule.enhanced_filter == true' >/dev/null
@@ -154,6 +161,7 @@ fi
 [ -f "$test_dir/enabled" ] && [ -f "$test_dir/running" ]
 pool_schedule_get | jq -e '.schedule.period == "daily-08"' >/dev/null
 
+pool_capability_get | jq -e '.status.enhanced_filter == true' >/dev/null
 procd_open_instance() { printf '%s\n' "$1" > "$test_dir/instance"; }
 procd_set_param() {
 	case "$1" in command|env) printf '%s\n' "$@" > "$test_dir/$1" ;; esac
@@ -171,8 +179,8 @@ start_service
 printf '%s\n' command "$worker" schedule --runtime "$STATE_DIR/.runtime/mihomo" --period daily-08 | cmp - "$test_dir/command"
 
 mkdir -p "$STATE_DIR/.runtime/mihomo/qualified-pools"
-printf '{"next_run_at":"2026-11-13T08:00:00+08:00"}\n' > "$STATE_DIR/.runtime/mihomo/qualified-pools/schedule.json"
-pool_schedule_get | jq -e '.next_run_at == "2026-11-13T08:00:00+08:00"' >/dev/null
+printf '{"next_run_at":"2026-11-13T08:00:00+08:00","youtube_bulk":{"measured":4,"reserves":26}}\n' > "$STATE_DIR/.runtime/mihomo/qualified-pools/schedule.json"
+pool_schedule_get | jq -e '.next_run_at == "2026-11-13T08:00:00+08:00" and .bulk_measured == 4 and .bulk_reserves == 26' >/dev/null
 printf '{"version":2,"mode":"router","core":"meta"}\n' > "$STATE_DIR/localclash-runtime.json"
 rm "$test_dir/instance"
 start_service
@@ -206,5 +214,10 @@ for requested in true false; do
 	write_task_done 0 '{"ok":true}'
 	jq -e '.task == "pool_capability" and .task_id == "pool-test" and .done and .result.ok' "$TASK_STATUS" >/dev/null
 done
+
+write_task_running "正在后台保存线路池定时设置。" pool_schedule schedule-test true
+jq -e '.running and .task == "pool_schedule" and .task_id == "schedule-test" and .cancellable == false' "$TASK_STATUS" >/dev/null
+write_task_done 0 '{"ok":true,"schedule":{"enabled":true,"enhanced_filter":true,"period":"15m"}}'
+jq -e '.done and .task_id == "schedule-test" and .result.schedule.enhanced_filter' "$TASK_STATUS" >/dev/null
 
 printf 'pool scheduler service tests passed\n'
