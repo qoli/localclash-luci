@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-localclash
-PKG_VERSION:=0.98
+PKG_VERSION:=0.99
 PKG_RELEASE:=1
 PKGARCH:=all
 PKG_LICENSE:=MIT
